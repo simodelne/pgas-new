@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    # Pgas packages are coordinated separately via Renovate or
+    # Channel 1 manual bumps. Group them so Dependabot doesn't fight
+    # the version-alignment workflow.
+    groups:
+      pgas:
+        patterns:
+          - "@simodelne/pgas-*"
+    reviewers:
+      - "{{GH_OWNER}}"
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

@@ -1,0 +1,97 @@
+/**
+ * {{CONSUMER_NAME}} — server bootstrap.
+ *
+ * This file is scaffolded by claude-pgas-plugin v0.1. It closes
+ * pgas#253 FM2 by construction: `createInnerContinuationReplayConsumer`
+ * and `createSessionLockExhaustedConsumer` are wired below.
+ *
+ * DO NOT remove the FM2 wiring without first reading pgas#253 (and
+ * understanding why the v1.8.1 sync-out replay model requires both
+ * consumers). Removing them re-opens the silent stall path that
+ * burned 50 minutes of debug time on pgas-rag.
+ *
+ * The three `[pgas-plugin:*-registry]` markers are recognized by
+ * /pgas-new-program — they let new programs be injected without
+ * manual file editing. See docs/MARKER-PROTOCOL.md in the plugin.
+ */
+
+import { Hono } from 'hono';
+import { serve } from '@hono/node-server';
+
+// pgas-server: full hosted REST/WS surface + ProgramRegistry + bus
+import {
+  ProgramRegistry,
+  createSessionManager,
+  createBus,
+  createTriggerFn,
+  isContinuationGenerationCurrent,
+  createModeEntryContinuationConsumer,
+  createInnerContinuationReplayConsumer,  // FM2 — pgas#253
+  createSessionLockExhaustedConsumer,     // FM2 — pgas#253
+} from '@simodelne/pgas-server';
+
+// [pgas-plugin:program-registry] — auto-injected program imports below
+
+// [pgas-plugin:spec-registry] — auto-injected spec loads below
+
+// [pgas-plugin:handler-registry] — auto-injected handler imports below
+
+/**
+ * Bootstrap order matters. See pgas-server's own `src/index.ts` lines
+ * 160-180 for the canonical ordering.
+ */
+
+const registry = new ProgramRegistry();
+const store = createSessionStore(); // your session store (SQLite, in-memory, etc.)
+const bus = createBus();
+
+// [pgas-plugin:program-registration] — auto-injected `registry.register(...)` calls below
+
+const manager = createSessionManager(registry, store, bus);
+const triggerFn = createTriggerFn(manager);
+
+// Mode-entry continuation: the engine's standard continuation path
+createModeEntryContinuationConsumer(
+  bus,
+  registry,
+  store,
+  triggerFn,
+  isContinuationGenerationCurrent,
+);
+
+// FM2 (pgas#253) — re-trigger continuation events that runSingleRound
+// deferred because an external acquire raced its lock-yield window.
+// Pre-fix, the deferred contEvent was silently discarded and the
+// session stalled until lock exhaustion (~50 min).
+createInnerContinuationReplayConsumer(bus, triggerFn, isContinuationGenerationCurrent);
+
+// FM2 (pgas#253) — when the replay consumer exhausts its lock-timeout
+// retry budget, mark the session Failed (HANDOVER Rule 3 — no silent
+// freeze) instead of leaving it Running indefinitely.
+createSessionLockExhaustedConsumer(
+  bus,
+  (sessionId, consumer, attempts, userId) =>
+    manager.markSessionFailedFromLockExhaustion(sessionId, consumer, attempts, userId),
+);
+
+const app = new Hono();
+
+// TODO: auth middleware mounts here — see server/auth/ (Brief 2)
+//       Until Brief 2 lands, this server is UNAUTHENTICATED.
+//       Do NOT deploy to a public network in this state.
+
+app.get('/health', (c) => c.json({ ok: true, consumer: '{{CONSUMER_NAME}}' }));
+
+// pgas-server mounts its REST/WS routes here — see pgas-server docs
+// for the exact wiring for the version pinned in package.json.
+
+const port = Number(process.env.SERVER_PORT ?? 8787);
+serve({ fetch: app.fetch, port });
+console.log(`[{{CONSUMER_NAME}}] listening on :${port}`);
+
+/* eslint-disable @typescript-eslint/no-unused-vars */
+// Placeholder — wire your real session store here. SQLite is the
+// recommended default (Brief 2 will land the canonical impl).
+function createSessionStore(): any {
+  return { /* TODO: implement */ };
+}

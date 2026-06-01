@@ -1,0 +1,62 @@
+# {{PROGRAM_NAME}}
+
+A pgas program scaffolded by `claude-pgas-plugin` v0.1.
+
+## Files
+
+```
+{{PROGRAM_NAME}}/
+├── spec.yml                         ← declarative mode graph + schema (FM3+FM5 closed)
+├── prompts/
+│   ├── system.md                    ← cross-cutting system prompt
+│   └── action-descriptions.md       ← per-action descriptions
+├── handlers/
+│   ├── _resolver.ts                 ← FM1 domain-fallback resolver
+│   └── index.ts                     ← handler registry
+├── audit/
+│   └── ARCHITECTURE.md              ← per-program architecture doc
+└── README.md
+```
+
+## FM-closure status
+
+This program's scaffold closes:
+
+- **FM1** via `handlers/_resolver.ts`. Every handler reading
+  `work.*`, `inputs.*`, or `decisions.*` uses the resolver.
+- **FM3** via `spec.yml` mode-channel admissions. Only `start` admits
+  `system_mode_entry`. Run `/pgas:mode-entry-lint spec.yml` to verify.
+- **FM5** via `spec.yml`'s schema block. The engine-owned
+  `inputs.query_meta.*` paths are declared.
+
+NOT scaffold-closed (program author's responsibility):
+
+- **FM4** (handler-backed raw tools): if you add a raw `tool:` entry
+  to spec.yml that is handler-backed (handler resolves the call rather
+  than the registry), you MUST:
+  1. Add a `createAdapters` override for `tool:<name>` in your
+     program's `registration.ts` (see pgas-rag's `library-handlers.ts`
+     for the canonical pattern at the v1.8.x API).
+  2. Add `<channel-name>` to `syncOutContinuationPolicy.channels` in
+     the ProgramEntry.
+  Without both, the default adapter resolves to
+  `handlers['invoke_tool_<name>']`, finds none, returns `undefined`,
+  and the session stalls with no `trigger_failed` event.
+
+  The skeleton's only tool (`query_state`) is registry-backed, so this
+  doesn't bite the skeleton. It WILL bite the first handler-backed
+  raw tool you add.
+
+## Next steps
+
+1. Edit `prompts/system.md` and `prompts/action-descriptions.md` to
+   match your agent's actual role.
+2. Implement `handlers/index.ts` — replace `example_action` with your
+   real handlers. Keep using `_resolver.ts` for any domain reads.
+3. Extend `spec.yml`'s modes, action_map, and schema as your program
+   shape solidifies. Run `/pgas:spec-validate` after each edit.
+4. Fill in `audit/ARCHITECTURE.md` per the
+   `simodelne/pgas`/CONSUMER-VERSIONING-CONTRACT.md 10-section structure.
+5. Wire registration into the consumer's `server/index.ts` — the
+   `/pgas-new-program` command does this for you when it scaffolds
+   the program.

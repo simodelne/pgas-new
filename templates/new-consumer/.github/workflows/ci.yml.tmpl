@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Configure GitHub Packages auth
+        run: |
+          echo "@simodelne:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Typecheck
+        run: npm run typecheck --if-present
+
+      - name: Test
+        run: npm test --if-present
+
+      - name: Validate program specs
+        run: |
+          for spec in $(find programs -name "spec.yml" -o -name "specs.yml" 2>/dev/null); do
+            echo "Validating $spec"
+            node --input-type=module -e "
+              import('@simodelne/pgas-runtime').then(async (m) => {
+                try { await m.loadSpec('$spec'); console.log('  OK'); process.exit(0); }
+                catch (e) { console.error('  FAIL:', e.message); process.exit(1); }
+              });
+            "
+          done
+
+  cheap-gates:
+    # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
+    # can require cleanly without coupling to the expensive `ci` job above.
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "cheap-gates: ok"

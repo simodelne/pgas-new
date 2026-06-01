@@ -1,0 +1,60 @@
+name: Tool proposal
+description: Propose a new spec-declared action or tool for one of this consumer's programs.
+title: "[tool] <program-name>/<tool-name>"
+labels: ["tool-proposal"]
+body:
+  - type: input
+    id: title
+    attributes:
+      label: One-line summary
+      placeholder: "<program-name>/<tool-name>: <one-line purpose>"
+    validations:
+      required: true
+  - type: input
+    id: program
+    attributes:
+      label: Which program
+      placeholder: legal-rag / contract-draft / ...
+    validations:
+      required: true
+  - type: textarea
+    id: signature
+    attributes:
+      label: Proposed signature
+      description: Required args, result_path, channel (handler-backed vs registry-backed)
+      placeholder: |
+        tools:
+          submit_retrieve:
+            args: { query: string, top_k: number }
+            result_path: work.candidates
+            channel: tool:submit_retrieve  (handler-backed — needs createAdapters override)
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why this tool? What gap does it close?
+    validations:
+      required: true
+  - type: textarea
+    id: handler
+    attributes:
+      label: Handler implementation sketch
+      description: Where will this be implemented? What does it call?
+    validations:
+      required: true
+  - type: textarea
+    id: fm4_check
+    attributes:
+      label: FM4 check
+      description: |
+        Per pgas#253 FM4: if the tool is handler-backed (not registry-backed),
+        the program MUST declare a createAdapters override for
+        tool:<name> AND list the channel in syncOutContinuationPolicy.channels.
+        Confirm both will land in the implementing PR.
+      value: |
+        - [ ] handler-backed → createAdapters override planned
+        - [ ] syncOutContinuationPolicy.channels updated
+    validations:
+      required: true

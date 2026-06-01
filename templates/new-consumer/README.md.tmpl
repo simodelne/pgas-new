@@ -1,0 +1,77 @@
+# {{CONSUMER_NAME}}
+
+A pgas consumer scaffolded by [`claude-pgas-plugin`](https://github.com/simodelne/claude-pgas-plugin) v0.1.
+
+**Engine pin:** `@simodelne/pgas-*@{{ENGINE_VERSION}}`
+**Status:** Phase 0 (scaffold) — write your first program under `programs/`.
+
+## Quick start
+
+```bash
+# 1. Install dependencies (requires NPM_TOKEN with read:packages on simodelne)
+export NPM_TOKEN=ghp_...
+npm install
+
+# 2. Copy and fill in env vars
+cp .env.example .env.local
+$EDITOR .env.local
+
+# 3. Install pre-commit hooks
+bash scripts/install-hooks.sh
+
+# 4. Run
+npm run dev
+```
+
+## Project layout
+
+```
+{{CONSUMER_NAME}}/
+├── server/
+│   ├── index.ts              ← Hono bootstrap + FM2 consumer wiring
+│   └── auth/                 ← (placeholder; Brief 2 fills in)
+├── programs/
+│   └── <name>/               ← one directory per pgas program
+│       ├── spec.yml          ← declarative mode graph + schema
+│       ├── prompts/          ← system + action prompts
+│       ├── handlers/         ← TS handlers + FM1 _resolver
+│       └── audit/            ← per-program architecture doc
+├── audit/                    ← per-version architecture docs (pgas#254)
+├── qc/AGENT_CONTRACT.md      ← the rulebook
+├── governance/               ← (if GOVERNANCE_LOCKS=true) locked params
+├── docs/secrets-manifest.md  ← every secret read
+├── scripts/install-hooks.sh  ← pre-commit installer
+├── CLAUDE.md                 ← load-bearing governance for Claude sessions
+├── BRANCH-PROTECTION.md      ← gh api commands
+└── CODEOWNERS                ← review routing
+```
+
+## Adding a new program
+
+Use the plugin:
+
+```
+/pgas-new-program
+```
+
+The plugin's `/pgas-new-program` command detects this repo as a pgas
+consumer, finds the `[pgas-plugin:*-registry]` markers in
+`server/index.ts`, asks for the program name, and diff-and-confirms the
+scaffold before writing.
+
+## Cutting a release
+
+Per `simodelne/pgas`/CONSUMER-VERSIONING-CONTRACT.md:
+
+1. Bump `package.json` version.
+2. If minor or major bump: run `/pgas:architecture-doc` to generate
+   `audit/ARCHITECTURE-{{CONSUMER_NAME}}-v<X.Y.0>.md`.
+3. Run `/pgas:5-fm-audit` — verify all five failure modes stay closed.
+4. Open release PR; CI runs the same checks.
+5. After merge, tag + push: `git tag vX.Y.Z && git push --tags`.
+6. The `publish.yml` workflow publishes to GitHub Packages and
+   nudges (warn-only) if the architecture doc is missing.
+
+## License
+
+(set as appropriate for your consumer — see your governance lead)

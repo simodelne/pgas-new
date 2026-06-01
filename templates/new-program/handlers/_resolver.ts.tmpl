@@ -1,0 +1,123 @@
+/**
+ * _resolver.ts — domain-fallback resolver for {{PROGRAM_NAME}} handlers.
+ *
+ * Closes pgas#253 FM1 by construction.
+ *
+ * THE BUG (pgas#253 FM1, codex commits fcb49be, 10c23c9 in pgas-rag):
+ *
+ *   The engine stores engine-managed fields at flat dotted keys:
+ *
+ *     domain['inputs.answers.user_intent']  (canonical storage)
+ *     domain['work.candidates']             (canonical storage)
+ *
+ *   But action payloads passed to handlers only contain explicit
+ *   author-facing args — server-owned fields are OMITTED from unified
+ *   action-map calls. A handler that reads only `payload.user_intent`
+ *   silently gets `undefined` for any field the author didn't
+ *   explicitly pass.
+ *
+ * THE FIX:
+ *
+ *   Every handler that reads engine-managed paths (`work.*`,
+ *   `inputs.*`, `decisions.*`) uses this resolver. The resolver:
+ *     1. Returns the explicit payload value if present (author
+ *        override wins).
+ *     2. Falls back to the flat domain key.
+ *     3. Surfaces `undefined` only if BOTH are absent.
+ *
+ * USAGE:
+ *
+ *   import { resolveDomainPath } from './_resolver.js';
+ *
+ *   async function myHandler(payload: any, ctx: HandlerContext) {
+ *     const userIntent = resolveDomainPath(
+ *       payload,
+ *       ctx.domain,
+ *       'inputs.answers.user_intent',
+ *     );
+ *     // userIntent is now the explicit payload override OR the flat
+ *     // domain value OR undefined (in which case you have a real
+ *     // missing-data condition to surface — not a silent FM1 stall).
+ *   }
+ */
+
+/**
+ * The minimal shape a handler reads from its context. Adapt to your
+ * actual handler API once you wire the program in registration.ts.
+ */
+export interface DomainSnapshot {
+  /**
+   * Flat key-value map keyed by engine-canonical dotted paths.
+   * `domain['inputs.answers.user_intent']` is the canonical storage
+   * shape per pgas#253 FM1.
+   */
+  get(flatKey: string): unknown;
+}
+
+/**
+ * Resolve a domain-managed value with payload-override semantics.
+ *
+ * The `flatKey` is the engine-canonical flat dotted path
+ * (e.g. `'inputs.answers.user_intent'`).
+ *
+ * The `payload` is the action payload the handler received. If the
+ * payload has a property whose name matches the LAST segment of the
+ * flat key (`user_intent` for `inputs.answers.user_intent`), it wins.
+ * Otherwise, fall back to the domain.
+ */
+export function resolveDomainPath(
+  payload: Record<string, unknown> | undefined | null,
+  domain: DomainSnapshot,
+  flatKey: string,
+): unknown {
+  // 1. Explicit payload override wins
+  const lastSegment = flatKey.split('.').slice(-1)[0]!;
+  if (payload != null && Object.prototype.hasOwnProperty.call(payload, lastSegment)) {
+    const explicit = payload[lastSegment];
+    if (explicit !== undefined) {
+      return explicit;
+    }
+  }
+  // 2. Fall back to the flat domain key
+  return domain.get(flatKey);
+}
+
+/**
+ * Resolve multiple paths at once. Convenience for handlers that need
+ * many fields.
+ */
+export function resolveDomainPaths(
+  payload: Record<string, unknown> | undefined | null,
+  domain: DomainSnapshot,
+  flatKeys: string[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of flatKeys) {
+    out[key] = resolveDomainPath(payload, domain, key);
+  }
+  return out;
+}
+
+/**
+ * Assert a resolved value is present. Use this when missing data is
+ * a real error (NOT an FM1 stall — the caller is genuinely required
+ * to provide this field).
+ *
+ * Throws with a clear message so the surface is loud, per HANDOVER
+ * Rule 3 (no silent failures).
+ */
+export function requireDomainPath<T = unknown>(
+  payload: Record<string, unknown> | undefined | null,
+  domain: DomainSnapshot,
+  flatKey: string,
+): T {
+  const value = resolveDomainPath(payload, domain, flatKey);
+  if (value === undefined || value === null) {
+    throw new Error(
+      `[{{PROGRAM_NAME}}] required domain path '${flatKey}' is undefined in both payload and domain. ` +
+        `This is a hard surface (HANDOVER Rule 3); the upstream emitter is broken or the path is misspelled. ` +
+        `Do NOT silently default — fix the caller.`,
+    );
+  }
+  return value as T;
+}
