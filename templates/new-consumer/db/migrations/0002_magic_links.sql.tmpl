@@ -1,0 +1,20 @@
+-- {{CONSUMER_NAME}} — magic_links table (plugin v0.2, Brief 2).
+--
+-- Single-use tokens issued by POST /auth/login. Redeemed by
+-- GET /auth/magic/:token, which writes `consumed_at` and inserts a
+-- corresponding user_sessions row.
+--
+-- The (user_email, consumed_at) index is for a future "expire unused
+-- pending links for this user" sweep — out of scope for v0.1 but the
+-- index is cheap to ship now.
+
+CREATE TABLE IF NOT EXISTS magic_links (
+  token       TEXT    PRIMARY KEY,
+  user_email  TEXT    NOT NULL,
+  created_at  INTEGER NOT NULL,
+  expires_at  INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_magic_links_user_consumed
+  ON magic_links (user_email, consumed_at);

@@ -24,6 +24,9 @@ jobs:
       - name: Template render smoke test
         run: bash tests/template-render.test.sh
 
+      - name: Auth-scaffold smoke test (Brief 2)
+        run: bash tests/auth-scaffold.test.sh
+
   cheap-gates:
     # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
     # can require cleanly without coupling to the main smoke-tests job.

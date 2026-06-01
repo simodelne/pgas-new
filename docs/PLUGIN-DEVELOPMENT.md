@@ -140,12 +140,93 @@ Both bundled hooks are idempotent + safe to run multiple times.
 
 ## Brief sequence
 
-- **Brief 1 (this plugin v0.1):** foundation — manifest, commands,
+- **Brief 1 (plugin v0.1):** foundation — manifest, commands,
   skills, hooks, templates EXCEPT auth and frontend.
-- **Brief 2 (plugin v0.2):** auth — `server/auth/` middleware,
-  SQLite session store, DB migration, `.env.example` auth section.
+- **Brief 2 (this plugin):** auth — `server/auth/` middleware, JWT
+  sign/verify, magic-link routes, SQLite session permanence + magic-link
+  table, `.env.example` auth section, `secrets-manifest` Auth section.
 - **Brief 3 (plugin v0.3):** frontend — populate `templates/frontend/`
   with a React + Vite snapshot from simoneos.
 
 When working on Brief 2 or 3, branch from `main`, scope the PR to
 just the brief's contents, and update this doc + the README.
+
+## Brief 2: Auth
+
+Auth ships as part of the `new-consumer` (Mode A) scaffold only.
+Mode B (`new-program` inside an existing consumer) inherits the host
+consumer's auth — there is no Brief-2-equivalent template in
+`templates/new-program/`.
+
+### Files rendered by `/pgas-new-consumer`
+
+```
+server/auth/
+  jwt.ts             ← signJwt / verifyJwt (HS256 via `jose`)
+  middleware.ts      ← Hono middleware mounted on /api/*
+  routes.ts          ← POST /auth/login, GET /auth/magic/:token, POST /auth/logout
+  magic-link.ts      ← issueMagicLink / redeemMagicLink (SQLite)
+  config.ts          ← authConfig + onMagicLink seam
+  types.ts           ← User, AuthContext, AuthMode
+
+db/migrations/
+  0001_user_sessions.sql   ← jti → (user_email, expires_at, revoked_at)
+  0002_magic_links.sql     ← token → (user_email, expires_at, consumed_at)
+```
+
+The consumer's existing migration runner (or any one-shot SQLite import)
+applies these before the server starts accepting auth-protected traffic.
+
+### Env vars (all live in `.env.local` for dev; never commit)
+
+| Var | Purpose | Required when |
+|---|---|---|
+| `PGAS_AUTH_MODE` | `dev-static-token` (default) or `magic-link` | always (defaults if unset) |
+| `PGAS_JWT_SECRET` | HS256 signing key, 16+ chars | `magic-link` mode |
+| `PGAS_DEV_STATIC_TOKEN` | Shared bearer token | `dev-static-token` mode |
+| `PGAS_SESSION_TTL_SECONDS` | JWT lifetime | optional (default 30 days) |
+| `PGAS_MAGIC_LINK_TTL_SECONDS` | Magic-link redeem window | optional (default 10 minutes) |
+
+### Switching modes
+
+Edit `.env.local`:
+
+```ini
+# dev (zero friction)
+PGAS_AUTH_MODE=dev-static-token
+PGAS_DEV_STATIC_TOKEN=any-random-string
+
+# prod (single-use email tokens)
+PGAS_AUTH_MODE=magic-link
+PGAS_JWT_SECRET=<openssl rand -hex 32>
+```
+
+Restart the server. The middleware reads `authConfig.mode` once at
+import time (from env), so a process restart is required.
+
+### The `onMagicLink` callback seam
+
+The default `authConfig.onMagicLink` logs the magic URL to stdout — fine
+for dev, **not** for production. To plug in a real email provider,
+override the callback at server bootstrap:
+
+```ts
+import { authConfig } from './server/auth/config.js';
+authConfig.onMagicLink = async (email, url) => {
+  await myMailer.send({ to: email, subject: 'Sign in', text: url });
+};
+```
+
+This is the ONE place a consumer wires its email provider. Do it once,
+before `app.route('/auth', authRoutes)` runs.
+
+### Out of scope for v0.1
+
+- Password login / bcrypt — `magic-link` is the only credential flow.
+- OAuth/SSO/SAML — explicit non-goal.
+- Refresh tokens — JWTs expire and clients re-authenticate.
+- Email-sending integration — `onMagicLink` is the seam, plugin does not
+  bundle a mailer.
+- Rate limiting — a `TODO(rate-limiting)` lives in `server/auth/routes.ts`.
+  Production deploys MUST bolt on `hono-rate-limiter` or a reverse-proxy
+  rule before exposing `/auth/login`.

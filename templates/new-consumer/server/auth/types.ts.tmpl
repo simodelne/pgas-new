@@ -1,0 +1,50 @@
+/**
+ * {{CONSUMER_NAME}} — auth types.
+ *
+ * Plugin v0.2 (Brief 2). Locked architecture:
+ *   - JWT-based, HS256 (`jose`).
+ *   - Two modes: `dev-static-token` (default) and `magic-link` (opt-in).
+ *   - Session permanence via `user_sessions` table; revoke = write `revoked_at`.
+ *
+ * OUT OF SCOPE (do not extend without an architecture review):
+ *   - password login, OAuth/SSO, refresh tokens, email-sending integration,
+ *     rate limiting. See server/auth/routes.ts for the rate-limit TODO.
+ */
+
+/** The set of supported auth modes. Selected via `PGAS_AUTH_MODE`. */
+export type AuthMode = 'dev-static-token' | 'magic-link';
+
+/** The authenticated principal attached to a request via `c.set('user', ...)`. */
+export interface User {
+  /** The user's email. In `dev-static-token` mode this is `dev@local`. */
+  email: string;
+}
+
+/**
+ * The full Hono context shape exported for handlers that need
+ * type-safe access to `c.get('user')`. Hono's Variables generic.
+ */
+export interface AuthContext {
+  Variables: {
+    user: User;
+  };
+}
+
+/** A row in the `user_sessions` table. */
+export interface UserSessionRow {
+  id: number;
+  user_email: string;
+  jti: string;
+  created_at: number;
+  expires_at: number;
+  revoked_at: number | null;
+}
+
+/** A row in the `magic_links` table. */
+export interface MagicLinkRow {
+  token: string;
+  user_email: string;
+  created_at: number;
+  expires_at: number;
+  consumed_at: number | null;
+}

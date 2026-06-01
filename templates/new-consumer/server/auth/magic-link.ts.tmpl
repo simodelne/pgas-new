@@ -1,0 +1,134 @@
+/**
+ * {{CONSUMER_NAME}} — magic-link issue + redeem.
+ *
+ * Flow:
+ *   1. `issueMagicLink(email)` — inserts a row into `magic_links` with a
+ *      random token and a short TTL (default 10 minutes). Returns the token.
+ *      The route handler then calls `authConfig.onMagicLink(email, url)`.
+ *      PRODUCTION: replace console.log with email-send via your provider.
+ *      Plug into the `onMagicLink` hook in server/auth/config.ts.
+ *
+ *   2. `redeemMagicLink(token)` — validates the token (exists, not consumed,
+ *      not expired), marks it consumed, inserts a fresh `user_sessions` row,
+ *      and returns the JWT to hand back to the client.
+ *
+ * Both operations open their own DB handle via the shared `openAuthDb`
+ * helper so that the magic-link surface is self-contained.
+ */
+
+import { randomBytes, randomUUID } from 'node:crypto';
+import Database from 'better-sqlite3';
+import { signJwt } from './jwt.js';
+import { authConfig } from './config.js';
+import type { MagicLinkRow, UserSessionRow } from './types.js';
+
+const DB_PATH = process.env.PGAS_AUTH_DB_PATH ?? './data/auth.db';
+
+let cachedDb: Database.Database | null = null;
+
+/**
+ * Open (or reuse) the auth SQLite handle. The DB file MUST exist with the
+ * `0001_user_sessions.sql` and `0002_magic_links.sql` migrations applied —
+ * see `db/migrations/`. The consumer's bootstrap is responsible for running
+ * migrations before the server starts accepting auth requests.
+ */
+export function openAuthDb(): Database.Database {
+  if (cachedDb) return cachedDb;
+  cachedDb = new Database(DB_PATH);
+  cachedDb.pragma('journal_mode = WAL');
+  cachedDb.pragma('foreign_keys = ON');
+  return cachedDb;
+}
+
+/** For tests: reset the cached handle (DOES NOT close it). */
+export function _resetAuthDbForTests(): void {
+  cachedDb = null;
+}
+
+/** Generate a cryptographically random URL-safe token. */
+function randomToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/**
+ * Issue a magic-link token. Returns the raw token (the route handler
+ * composes the full URL and hands it to `authConfig.onMagicLink`).
+ */
+export function issueMagicLink(email: string): { token: string; expiresAt: number } {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized || !normalized.includes('@')) {
+    throw new Error('email must be a non-empty address containing "@"');
+  }
+  const db = openAuthDb();
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + authConfig.magicLinkTtlSeconds;
+  const token = randomToken();
+  db.prepare(
+    `INSERT INTO magic_links (token, user_email, created_at, expires_at, consumed_at)
+     VALUES (?, ?, ?, ?, NULL)`,
+  ).run(token, normalized, now, expiresAt);
+  return { token, expiresAt };
+}
+
+/**
+ * Redeem a magic-link token. Returns `{ jwt, user }` on success or `null`
+ * if the token doesn't exist, is already consumed, or has expired.
+ *
+ * On success, the magic link is marked consumed and a `user_sessions` row
+ * is inserted. The returned JWT carries `jti = session.jti` so the auth
+ * middleware can revoke this session by setting `revoked_at`.
+ */
+export async function redeemMagicLink(
+  token: string,
+): Promise<{ jwt: string; userEmail: string; jti: string; expiresAt: number } | null> {
+  const db = openAuthDb();
+  const now = Math.floor(Date.now() / 1000);
+
+  const row = db
+    .prepare(
+      `SELECT token, user_email, created_at, expires_at, consumed_at
+       FROM magic_links WHERE token = ?`,
+    )
+    .get(token) as MagicLinkRow | undefined;
+
+  if (!row) return null;
+  if (row.consumed_at !== null) return null;
+  if (row.expires_at <= now) return null;
+
+  const tx = db.transaction(() => {
+    db.prepare(`UPDATE magic_links SET consumed_at = ? WHERE token = ?`).run(now, token);
+    const jti = randomUUID();
+    const expiresAt = now + authConfig.sessionTtlSeconds;
+    db.prepare(
+      `INSERT INTO user_sessions (user_email, jti, created_at, expires_at, revoked_at)
+       VALUES (?, ?, ?, ?, NULL)`,
+    ).run(row.user_email, jti, now, expiresAt);
+    return { jti, expiresAt };
+  });
+  const { jti, expiresAt } = tx();
+
+  const jwt = await signJwt({ sub: row.user_email, jti, exp: expiresAt });
+  return { jwt, userEmail: row.user_email, jti, expiresAt };
+}
+
+/** Look up a session by jti. Used by the middleware. */
+export function findSessionByJti(jti: string): UserSessionRow | null {
+  const db = openAuthDb();
+  const row = db
+    .prepare(
+      `SELECT id, user_email, jti, created_at, expires_at, revoked_at
+       FROM user_sessions WHERE jti = ?`,
+    )
+    .get(jti) as UserSessionRow | undefined;
+  return row ?? null;
+}
+
+/** Mark a session revoked (logout). Idempotent. */
+export function revokeSessionByJti(jti: string): void {
+  const db = openAuthDb();
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(`UPDATE user_sessions SET revoked_at = ? WHERE jti = ? AND revoked_at IS NULL`).run(
+    now,
+    jti,
+  );
+}

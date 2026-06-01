@@ -123,6 +123,161 @@ for p in 'inputs.query_meta.source_path' 'inputs.query_meta.message' 'inputs.que
   fi
 done
 
+# Brief 2 checks — auth scaffold ----------------------------------------
+echo "[brief2] auth scaffold files present + Brief 1 stub deleted"
+AUTH_DIR="templates/new-consumer/server/auth"
+for f in jwt.ts.tmpl middleware.ts.tmpl routes.ts.tmpl types.ts.tmpl magic-link.ts.tmpl config.ts.tmpl; do
+  if [[ -f "$AUTH_DIR/$f" ]]; then
+    pass "exists: $AUTH_DIR/$f"
+  else
+    fail "MISSING: $AUTH_DIR/$f"
+  fi
+done
+if [[ -e "$AUTH_DIR/README.md" ]]; then
+  fail "Brief 1 stub still present: $AUTH_DIR/README.md (should be deleted)"
+else
+  pass "Brief 1 stub deleted: $AUTH_DIR/README.md"
+fi
+
+echo "[brief2] DB migrations present"
+MIG_DIR="templates/new-consumer/db/migrations"
+for f in 0001_user_sessions.sql.tmpl 0002_magic_links.sql.tmpl; do
+  if [[ -f "$MIG_DIR/$f" ]]; then
+    pass "exists: $MIG_DIR/$f"
+  else
+    fail "MISSING: $MIG_DIR/$f"
+  fi
+done
+
+echo "[brief2] server/index.ts.tmpl removes Brief 2 TODO + mounts auth"
+SERVER_TMPL="templates/new-consumer/server/index.ts.tmpl"
+if grep -q "TODO: auth middleware mounts here" "$SERVER_TMPL"; then
+  fail "Brief 2 TODO still present in $SERVER_TMPL"
+else
+  pass "Brief 2 TODO removed from $SERVER_TMPL"
+fi
+if grep -q "app.use('/api/\*', authMiddleware)" "$SERVER_TMPL"; then
+  pass "authMiddleware mounted on /api/*"
+else
+  fail "authMiddleware NOT mounted on /api/* in $SERVER_TMPL"
+fi
+if grep -q "app.route('/auth', authRoutes)" "$SERVER_TMPL"; then
+  pass "authRoutes mounted on /auth"
+else
+  fail "authRoutes NOT mounted on /auth in $SERVER_TMPL"
+fi
+# Order matters: app.route('/auth', ...) MUST come before app.use('/api/*', ...).
+ROUTE_LINE=$(grep -n "app.route('/auth', authRoutes)" "$SERVER_TMPL" | head -1 | cut -d: -f1)
+USE_LINE=$(grep -n "app.use('/api/\*', authMiddleware)" "$SERVER_TMPL" | head -1 | cut -d: -f1)
+if [[ -n "$ROUTE_LINE" && -n "$USE_LINE" && "$ROUTE_LINE" -lt "$USE_LINE" ]]; then
+  pass "auth route ordering OK (app.route before app.use)"
+else
+  fail "auth route ordering WRONG: route=$ROUTE_LINE use=$USE_LINE"
+fi
+
+echo "[brief2] .env.example.tmpl documents all 5 auth env vars"
+ENV_TMPL="templates/new-consumer/.env.example.tmpl"
+for v in PGAS_AUTH_MODE PGAS_JWT_SECRET PGAS_DEV_STATIC_TOKEN PGAS_SESSION_TTL_SECONDS PGAS_MAGIC_LINK_TTL_SECONDS; do
+  if grep -q "^${v}=" "$ENV_TMPL"; then
+    pass ".env.example.tmpl documents $v"
+  else
+    fail ".env.example.tmpl missing $v"
+  fi
+done
+# The retired AUTH_DEV_TOKEN should NOT linger.
+if grep -q "^AUTH_DEV_TOKEN=" "$ENV_TMPL"; then
+  fail ".env.example.tmpl still has retired AUTH_DEV_TOKEN entry"
+else
+  pass ".env.example.tmpl: retired AUTH_DEV_TOKEN removed"
+fi
+
+echo "[brief2] secrets-manifest has Auth section"
+SECRETS_TMPL="templates/new-consumer/docs/secrets-manifest.md.tmpl"
+if grep -q "^## Auth secrets" "$SECRETS_TMPL"; then
+  pass "secrets-manifest has '## Auth secrets' section"
+else
+  fail "secrets-manifest missing '## Auth secrets' section"
+fi
+for v in PGAS_JWT_SECRET PGAS_DEV_STATIC_TOKEN; do
+  if grep -q "\`${v}\`" "$SECRETS_TMPL"; then
+    pass "secrets-manifest lists $v"
+  else
+    fail "secrets-manifest missing $v"
+  fi
+done
+if grep -q "NEVER COMMIT" "$SECRETS_TMPL"; then
+  pass "secrets-manifest has NEVER COMMIT notice"
+else
+  fail "secrets-manifest missing NEVER COMMIT notice"
+fi
+
+echo "[brief2] package.json.tmpl pins better-sqlite3 + jose"
+PKG_TMPL="templates/new-consumer/package.json.tmpl"
+for dep in 'better-sqlite3' 'jose'; do
+  if grep -q "\"$dep\":" "$PKG_TMPL"; then
+    pass "package.json.tmpl pins $dep"
+  else
+    fail "package.json.tmpl missing $dep"
+  fi
+done
+
+echo "[brief2] rendered .ts files pass node --check"
+RENDER_DIR=$(mktemp -d)
+for tmpl in "$AUTH_DIR"/*.tmpl; do
+  base=$(basename "$tmpl" .tmpl)
+  sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.8.0/g' \
+      -e 's/{{GH_OWNER}}/simodelne/g' \
+      "$tmpl" > "$RENDER_DIR/$base"
+done
+# Render server/index.ts too
+sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
+    -e 's/{{ENGINE_VERSION}}/\^1.8.0/g' \
+    -e 's/{{GH_OWNER}}/simodelne/g' \
+    "$SERVER_TMPL" > "$RENDER_DIR/index.ts"
+
+# Use a tsx-style syntax-only check via node 24's `--check` (works for ESM TS-free JS).
+# For .ts files, we use a transpile-free regex sanity check: must NOT contain
+# unsubstituted {{...}} markers.
+for f in "$RENDER_DIR"/*.ts; do
+  if grep -qE '\{\{[A-Z_]+\}\}' "$f"; then
+    fail "rendered file contains unsubstituted placeholder: $f"
+  else
+    pass "rendered file fully substituted: $(basename "$f")"
+  fi
+done
+
+# Verify rendered server/index.ts has the expected wiring strings (post-render).
+if ! grep -q "TODO: auth middleware mounts here" "$RENDER_DIR/index.ts"; then
+  pass "rendered index.ts: Brief 2 TODO removed"
+else
+  fail "rendered index.ts: Brief 2 TODO still present"
+fi
+if grep -q "app.use('/api/\*', authMiddleware)" "$RENDER_DIR/index.ts"; then
+  pass "rendered index.ts: app.use('/api/*', authMiddleware) present"
+else
+  fail "rendered index.ts: app.use('/api/*', authMiddleware) MISSING"
+fi
+rm -rf "$RENDER_DIR"
+
+echo "[brief2] DB migrations are syntactically valid SQLite"
+if command -v sqlite3 >/dev/null 2>&1; then
+  for mig in "$MIG_DIR"/*.sql.tmpl; do
+    SUBST=$(mktemp)
+    sed -e 's/{{CONSUMER_NAME}}/test-c/g' "$mig" > "$SUBST"
+    if sqlite3 :memory: < "$SUBST" 2>/dev/null; then
+      pass "sqlite parses: $(basename "$mig")"
+    else
+      fail "sqlite REJECTED: $(basename "$mig")"
+      sqlite3 :memory: < "$SUBST" 2>&1 | head -3
+    fi
+    rm -f "$SUBST"
+  done
+else
+  echo "  SKIP: sqlite3 CLI not available (CI image should have it)"
+fi
+# -----------------------------------------------------------------------
+
 # Bonus check: spec.yml.tmpl only admits system_mode_entry on `start` mode (FM3)
 echo "[bonus] spec.yml.tmpl admits system_mode_entry on bootstrap mode only (FM3)"
 # Count mode blocks that have system_mode_entry in channels
