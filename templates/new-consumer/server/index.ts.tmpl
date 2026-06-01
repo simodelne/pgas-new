@@ -30,6 +30,11 @@ import {
   createSessionLockExhaustedConsumer,     // FM2 — pgas#253
 } from '@simodelne/pgas-server';
 
+// Auth — plugin v0.2 (Brief 2). See server/auth/README in plugin docs and
+// docs/PLUGIN-DEVELOPMENT.md → "Brief 2: Auth".
+import { authMiddleware } from './auth/middleware.js';
+import { authRoutes } from './auth/routes.js';
+
 // [pgas-plugin:program-registry] — auto-injected program imports below
 
 // [pgas-plugin:spec-registry] — auto-injected spec loads below
@@ -76,9 +81,13 @@ createSessionLockExhaustedConsumer(
 
 const app = new Hono();
 
-// TODO: auth middleware mounts here — see server/auth/ (Brief 2)
-//       Until Brief 2 lands, this server is UNAUTHENTICATED.
-//       Do NOT deploy to a public network in this state.
+// Auth (Brief 2). ORDER MATTERS:
+//   1. Public auth endpoints first (login, magic, logout) — these must NOT
+//      sit behind authMiddleware (chicken-and-egg).
+//   2. authMiddleware on /api/* — every protected route lives under /api.
+// `/health` stays public so liveness probes work without credentials.
+app.route('/auth', authRoutes);
+app.use('/api/*', authMiddleware);
 
 app.get('/health', (c) => c.json({ ok: true, consumer: '{{CONSUMER_NAME}}' }));
 

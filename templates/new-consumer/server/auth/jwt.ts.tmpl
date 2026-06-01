@@ -1,0 +1,74 @@
+/**
+ * {{CONSUMER_NAME}} — JWT sign/verify.
+ *
+ * HS256 via `jose` (pure ESM, no native deps). Secret from `PGAS_JWT_SECRET`.
+ *
+ * The runtime secret is loaded lazily on first call so that `dev-static-token`
+ * mode does not require `PGAS_JWT_SECRET` to be set.
+ *
+ * NOTE: tokens issued here carry only the minimal claims the auth middleware
+ * needs to reconstruct the principal: `sub` (user email), `jti` (the
+ * `user_sessions.jti` lookup key), and standard `iat`/`exp`. We deliberately
+ * do NOT stuff app-level user data into the token — that lives in DB and is
+ * reloaded on every request via `jti`.
+ */
+
+import { SignJWT, jwtVerify } from 'jose';
+
+export interface JwtClaims {
+  /** Subject — the user's email. */
+  sub: string;
+  /** JWT ID — the lookup key into `user_sessions`. */
+  jti: string;
+  /** Expiration — unix seconds. */
+  exp: number;
+  /** Issued at — unix seconds. */
+  iat?: number;
+}
+
+let cachedSecret: Uint8Array | null = null;
+
+function getSecret(): Uint8Array {
+  if (cachedSecret) return cachedSecret;
+  const raw = process.env.PGAS_JWT_SECRET;
+  if (!raw || raw.length < 16) {
+    throw new Error(
+      'PGAS_JWT_SECRET is missing or too short (need 16+ chars). ' +
+        'Generate one with `openssl rand -hex 32`. ' +
+        'Required in PGAS_AUTH_MODE=magic-link; unused in dev-static-token.',
+    );
+  }
+  cachedSecret = new TextEncoder().encode(raw);
+  return cachedSecret;
+}
+
+/** Sign a JWT with the given claims. */
+export async function signJwt(claims: { sub: string; jti: string; exp: number }): Promise<string> {
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(claims.sub)
+    .setJti(claims.jti)
+    .setIssuedAt()
+    .setExpirationTime(claims.exp)
+    .sign(getSecret());
+}
+
+/**
+ * Verify a JWT. Returns the canonical claims on success, or `null` on any
+ * failure (bad signature, expired, malformed, missing claims).
+ *
+ * Verification failures are deliberately collapsed to `null` — the middleware
+ * surfaces a generic 401 and does not leak the failure mode to the caller.
+ */
+export async function verifyJwt(token: string): Promise<JwtClaims | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ['HS256'] });
+    const sub = typeof payload.sub === 'string' ? payload.sub : null;
+    const jti = typeof payload.jti === 'string' ? payload.jti : null;
+    const exp = typeof payload.exp === 'number' ? payload.exp : null;
+    if (!sub || !jti || !exp) return null;
+    return { sub, jti, exp, iat: typeof payload.iat === 'number' ? payload.iat : undefined };
+  } catch {
+    return null;
+  }
+}

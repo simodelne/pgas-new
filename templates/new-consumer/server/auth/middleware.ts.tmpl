@@ -1,0 +1,73 @@
+/**
+ * {{CONSUMER_NAME}} — auth middleware (Hono).
+ *
+ * Mounted on `/api/*` from server/index.ts. Reads `Authorization: Bearer ...`
+ * and branches on `PGAS_AUTH_MODE`:
+ *
+ *   - `dev-static-token`: constant-time compare with `PGAS_DEV_STATIC_TOKEN`.
+ *     On match, sets `c.set('user', { email: 'dev@local' })`. No DB.
+ *
+ *   - `magic-link`: verify JWT → look up `jti` in `user_sessions` →
+ *     check NOT revoked + NOT expired → set `c.set('user', { email: row.user_email })`.
+ *
+ * On ANY failure: respond 401 JSON `{error: 'unauthorized'}`. Never fail-open.
+ * The middleware deliberately collapses all failure modes to the same response
+ * — leaking "token expired" vs "session revoked" vs "no header" gives attackers
+ * a discrimination signal we do not want.
+ */
+
+import { timingSafeEqual } from 'node:crypto';
+import type { Context, Next } from 'hono';
+import { verifyJwt } from './jwt.js';
+import { authConfig } from './config.js';
+import { findSessionByJti } from './magic-link.js';
+
+const UNAUTHORIZED = { error: 'unauthorized' as const };
+
+function extractBearer(c: Context): string | null {
+  const header = c.req.header('authorization') ?? c.req.header('Authorization');
+  if (!header) return null;
+  const m = /^Bearer\s+(.+)$/.exec(header);
+  return m ? m[1].trim() : null;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, 'utf8');
+  const bBuf = Buffer.from(b, 'utf8');
+  if (aBuf.length !== bBuf.length) return false;
+  return timingSafeEqual(aBuf, bBuf);
+}
+
+export async function authMiddleware(c: Context, next: Next): Promise<Response | void> {
+  const token = extractBearer(c);
+  if (!token) return c.json(UNAUTHORIZED, 401);
+
+  if (authConfig.mode === 'dev-static-token') {
+    const expected = process.env.PGAS_DEV_STATIC_TOKEN;
+    if (!expected) {
+      // Never fail-open. If the operator forgot to set the dev token,
+      // refuse the request rather than letting any token through.
+      return c.json(UNAUTHORIZED, 401);
+    }
+    if (!constantTimeEqual(token, expected)) {
+      return c.json(UNAUTHORIZED, 401);
+    }
+    c.set('user', { email: 'dev@local' });
+    await next();
+    return;
+  }
+
+  // magic-link mode
+  const claims = await verifyJwt(token);
+  if (!claims) return c.json(UNAUTHORIZED, 401);
+
+  const session = findSessionByJti(claims.jti);
+  if (!session) return c.json(UNAUTHORIZED, 401);
+  if (session.revoked_at !== null) return c.json(UNAUTHORIZED, 401);
+
+  const now = Math.floor(Date.now() / 1000);
+  if (session.expires_at <= now) return c.json(UNAUTHORIZED, 401);
+
+  c.set('user', { email: session.user_email });
+  await next();
+}
