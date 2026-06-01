@@ -28,6 +28,16 @@ construction. The freshly-created consumer ships with:
   consumer's schema (or TODO with explicit list if the engine doesn't
   yet export `engineOwnedContinuationPaths`).
 
+## Flags
+
+- `--with-frontend` — also scaffold a minimal vendored frontend under
+  `frontend/` (default: off). When this flag is present, every step
+  below additionally copies `templates/frontend/*` into
+  `$TARGET/frontend/` with placeholder substitution, and the next-steps
+  checklist includes the frontend dev-loop. See Brief 3 docs:
+  `docs/PLUGIN-DEVELOPMENT.md → "Brief 3: Frontend"`. The snapshot date
+  is recorded in `.claude-plugin/plugin.json#simoneosFrontendSnapshot`.
+
 ## Step 1 — gather inputs
 
 Ask the user via `AskUserQuestion`:
@@ -41,6 +51,9 @@ Ask the user via `AskUserQuestion`:
 3. **Governance-locked parameters** — y/n. If yes, the scaffold creates
    a `governance/approved_parameters.json` stub + an `EVAL_LEDGER.md`
    stub (pgas-rag-style). If no, omit those files.
+4. **With frontend** — y/n (only ask if `--with-frontend` was not
+   explicitly passed). If yes, also scaffold `frontend/` from
+   `templates/frontend/`.
 
 Also resolve `{{GH_OWNER}}` via `gh api user --jq .login` (typically
 `simodelne`).
@@ -74,10 +87,51 @@ For each `.tmpl` file, write the substituted content to the same path
 
 `.gitkeep` files copy as empty placeholders to preserve the directory.
 
+### Step 3a — if `--with-frontend`, copy the vendored frontend
+
+When the flag is set, additionally:
+
+```bash
+mkdir -p "$TARGET/frontend"
+cp -R "${CLAUDE_PLUGIN_ROOT}/templates/frontend/." "$TARGET/frontend/"
+```
+
+Then run the same placeholder substitution on every `.tmpl` file under
+`$TARGET/frontend/` (drop the `.tmpl` suffix on rendered output). The
+frontend `.gitignore`, `vite.config.ts`, `tsconfig*.json`,
+`eslint.config.js`, `src/index.css`, `src/main.tsx`,
+`src/vite-env.d.ts`, `src/lib/auth.ts`, `src/lib/ws.ts`,
+`src/stores/auth.ts`, `src/components/Router.tsx`,
+`src/pages/MagicLinkCallback.tsx` files copy verbatim (no `.tmpl`).
+
+Append a "Frontend" section to the consumer's `README.md`:
+
+```markdown
+## Frontend
+
+A minimal React + Vite + Tailwind UI lives in `frontend/` (vendored
+from simoneos on 2026-06-01). It speaks to `server/` via REST + WS.
+
+  cd frontend
+  cp .env.example .env.local
+  npm install
+  npm run dev
+
+`VITE_PGAS_AUTH_MODE` in `frontend/.env.local` MUST match
+`PGAS_AUTH_MODE` in the root `.env.local`. See
+`frontend/README.md` for full details.
+```
+
 ## Step 4 — install dependencies
 
 ```bash
 cd "$TARGET" && npm install
+```
+
+If `--with-frontend` was set, also install the frontend deps:
+
+```bash
+cd "$TARGET/frontend" && npm install
 ```
 
 If `npm install` fails (commonly: GitHub Packages auth — the consumer's
@@ -129,10 +183,13 @@ Next steps:
        AUTH_DEV_TOKEN     — placeholder until Brief 2 lands the real auth stack
   5. Install local hooks:   bash scripts/install-hooks.sh
   6. Run:                   npm run dev
-  7. Read CLAUDE.md         — it embeds the CONSUMER-COMMS-PROTOCOL Channel 1-4
+  7. (if --with-frontend)   cd frontend && cp .env.example .env.local && npm run dev
+                             Edit VITE_PGAS_AUTH_MODE in frontend/.env.local to match
+                             PGAS_AUTH_MODE in the root .env.local.
+  8. Read CLAUDE.md         — it embeds the CONSUMER-COMMS-PROTOCOL Channel 1-4
                              cycle and the classifier-denial rule. Every Claude
                              session in this repo must obey both.
-  8. Author your first program prompts under programs/${BOOTSTRAP_NAME}/prompts/
+  9. Author your first program prompts under programs/${BOOTSTRAP_NAME}/prompts/
      and fill in handlers under programs/${BOOTSTRAP_NAME}/handlers/.
   9. When you cut your first v0.1.0, write
      audit/ARCHITECTURE-${CONSUMER_NAME}-v0.1.0.md
