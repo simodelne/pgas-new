@@ -230,3 +230,88 @@ before `app.route('/auth', authRoutes)` runs.
 - Rate limiting — a `TODO(rate-limiting)` lives in `server/auth/routes.ts`.
   Production deploys MUST bolt on `hono-rate-limiter` or a reverse-proxy
   rule before exposing `/auth/login`.
+
+## Brief 3: Frontend
+
+Frontend ships as an **opt-in** part of the `new-consumer` (Mode A)
+scaffold. Triggered by the `--with-frontend` flag on
+`/pgas-new-consumer`. Mode B does NOT get a frontend — the new program
+inherits whatever surface the host consumer already has.
+
+### Snapshot policy
+
+The `templates/frontend/` directory is a **vendored** snapshot of
+`~/Desktop/simoneos/frontend/src/` (the production simoneos consumer).
+We snapshot rather than symlink or git-submodule because:
+
+- Symlinks break when consumers move files around. Vendored snapshots
+  travel with the scaffold.
+- Git submodules add a maintenance tax (pin discipline, recursive
+  clone, CI flake) that's overkill for a UI starter kit.
+- Snapshot drift is acceptable — the plugin records the date the
+  snapshot was taken in `.claude-plugin/plugin.json` under the
+  `simoneosFrontendSnapshot` field. Consumers who want the latest
+  surface can re-vendor from upstream (procedure below).
+
+### `simoneosFrontendSnapshot` field
+
+`.claude-plugin/plugin.json` carries a `simoneosFrontendSnapshot`
+field (ISO `YYYY-MM-DD`). This is the date the current vendored
+snapshot was taken from `simoneos/frontend/`. When the snapshot is
+refreshed, bump this field. Don't refresh the field without also
+refreshing the actual code under `templates/frontend/`.
+
+### Refresh procedure
+
+When simoneos drifts and the snapshot needs updating:
+
+1. Read `~/Desktop/simoneos/frontend/src/` carefully. Pay attention to
+   the **five vendored surfaces** only:
+   - `App.tsx` (top-level routing + auth gate)
+   - `pages/v2/LoginPageV2.tsx` (login form structure)
+   - `stores/auth.ts` (localStorage shape)
+   - `hooks/useWebSocket.ts` (WS connect + reconnect)
+   - `api/client.ts` (REST + 401 handling)
+2. Apply matching edits to `templates/frontend/`. Do NOT pull in
+   simoneos-business code (contracts, legal-flows, widgets).
+3. Hard discipline check: keep `templates/frontend/src/` under 30
+   files. The current snapshot has 11.
+4. Bump `simoneosFrontendSnapshot` in `.claude-plugin/plugin.json` to
+   today's date.
+5. Re-run `bash tests/template-render.test.sh`,
+   `bash tests/plugin-manifest.test.sh`, and (if you have a Node
+   environment) `bash tests/frontend-scaffold.test.sh`.
+
+### Adding a new page
+
+1. Create `templates/frontend/src/pages/NewPage.tsx.tmpl` (if it uses
+   `{{CONSUMER_NAME}}` or other placeholders) or `.tsx` (verbatim).
+2. Add a route in `App.tsx.tmpl`:
+   ```ts
+   { pattern: '/your-path', render: () => <NewPage /> },
+   ```
+3. Run `bash tests/template-render.test.sh` to confirm balanced
+   placeholders.
+
+### Why we vendor instead of symlink
+
+A symlink to `~/Desktop/simoneos/frontend/` would mean every plugin
+user needs the simoneos repo cloned at that path, with the same files
+on the same branches. That's a non-starter — the plugin must work on
+any machine. A git submodule would mean every plugin install pulls in
+~100MB of simoneos history. Vendoring (with snapshot date discipline)
+is the right call for v0.1.
+
+### Out of scope for v0.1
+
+- Playwright/Cypress browser tests — the `tsc -b && vite build` chain
+  is the verification surface.
+- Storybook / component gallery.
+- i18n / RTL support.
+- OAuth login UI — Brief 2 ships dev-static-token + magic-link only,
+  and the vendored login page covers both.
+- Widget framework (`src/primitives/`, `src/catalog/`, `src/runtime/`,
+  `src/theme/`) — these are simoneos-internal abstractions. Consumers
+  who need them must pull them in deliberately, not by default.
+- Multi-session shell / tabs / notification toast / issue reporter —
+  out of the v0.1 budget. Add via your own PRs once the basics work.

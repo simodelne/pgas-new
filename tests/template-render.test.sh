@@ -278,6 +278,121 @@ else
 fi
 # -----------------------------------------------------------------------
 
+# Brief 3 checks — vendored frontend snapshot ----------------------------
+echo "[brief3] frontend snapshot files present + Brief 1 stub deleted"
+FRONTEND_DIR="templates/frontend"
+if [[ -e "$FRONTEND_DIR/README.md" ]]; then
+  # README.md MUST exist post-Brief-3 (the *real* README, not the stub).
+  # The stub had a "Brief 3 (v0.3 of the plugin) will land" sentence;
+  # the real README does not.
+  if grep -q "Brief 3 (v0.3 of the plugin) will land" "$FRONTEND_DIR/README.md"; then
+    fail "Brief 1 stub still present in $FRONTEND_DIR/README.md"
+  else
+    pass "$FRONTEND_DIR/README.md exists and is not the Brief 1 stub"
+  fi
+else
+  fail "MISSING: $FRONTEND_DIR/README.md"
+fi
+
+# Required snapshot files
+FRONTEND_REQUIRED=(
+  "package.json.tmpl"
+  "index.html.tmpl"
+  "vite.config.ts"
+  "tsconfig.json"
+  "tsconfig.app.json"
+  "tsconfig.node.json"
+  "eslint.config.js"
+  ".env.example.tmpl"
+  ".gitignore"
+  "src/main.tsx"
+  "src/App.tsx.tmpl"
+  "src/index.css"
+  "src/vite-env.d.ts"
+  "src/lib/auth.ts"
+  "src/lib/api.ts.tmpl"
+  "src/lib/ws.ts"
+  "src/lib/navigate.ts"
+  "src/stores/auth.ts"
+  "src/components/Router.tsx"
+  "src/pages/Login.tsx.tmpl"
+  "src/pages/MagicLinkCallback.tsx"
+  "src/pages/SessionList.tsx.tmpl"
+  "src/pages/Chat.tsx.tmpl"
+)
+for f in "${FRONTEND_REQUIRED[@]}"; do
+  if [[ -f "$FRONTEND_DIR/$f" ]]; then
+    pass "exists: $FRONTEND_DIR/$f"
+  else
+    fail "MISSING: $FRONTEND_DIR/$f"
+  fi
+done
+
+# Discipline check: under 30 source files under templates/frontend/src/
+SRC_COUNT=$(find "$FRONTEND_DIR/src" -type f 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$SRC_COUNT" -lt 30 ]]; then
+  pass "frontend src budget: $SRC_COUNT files under 30"
+else
+  fail "frontend src OVER BUDGET: $SRC_COUNT files (max 30)"
+fi
+
+# All rendered .tmpl files must be fully substituted
+echo "[brief3] rendered frontend .tmpl files have no leftover placeholders"
+FE_RENDER=$(mktemp -d)
+mkdir -p "$FE_RENDER/src/lib" "$FE_RENDER/src/pages"
+while IFS= read -r tmpl; do
+  rel="${tmpl#$FRONTEND_DIR/}"
+  out="$FE_RENDER/${rel%.tmpl}"
+  mkdir -p "$(dirname "$out")"
+  sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.8.0/g' \
+      -e 's/{{GH_OWNER}}/simodelne/g' \
+      "$tmpl" > "$out"
+done < <(find "$FRONTEND_DIR" -name "*.tmpl" -type f 2>/dev/null)
+RENDERED_TMPLS=0
+while IFS= read -r f; do
+  RENDERED_TMPLS=$((RENDERED_TMPLS+1))
+  if grep -qE '\{\{[A-Z_]+\}\}' "$f"; then
+    fail "rendered frontend file contains unsubstituted placeholder: ${f#$FE_RENDER/}"
+  else
+    pass "rendered frontend file fully substituted: ${f#$FE_RENDER/}"
+  fi
+done < <(find "$FE_RENDER" -type f)
+if [[ "$RENDERED_TMPLS" -gt 0 ]]; then
+  pass "rendered $RENDERED_TMPLS .tmpl files from $FRONTEND_DIR"
+fi
+
+# package.json.tmpl must parse as JSON after substitution
+if node -e "JSON.parse(require('fs').readFileSync('$FE_RENDER/package.json','utf8'))" 2>/dev/null; then
+  pass "frontend package.json parses as JSON after substitution"
+else
+  fail "frontend package.json FAILS JSON parse after substitution"
+fi
+
+# Login.tsx must reference VITE_PGAS_AUTH_MODE (so the two auth modes are switchable)
+if grep -q "VITE_PGAS_AUTH_MODE" "$FE_RENDER/src/pages/Login.tsx"; then
+  pass "rendered Login.tsx switches on VITE_PGAS_AUTH_MODE"
+else
+  fail "rendered Login.tsx MISSING VITE_PGAS_AUTH_MODE switch"
+fi
+
+# auth.ts (verbatim, not .tmpl) must store the token in localStorage
+if grep -q "localStorage" "$FRONTEND_DIR/src/lib/auth.ts"; then
+  pass "src/lib/auth.ts stores JWT/token in localStorage"
+else
+  fail "src/lib/auth.ts does NOT use localStorage"
+fi
+
+# ws.ts must include the token on connect
+if grep -q "token=" "$FRONTEND_DIR/src/lib/ws.ts"; then
+  pass "src/lib/ws.ts includes ?token= on WS connect"
+else
+  fail "src/lib/ws.ts does NOT pass token on WS connect"
+fi
+
+rm -rf "$FE_RENDER"
+# -----------------------------------------------------------------------
+
 # Bonus check: spec.yml.tmpl only admits system_mode_entry on `start` mode (FM3)
 echo "[bonus] spec.yml.tmpl admits system_mode_entry on bootstrap mode only (FM3)"
 # Count mode blocks that have system_mode_entry in channels

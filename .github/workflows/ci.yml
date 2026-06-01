@@ -27,6 +27,14 @@ jobs:
       - name: Auth-scaffold smoke test (Brief 2)
         run: bash tests/auth-scaffold.test.sh
 
+      - name: Frontend-scaffold smoke test (Brief 3)
+        run: bash tests/frontend-scaffold.test.sh
+        env:
+          # Set to '1' to skip the npm install + vite build leg.
+          # CI runners have network egress so we exercise the full path
+          # by default.
+          SKIP_NPM: '0'
+
   cheap-gates:
     # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
     # can require cleanly without coupling to the main smoke-tests job.

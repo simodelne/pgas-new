@@ -28,6 +28,17 @@ else
   fail ".claude-plugin/plugin.json missing or invalid JSON"
 fi
 
+# 1b. plugin.json declares simoneosFrontendSnapshot in YYYY-MM-DD format (Brief 3)
+echo "[1b/4] plugin.json carries simoneosFrontendSnapshot (Brief 3)"
+SNAPSHOT=$(node -e "const m=JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')); process.stdout.write(m.simoneosFrontendSnapshot ?? '')" 2>/dev/null)
+if [[ -z "$SNAPSHOT" ]]; then
+  fail "plugin.json missing simoneosFrontendSnapshot field"
+elif [[ "$SNAPSHOT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  pass "simoneosFrontendSnapshot = $SNAPSHOT (YYYY-MM-DD)"
+else
+  fail "simoneosFrontendSnapshot = '$SNAPSHOT' does NOT match YYYY-MM-DD"
+fi
+
 # 2. Every command file exists
 echo "[2/4] command files exist"
 for cmd in commands/pgas-new-consumer.md commands/pgas-new-program.md; do
