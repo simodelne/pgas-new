@@ -29,4 +29,4 @@ jobs:
     # can require cleanly without coupling to the main smoke-tests job.
     runs-on: ubuntu-latest
     steps:
-      - run: echo "cheap-gates: ok"
+      - run: echo "cheap-gates ok"

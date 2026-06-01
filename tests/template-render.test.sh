@@ -93,6 +93,26 @@ else
   rm -rf "$TMP_DIR"
 fi
 
+# Bonus check: workflow .yml.tmpl files YAML-parse (catch colon-in-echo bugs)
+echo "[bonus] workflow tmpls YAML-parse after substitution"
+for wf in templates/new-consumer/.github/workflows/*.yml.tmpl .github/workflows/*.yml; do
+  [[ -f "$wf" ]] || continue
+  TMP=$(mktemp)
+  sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.8.0/g' \
+      -e 's/{{GH_OWNER}}/simodelne/g' \
+      -e 's/{{PROGRAM_NAME}}/test-p/g' \
+      -e 's/{{PROGRAM_SLUG}}/test_p/g' \
+      "$wf" > "$TMP"
+  if node -e "const y=require('js-yaml'); const fs=require('fs'); y.load(fs.readFileSync('$TMP','utf8'));" 2>/dev/null; then
+    pass "$wf YAML-parses"
+  else
+    fail "$wf FAILS to YAML-parse"
+    node -e "const y=require('js-yaml'); const fs=require('fs'); try { y.load(fs.readFileSync('$TMP','utf8')); } catch (e) { console.error('  →', e.message); }" 2>&1 | head -3
+  fi
+  rm -f "$TMP"
+done
+
 # Bonus check: spec.yml.tmpl declares the engine-owned FM5 paths
 echo "[bonus] spec.yml.tmpl declares engine-owned FM5 paths"
 for p in 'inputs.query_meta.source_path' 'inputs.query_meta.message' 'inputs.query_result.kind'; do
