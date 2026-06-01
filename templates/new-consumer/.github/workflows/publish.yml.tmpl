@@ -1,0 +1,52 @@
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://npm.pkg.github.com'
+
+      - name: Configure GitHub Packages auth
+        run: |
+          echo "@simodelne:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
+        env:
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+        env:
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify architecture doc exists (soft check)
+        # Per CONSUMER-VERSIONING-CONTRACT v1.0.0 § 5, hard CI gate is
+        # out of scope; this warn-only step is the medium-tier reminder.
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          PATCH=$(echo "$VERSION" | awk -F. '{print $3}')
+          if [[ "$PATCH" == "0" ]]; then
+            CONSUMER=$(node -p "require('./package.json').name.replace(/^@[^/]+\//, '')")
+            MAJOR_MINOR=$(echo "$VERSION" | awk -F. '{print $1"."$2".0"}')
+            EXPECTED="audit/ARCHITECTURE-${CONSUMER}-v${MAJOR_MINOR}.md"
+            if [[ ! -f "$EXPECTED" ]]; then
+              echo "::warning::Publishing v${VERSION} without ${EXPECTED} (see CONSUMER-VERSIONING-CONTRACT.md)"
+            fi
+          fi
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

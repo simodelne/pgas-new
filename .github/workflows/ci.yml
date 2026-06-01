@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dev deps (js-yaml for template-render.test.sh)
+        run: npm install --no-audit --no-fund
+
+      - name: Plugin manifest smoke test
+        run: bash tests/plugin-manifest.test.sh
+
+      - name: Template render smoke test
+        run: bash tests/template-render.test.sh
+
+  cheap-gates:
+    # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
+    # can require cleanly without coupling to the main smoke-tests job.
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "cheap-gates ok"

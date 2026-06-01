@@ -1,0 +1,15 @@
+{
+  "name": "claude-pgas-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code plugin for scaffolding pgas consumers and programs",
+  "scripts": {
+    "test": "bash tests/plugin-manifest.test.sh && bash tests/template-render.test.sh"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

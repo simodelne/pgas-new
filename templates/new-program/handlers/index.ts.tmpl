@@ -1,0 +1,60 @@
+/**
+ * {{PROGRAM_NAME}} — handler registry.
+ *
+ * Scaffolded by claude-pgas-plugin v0.1. Every handler that reads
+ * engine-managed paths MUST use the _resolver.ts helpers (closes
+ * pgas#253 FM1 by construction).
+ *
+ * The handlers below are skeletons — replace with your real
+ * implementation. The skeleton calls illustrate the FM1 pattern.
+ */
+
+import { resolveDomainPath, requireDomainPath, type DomainSnapshot } from './_resolver.js';
+
+/**
+ * Minimal handler context shape. Adapt to your actual program API:
+ * - If you use createDeclarativeSession, your handler signature comes
+ *   from there.
+ * - If you use createProgramAdapters with a custom createAdapters
+ *   override, your signature comes from your adapter shape (relevant
+ *   for FM4 handler-backed raw tools).
+ */
+export interface HandlerContext {
+  domain: DomainSnapshot;
+  // Add: roundIndex, sessionId, logger, fetch, etc. as needed.
+}
+
+/**
+ * example_action — your first action handler.
+ *
+ * The mutation is declared in spec.yml's action_map; this handler is
+ * called for any side effect beyond the declarative mutation.
+ *
+ * Currently this is a no-op skeleton; your real implementation goes
+ * here. The FM1 pattern is shown for illustration.
+ */
+export async function example_action(
+  payload: Record<string, unknown>,
+  ctx: HandlerContext,
+): Promise<void> {
+  // FM1 pattern: read engine-managed fields via the resolver, not
+  // directly from payload. Even though `reasoning` is an explicit arg
+  // here, the same pattern applies to ANY field that might be
+  // server-owned (work.*, inputs.*, decisions.*).
+  const reasoning = resolveDomainPath(payload, ctx.domain, 'work.example');
+
+  // For required fields, use requireDomainPath — it throws clearly
+  // instead of silently undefining.
+  // const userIntent = requireDomainPath<string>(payload, ctx.domain, 'inputs.answers.user_intent');
+
+  // Your real work goes here. Pure logging skeleton:
+  console.log('[{{PROGRAM_NAME}}] example_action invoked, reasoning =', reasoning);
+}
+
+/**
+ * Handler registry — exported for the consumer's
+ * createProgramAdapters or createDeclarativeSession wiring.
+ */
+export const handlers = {
+  example_action,
+};

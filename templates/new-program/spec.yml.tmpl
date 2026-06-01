@@ -1,0 +1,214 @@
+# {{PROGRAM_NAME}} — pgas program spec
+#
+# Scaffolded by claude-pgas-plugin v0.1. Closes pgas#253 FM3 + FM5 by
+# construction:
+#
+#   FM3: system_mode_entry is admitted ONLY on the bootstrap mode
+#        (`start`). Adding it to handler-result-driven modes creates
+#        duplicate-continuation foot-guns under @simodelne/pgas-* v1.8.x.
+#        See pgas#253 FM3 worked example before broadening admission.
+#
+#   FM5: the engine-owned `inputs.query_meta.*` paths are spread into
+#        the schema below. They MUST stay declared — the v1.8.x sync-out
+#        replay envelope includes them. See pgas#253 FM5.
+#
+# Run /pgas:spec-validate and /pgas:mode-entry-lint after editing.
+
+name: {{PROGRAM_SLUG}}
+
+# Cross-cutting prompt that joins the engine's static prefix once per
+# session. Update with your program-specific role + workflow language.
+preamble: |
+  ROLE
+  ----
+  Program: {{PROGRAM_NAME}}. You are <describe the agent role>.
+
+  WORKFLOW (declarative mode graph — do not improvise outside it)
+  ----------------------------------------------------------------
+    start → working → complete
+
+  CROSS-CUTTING RULES (apply EVERY round, in EVERY mode)
+  ------------------------------------------------------
+  1. Use ONLY the actions listed under the current mode's Vocabulary.
+  2. Respond by calling exactly one of the available tools per round.
+  3. When a tool's schema declares a `reasoning` parameter, pass ONE
+     short phrase (not a multi-field object) — just a terse justification.
+
+mode_initial: start
+
+# ---------------------------------------------------------------------
+# Modes
+# ---------------------------------------------------------------------
+#
+# Per pgas#253 FM3 (codex commit eb27ac9 in pgas-rag):
+#
+#   system_mode_entry is admitted ONLY on bootstrap modes. A bootstrap
+#   mode is one whose entry is NOT preceded by a handler write to a
+#   path the mode reads. `start` is the canonical bootstrap mode.
+#
+#   `working` is handler-result-driven (the example_action writes
+#   work.example which the mode's exit guard reads), so it does NOT
+#   admit system_mode_entry. The /pgas:mode-entry-lint skill enforces
+#   this.
+
+modes:
+  start:
+    # BOOTSTRAP mode — first decision the agent makes in the loop.
+    # SAFE to admit system_mode_entry here.
+    channels: [user_text, system_mode_entry, widget_output]
+    prompts:
+      - |
+        You are in the START mode. Decide what to do next:
+          - Call `begin_work` to enter the working loop.
+          - Call `query_state` with `{"path": "<dotted.path>"}` if you
+            need any value from the WorldView.
+    vocabulary: [begin_work, query_state]
+
+  working:
+    # HANDLER-RESULT-DRIVEN mode — `example_action` writes work.example
+    # which the exit guard reads. DO NOT add system_mode_entry here
+    # (FM3 foot-gun under v1.8.x).
+    channels: [system_query_result, widget_output, tool_call]
+    prompts:
+      - |
+        You are WORKING. Call `example_action` to produce work.example,
+        then `complete_work` once you are satisfied with the result.
+    vocabulary: [example_action, complete_work, query_state]
+
+  complete:
+    # Terminal mode — no further actions.
+    channels: [widget_output]
+    vocabulary: []
+
+# ---------------------------------------------------------------------
+# Mode transitions
+# ---------------------------------------------------------------------
+
+transitions:
+  - from: start
+    to: working
+    trigger: begin_work
+  - from: working
+    to: complete
+    trigger: complete_work
+    guard: work.example_ready
+
+# ---------------------------------------------------------------------
+# Action map — the v1.8.x action_map structure (pgas#229 + pgas#231)
+# ---------------------------------------------------------------------
+
+action_map:
+  begin_work:
+    description: "Enter the working loop after the bootstrap mode."
+    arg_descriptions: {}
+    mutations: []
+
+  example_action:
+    description: "Produce work.example. Replace with your real action."
+    arg_descriptions:
+      reasoning: "ONE short phrase justifying the call."
+    mutations:
+      - path: work.example
+        op: MSet
+        from_arg: reasoning
+      - path: work.example_ready
+        op: MSet
+        value: true
+
+  complete_work:
+    description: "Mark the program complete; transitions to terminal mode."
+    arg_descriptions: {}
+    mutations: []
+
+# ---------------------------------------------------------------------
+# Tools (raw — handler-backed or registry-backed)
+# ---------------------------------------------------------------------
+#
+# Per pgas#253 FM4 (codex commit c71a2cb in pgas-rag):
+#
+#   If a tool is HANDLER-BACKED (resolved via your handlers map), it
+#   MUST have an explicit createAdapters override for `tool:<name>` AND
+#   be listed in syncOutContinuationPolicy.channels. The DEFAULT
+#   adapter resolves to `handlers['invoke_tool_<name>']`; if you don't
+#   override AND don't have that handler, the call silently returns
+#   undefined and the session stalls.
+#
+#   See the program's registration.ts (when you write it) for the
+#   canonical createAdapters override pattern.
+
+tools:
+  query_state:
+    # Registry-backed — the engine handles this directly via
+    # pgas-server's built-in `query_state` registry tool. No
+    # createAdapters override needed.
+    description: "Retrieve a value from the WorldView by dotted path."
+    args:
+      path:
+        type: string
+        required: true
+    result_path: inputs.query_result.value_json
+
+# ---------------------------------------------------------------------
+# Channels (declared once)
+# ---------------------------------------------------------------------
+
+channels:
+  user_text:           { direction: In,  sync: Async }
+  system_mode_entry:   { direction: In,  sync: Async }
+  system_query_result: { direction: In,  sync: Async }
+  widget_output:       { direction: Out, sync: Async }
+  tool_call:           { direction: Out, sync: Async }
+
+# ---------------------------------------------------------------------
+# Schema
+# ---------------------------------------------------------------------
+#
+# Per pgas#253 FM5 (codex commit f139799 in pgas-rag):
+#
+#   The engine-owned `inputs.query_meta.*` paths MUST be declared here.
+#   The v1.8.x sync-out replay envelope includes them; if you don't
+#   declare them, validateChannelEvent rejects the replay with
+#   `ClientInputError: Payload path "inputs.query_meta.message" is not
+#   schema-declared`.
+#
+# TODO (v0.2 plugin release): once @simodelne/pgas-contracts exports
+# `engineOwnedContinuationPaths`, replace the block below with:
+#   schema: { ...engineOwnedContinuationPaths, ...consumerPaths }
+# As of plugin v0.1, the exported constants are individual path
+# strings (see node_modules/@simodelne/pgas-contracts/engine-paths.ts);
+# the spread import doesn't exist yet, so we inline the full path
+# list verbatim. File pgas#253 suggested upstream change #4 if you
+# want the spread import sooner.
+
+schema:
+  # Engine-owned continuation metadata (FM5 — pgas#253)
+  inputs.query_result: object
+  inputs.query_result.kind: string
+  inputs.query_result.value_json: string
+  inputs.query_meta: object
+  inputs.query_meta.source_path: string
+  inputs.query_meta.source_channel: string
+  inputs.query_meta.continuation_round: number
+  inputs.query_meta.scope_redirect: string
+  inputs.query_meta.message: string
+
+  # Engine-owned mode-entry payload (notice-continuation consumer)
+  # See pgas-rag/programs/legal-rag/specs.yml comment block for the
+  # full rationale — the engine flattens the payload to leaf paths,
+  # so each leaf must be declared individually.
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
+
+  # Program-domain paths (yours to extend)
+  work.example: string
+  work.example_ready: boolean
+
+# ---------------------------------------------------------------------
+# Channel → schema mapping (which paths a channel's payload writes)
+# ---------------------------------------------------------------------
+
+channel_paths:
+  system_query_result: [inputs.query_result, inputs.query_meta]
+  system_mode_entry:   [inputs.mode_entry]
