@@ -315,3 +315,125 @@ is the right call for v0.1.
   who need them must pull them in deliberately, not by default.
 - Multi-session shell / tabs / notification toast / issue reporter —
   out of the v0.1 budget. Add via your own PRs once the basics work.
+
+## v0.1.1 — Server template fixes
+
+Plugin v0.1.0 was test-driven on 2026-06-02 and surfaced two
+blockers — both fixed in this release.
+
+### Blocker 1: scaffolded consumer can't `npm install`
+
+`/pgas-new-consumer` rendered everything _except_ an `.npmrc`. The
+`@simodelne/*` packages live behind GitHub Packages auth; without a
+scope-specific registry hint, `npm install` queried the public
+registry and 404'd on the first `@simodelne/pgas-server` lookup.
+
+Fix: `templates/new-consumer/.npmrc.tmpl` ships with:
+
+```ini
+@simodelne:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NPM_TOKEN}
+always-auth=true
+```
+
+`${NPM_TOKEN}` is npm's own env expansion (not a Claude placeholder),
+so `npm install NPM_TOKEN=<…> …` Just Works. The token needs
+`read:packages` on `simodelne` — in CI it's `secrets.GITHUB_TOKEN`; on
+a dev machine it's `gh auth token`.
+
+### Blocker 2: scaffolded `server/index.ts` doesn't typecheck
+
+v0.1.0's `server/index.ts.tmpl` imported `SessionManager`,
+`ProgramRegistry`, `InMemoryEventBus`, `SqliteStore`,
+`createModeEntryContinuationConsumer`,
+`createInnerContinuationReplayConsumer`,
+`createSessionLockExhaustedConsumer` and friends from
+`@simodelne/pgas-server` (the bare specifier). On a clean install,
+`npx tsc --noEmit` produced 8 errors:
+
+```
+error TS2459: Module '"@simodelne/pgas-server"' declares 'SessionManager' locally, but it is not exported.
+error TS2305: Module '"@simodelne/pgas-server"' has no exported member 'ProgramRegistry'.
+…
+```
+
+Root cause: `@simodelne/pgas-server`'s package `exports` map routes
+`"."` to `./src/index.ts`, which is a **runnable bootstrap** (top-level
+`await`, `serve(...)`, no `export` statements anywhere). The main
+entry isn't a library surface.
+
+The package's `exports` map does declare subpath patterns —
+`"./*.js": "./src/*.ts"`, `"./bus/*.js": "./src/bus/*.ts"`, etc. — so
+each symbol IS reachable, just under a subpath specifier. The only
+existing consumer with FM2 closed end-to-end (`pgas-rag`'s
+`server/src/index.ts`) uses exactly this form.
+
+Fix: `templates/new-consumer/server/index.ts.tmpl` was rewritten to
+mirror pgas-rag's subpath imports. Every pgas-server symbol now comes
+in via its subpath:
+
+```ts
+import { SessionManager } from '@simodelne/pgas-server/session-manager.js';
+import { ProgramRegistry } from '@simodelne/pgas-server/program-registry.js';
+import { SqliteStore } from '@simodelne/pgas-server/adapters/sqlite-store.js';
+import { InMemoryEventBus } from '@simodelne/pgas-server/bus/event-bus.js';
+import { createModeEntryContinuationConsumer } from
+  '@simodelne/pgas-server/bus/consumers/mode-entry-continuation.js';
+import { createInnerContinuationReplayConsumer } from
+  '@simodelne/pgas-server/bus/consumers/inner-continuation-replay.js'; // FM2
+import { createSessionLockExhaustedConsumer } from
+  '@simodelne/pgas-server/bus/consumers/session-lock-exhausted.js';    // FM2
+```
+
+This is a **stopgap**, not a permanent shape. The upstream engine ask
+is [**pgas#256 — "Public factory API for pgas-server bootstrap (FM2
+by-construction)"**](https://github.com/simodelne/pgas/issues/256).
+Once `@simodelne/pgas-server@1.9.0` ships either:
+
+- a `createServer({ store, registry, bus, ... })` factory that returns
+  a fully-wired `SessionManager` + bus consumers, or
+- explicit re-exports from `"."` covering at least the 8 symbols
+  above,
+
+the scaffold should collapse back to a single barrel import and the
+docblock at the top of `server/index.ts.tmpl` deleted. The migration
+is straightforward — every subpath import becomes a member of a
+single grouped import.
+
+### New CI gate: `server-typecheck.test.sh`
+
+To prevent this regression class from recurring, `tests/server-typecheck.test.sh`
+runs the entire scaffold → install → typecheck loop end-to-end in CI:
+
+1. Scaffold a throwaway consumer (placeholder-substitute every `.tmpl`).
+2. Scaffold a bootstrap program inside it.
+3. Inject lines at each of the 4 `[pgas-plugin:*-registry]` markers in
+   `server/index.ts` — the same shape `/pgas-new-program` would
+   produce.
+4. `npm install` against GitHub Packages with `NPM_TOKEN` resolved
+   from `$NPM_TOKEN` → `gh auth token` → SKIP.
+5. `npx tsc --noEmit` on the scaffolded server.
+6. Assert exit 0.
+
+The CI workflow passes `secrets.GITHUB_TOKEN` as `NPM_TOKEN`. The
+smoke-tests job declares `permissions: { packages: read }` so the
+token can authenticate against the `@simodelne` scope. Local devs
+without a token see `SKIP: NPM_TOKEN unavailable` rather than a
+failure.
+
+### Migration plan once pgas#256 ships
+
+Once pgas-server publishes either of the two surfaces above as part of
+its `"."` entry:
+
+1. Replace the subpath import block in
+   `templates/new-consumer/server/index.ts.tmpl` with a single
+   `from '@simodelne/pgas-server'` barrel (or `createServer({...})` +
+   a much smaller set of imports if pgas#256 ships the factory form).
+2. Delete the v0.1.1 docblock at the top of the template.
+3. Bump `templates/new-consumer/package.json.tmpl`'s
+   `@simodelne/pgas-server` pin to `^1.9.0`.
+4. Re-run `bash tests/server-typecheck.test.sh` — must stay green
+   against the new shape.
+5. Bump the plugin to `v0.2.0` (the migration is a breaking change for
+   consumers re-scaffolding).
