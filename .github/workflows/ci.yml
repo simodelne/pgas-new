@@ -42,14 +42,20 @@ jobs:
           # by default.
           SKIP_NPM: '0'
 
-      - name: Server-typecheck smoke test (v0.1.1 — pgas#256 stopgap gate)
+      - name: Server-typecheck smoke test (pgas#256 — engine import gate)
         run: bash tests/server-typecheck.test.sh
         env:
           # The scaffolded consumer pulls @simodelne/pgas-* from GitHub
-          # Packages — those packages are private to the simodelne org, so
-          # the install needs an authenticated token. secrets.GITHUB_TOKEN
-          # combined with the job's `packages: read` permission is enough.
-          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Packages. Those packages are published by the SIBLING repo
+          # simodelne/pgas, so this repo's default `secrets.GITHUB_TOKEN`
+          # is repo-scoped and gets 403 reading them — the gate then SKIPs
+          # (see issue #5). An org-scoped PAT (`read:packages` on simodelne)
+          # provisioned as the `PLUGIN_NPM_TOKEN` repo secret lets the gate
+          # actually run. The `|| secrets.GITHUB_TOKEN` fallback preserves
+          # today's behavior (attempt → 403 → graceful SKIP) until the PAT
+          # is provisioned, so CI never hard-fails on a missing secret.
+          # See docs/PLUGIN-DEVELOPMENT.md → "CI secrets".
+          NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
 
   cheap-gates:
     # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
