@@ -58,6 +58,56 @@ bash tests/template-render.test.sh   # validates template YAML + marker presence
 
 Both must pass before committing. CI runs the same checks on every PR.
 
+## CI secrets
+
+### `PLUGIN_NPM_TOKEN` — makes the server-typecheck gate run in CI
+
+`tests/server-typecheck.test.sh` scaffolds a consumer and runs
+`npm install` + `npx tsc --noEmit` against the **real** published
+`@simodelne/pgas-*` packages. Those packages are published by the
+**sibling** repo `simodelne/pgas`, not by this repo.
+
+GitHub Actions' default `secrets.GITHUB_TOKEN` is **repo-scoped**: it can
+read packages published by *this* repo's workflows, but it gets `403
+Forbidden` reading packages from a sibling repo in the same org — even
+with `permissions: { packages: read }` (that opts into a scope the token
+can't satisfy cross-repo). When the test sees that 403 it **SKIPs**
+(exit 0 with a diagnostic) rather than failing, so CI doesn't hard-fail —
+but the gate then isn't actually catching import regressions in CI, only
+locally. (Observed: CI run
+[26799330441](https://github.com/simodelne/claude-pgas-plugin/actions/runs/26799330441);
+tracked in [#5](https://github.com/simodelne/claude-pgas-plugin/issues/5).)
+
+**Fix — provision an org-scoped PAT as the `PLUGIN_NPM_TOKEN` repo secret:**
+
+1. Create a GitHub token with **`read:packages`** scope on the
+   `simodelne` org:
+   - Classic PAT: scopes → check `read:packages`.
+   - Or fine-grained PAT: owner `simodelne`, Permissions → Packages →
+     Read-only.
+2. Add it to this repo: **Settings → Secrets and variables → Actions →
+   New repository secret**, name `PLUGIN_NPM_TOKEN`, value = the token.
+
+The CI workflow already consumes it:
+
+```yaml
+# .github/workflows/ci.yml — server-typecheck step
+env:
+  NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
+```
+
+The `|| secrets.GITHUB_TOKEN` fallback means **no action is required for
+CI to keep passing**: until `PLUGIN_NPM_TOKEN` exists, the step uses the
+default token, hits the 403, and SKIPs — exactly today's behavior. Once
+the PAT is provisioned, the step authenticates and the gate runs for
+real, reporting `PASS: scaffolded consumer typechecks against installed
+@simodelne/pgas-server` instead of `SKIP: …403…`.
+
+> ⚠️ **Owner action.** The PAT is a credential only the repo owner
+> (Simone) can mint and store — it cannot be provisioned from a PR. The
+> workflow + docs are ready; the gate stays in SKIP-in-CI mode until the
+> secret is added.
+
 ## Schema reference
 
 The plugin manifest schema (`.claude-plugin/plugin.json`) is the
