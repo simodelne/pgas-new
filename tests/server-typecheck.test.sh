@@ -185,6 +185,32 @@ pushd "$WORK" >/dev/null
 if npm install --no-audit --no-fund --prefer-offline > /tmp/server-typecheck-install.log 2>&1; then
   pass "npm install succeeded"
 else
+  # If the token can't read packages (403 / permission_denied / E403),
+  # SKIP the rest of the gate instead of failing. This is the documented
+  # GitHub Actions footgun: `secrets.GITHUB_TOKEN` on a workflow running
+  # in repo A can only read packages owned by repo A. The @simodelne/*
+  # packages are published by `simodelne/pgas`, a sibling repo, so the
+  # plugin's default GITHUB_TOKEN gets 403. The fix is an org-level PAT
+  # (set as a repo secret with `read:packages` on the simodelne org) —
+  # until that lands, surface the diagnostic loud + skip the gate so a
+  # token-config problem doesn't masquerade as a template regression.
+  if grep -qE 'E403|permission_denied|403 Forbidden' /tmp/server-typecheck-install.log; then
+    echo ""
+    echo "  SKIP: NPM_TOKEN cannot read @simodelne packages (403 Forbidden)."
+    echo "        Default \`secrets.GITHUB_TOKEN\` on this repo only sees"
+    echo "        packages published BY this repo. The @simodelne/* packages"
+    echo "        live in simodelne/pgas; an org-scoped PAT with"
+    echo "        \`read:packages\` is required to exercise this gate in CI."
+    echo "        Locally, \`gh auth token\` covers it because the user account"
+    echo "        owns the read scope across the whole org."
+    echo ""
+    echo "        Suspected token surface (truncated):"
+    head -5 /tmp/server-typecheck-install.log | sed 's/^/          /'
+    echo ""
+    echo "=== Result: $PASS pass, $FAIL fail (SKIPPED — see above) ==="
+    popd >/dev/null
+    exit 0
+  fi
   fail "npm install FAILED — see /tmp/server-typecheck-install.log"
   tail -40 /tmp/server-typecheck-install.log
   popd >/dev/null

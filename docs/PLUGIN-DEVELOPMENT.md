@@ -421,6 +421,20 @@ token can authenticate against the `@simodelne` scope. Local devs
 without a token see `SKIP: NPM_TOKEN unavailable` rather than a
 failure.
 
+**Known CI token caveat.** `secrets.GITHUB_TOKEN` is scoped to the
+workflow's own repository. On `simodelne/claude-pgas-plugin` it can
+only read packages published BY that repo — it gets `403 Forbidden`
+when reaching for `@simodelne/pgas-*` (which live in
+`simodelne/pgas`). The test detects this 403 and treats it as SKIP
+(not FAIL), so CI doesn't break, but the gate's full coverage only
+runs locally (`gh auth token` covers all `@simodelne` packages because
+the user account owns the read scope at org level). To make the gate
+genuinely fail-fast in CI, an org-scoped PAT with `read:packages` must
+be set as a repo secret (e.g. `secrets.PGAS_PACKAGES_READ_TOKEN`)
+and substituted for `secrets.GITHUB_TOKEN` in the workflow step. That
+PAT-setup is operator-side; tracked as an improvement issue but not
+blocking for v0.1.1.
+
 ### Migration plan once pgas#256 ships
 
 Once pgas-server publishes either of the two surfaces above as part of
