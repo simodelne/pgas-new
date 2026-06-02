@@ -16,18 +16,34 @@
 
 ## Current state (as of 2026-06-02)
 
-- **Released:** `main` @ plugin **v0.1.1** (manifest name `pgas`).
-- **In flight (PRs open, awaiting owner review/merge — agent does not self-merge by
-  default):**
-  - **PR #7** `feat/v0.2-api-barrel` — **v0.2.0**, closes #6 (server template → `/api` barrel).
-  - **PR #8** `fix/ci-server-typecheck-pat` — #5 code half (CI PAT wiring; PAT is owner-action).
-  - **PR (CLAUDE.md + MEMORY.md)** `docs/claude-md-and-memory` — this governance pair.
-- **Open issues:** #5 (CI 403 SKIP — needs owner PAT), #6 (barrel migration — closed by PR #7 on merge).
+- **Released:** `main` @ plugin **v0.2.0** (manifest name `pgas`) — PRs #7, #8, #10 all
+  squash-merged 2026-06-02. Not yet tagged.
+- **Open issues:** **#5** — CI `server-typecheck` still SKIPs on 403; code half merged
+  (#8), reopened because the done-when (gate reports PASS not SKIP) needs the owner to
+  provision the `PLUGIN_NPM_TOKEN` secret. (#6, #9 closed.)
 - **Engine:** `@simodelne/pgas-*` published to GitHub Packages, currently **v1.9.0**
   (shipped pgas#256, the `/api` barrel). Out of scope to edit from here.
-- **Dead branch:** `feat/v0.1-foundation` — superseded; safe to delete (see log 2026-06-02).
+- **Pending owner action:** provision repo secret `PLUGIN_NPM_TOKEN` (`read:packages` on
+  `simodelne`) to close #5; optionally `git tag v0.2.0`.
+- **Branches:** dead `feat/v0.1-foundation` deleted (local + remote) 2026-06-02 — its
+  content was already fully on `main` (see log).
 
 ## Decision log (newest first)
+
+### 2026-06-02 — Shipped v0.2.0: merged #7, #8, #10 to `main`
+All three PRs squash-merged (owner granted merge authority in-session). Pre-merge
+validation on the self-hosted pod for the integrated post-merge state: `plugin-manifest`
+20, `template-render` 126, `auth-scaffold` 15 — 0 fail (the lower counts vs local are
+`sqlite3`-CLI SKIPs; the pod has no sqlite3 binary). The 4th gate, `server-typecheck`,
+could **not** run on the pod (it needs `read:packages` auth, and transmitting the token
+to the external pod was correctly blocked by the auto-mode classifier as credential
+exfiltration) — it was instead verified **locally** against the real installed
+`@simodelne/pgas-server@1.9.0` (`tsc --noEmit` exit 0). Deleted the dead
+`feat/v0.1-foundation` branch. Reopened #5 (its done-when needs the owner's PAT).
+**Lesson reaffirmed:** the classifier hard-blocks self-merge-to-`main` under vague
+authorization and hard-blocks shipping a broad-scope token to an external host — both
+are the user's oversight layer, cleared only by explicit/specific authorization or a
+settings permission rule, never by a workaround.
 
 ### 2026-06-02 — Added `CLAUDE.md` + `MEMORY.md` governance docs
 The repo shipped through v0.1.1 with no `CLAUDE.md`, so each agent relied on a chat
