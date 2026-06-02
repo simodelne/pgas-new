@@ -28,6 +28,24 @@ else
   fail ".claude-plugin/plugin.json missing or invalid JSON"
 fi
 
+# 1a. plugin.json + package.json version pin — both must be 0.1.1.
+# The plugin-manifest version and the package.json version are kept in
+# lockstep; a mismatch means a release was prepared but only half-bumped.
+echo "[1a/4] plugin.json + package.json version pinned to 0.1.1"
+EXPECTED_VERSION="0.1.1"
+MANIFEST_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version ?? '')" 2>/dev/null)
+PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version ?? '')" 2>/dev/null)
+if [[ "$MANIFEST_VERSION" == "$EXPECTED_VERSION" ]]; then
+  pass "plugin.json version = $MANIFEST_VERSION"
+else
+  fail "plugin.json version = '$MANIFEST_VERSION' (expected $EXPECTED_VERSION)"
+fi
+if [[ "$PKG_VERSION" == "$EXPECTED_VERSION" ]]; then
+  pass "package.json version = $PKG_VERSION"
+else
+  fail "package.json version = '$PKG_VERSION' (expected $EXPECTED_VERSION)"
+fi
+
 # 1b. plugin.json declares simoneosFrontendSnapshot in YYYY-MM-DD format (Brief 3)
 echo "[1b/4] plugin.json carries simoneosFrontendSnapshot (Brief 3)"
 SNAPSHOT=$(node -e "const m=JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')); process.stdout.write(m.simoneosFrontendSnapshot ?? '')" 2>/dev/null)

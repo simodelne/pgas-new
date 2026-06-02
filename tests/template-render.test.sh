@@ -21,14 +21,43 @@ echo "=== template-render.test.sh ==="
 # 1. Every .tmpl has matched {{...}} braces
 echo "[1/3] .tmpl files have balanced {{...}} braces"
 while IFS= read -r f; do
-  OPENS=$(grep -oE '\{\{' "$f" | wc -l | tr -d ' ')
-  CLOSES=$(grep -oE '\}\}' "$f" | wc -l | tr -d ' ')
+  # `|| true` so a tmpl with ZERO placeholders (e.g. .npmrc.tmpl, which
+  # uses shell-style ${NPM_TOKEN}) doesn't trip `set -e -o pipefail` via
+  # grep's exit-1-on-no-match. 0 == 0 is balanced.
+  OPENS=$( { grep -oE '\{\{' "$f" || true; } | wc -l | tr -d ' ')
+  CLOSES=$( { grep -oE '\}\}' "$f" || true; } | wc -l | tr -d ' ')
   if [[ "$OPENS" -eq "$CLOSES" ]]; then
     pass "$f: $OPENS pairs"
   else
     fail "$f: $OPENS '{{' vs $CLOSES '}}'"
   fi
 done < <(find templates -name "*.tmpl" -type f 2>/dev/null)
+
+# 1b. The .npmrc.tmpl exists, scopes @simodelne to GitHub Packages, and
+# wires NPM_TOKEN — without this, a freshly-scaffolded consumer can't
+# `npm install` on a clean machine. v0.1.0 shipped without it.
+echo "[1b/3] .npmrc.tmpl is present and correctly scopes the registry"
+NPMRC_TMPL="templates/new-consumer/.npmrc.tmpl"
+if [[ -f "$NPMRC_TMPL" ]]; then
+  pass "exists: $NPMRC_TMPL"
+  if grep -qE '^@simodelne:registry=https://npm\.pkg\.github\.com$' "$NPMRC_TMPL"; then
+    pass ".npmrc.tmpl scopes @simodelne to GitHub Packages"
+  else
+    fail ".npmrc.tmpl missing '@simodelne:registry=https://npm.pkg.github.com' line"
+  fi
+  if grep -q '_authToken=${NPM_TOKEN}' "$NPMRC_TMPL"; then
+    pass ".npmrc.tmpl wires \${NPM_TOKEN}"
+  else
+    fail ".npmrc.tmpl missing '\${NPM_TOKEN}' auth wiring"
+  fi
+  if grep -qE '^always-auth=true$' "$NPMRC_TMPL"; then
+    pass ".npmrc.tmpl pins always-auth=true"
+  else
+    fail ".npmrc.tmpl missing 'always-auth=true'"
+  fi
+else
+  fail "MISSING: $NPMRC_TMPL — scaffolded consumer can't authenticate to GitHub Packages"
+fi
 
 # 2. server/index.ts.tmpl has all 3 markers + both FM2 factories
 echo "[2/3] server/index.ts.tmpl has all 3 markers + FM2 factories"
