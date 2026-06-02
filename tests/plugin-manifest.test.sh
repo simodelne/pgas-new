@@ -121,6 +121,27 @@ for hook in hooks/pre-tool-use-spec-validate.sh hooks/post-tool-use-arch-doc-nud
   fi
 done
 
+# 5. Governance docs present + load-bearing.
+# CLAUDE.md is the rulebook every session must obey; MEMORY.md is the running
+# memory. The classifier-denial hard stop is the one rule that must NEVER be
+# dropped from CLAUDE.md, so assert it explicitly.
+echo "[bonus] governance docs (CLAUDE.md + MEMORY.md)"
+if [[ -f CLAUDE.md ]]; then
+  pass "exists: CLAUDE.md"
+  if grep -q "Claude Code auto-mode classifier" CLAUDE.md && grep -qi "hard stop" CLAUDE.md; then
+    pass "CLAUDE.md carries the classifier-denial hard stop"
+  else
+    fail "CLAUDE.md missing the classifier-denial hard stop (load-bearing governance)"
+  fi
+else
+  fail "MISSING: CLAUDE.md — the repo's load-bearing governance doc"
+fi
+if [[ -f MEMORY.md ]]; then
+  pass "exists: MEMORY.md"
+else
+  fail "MISSING: MEMORY.md — the repo's running memory"
+fi
+
 echo ""
 echo "=== Result: $PASS pass, $FAIL fail ==="
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
