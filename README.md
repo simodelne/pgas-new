@@ -19,7 +19,14 @@ The plugin codifies the lessons from two recent pgas governance threads
 
 ## Status
 
-`v0.1.0` — foundation. Auth + frontend templates land in v0.2 + v0.3.
+Released **v0.1.1** — foundation, auth scaffold, and the vendored frontend
+snapshot have all landed. See [`MEMORY.md`](./MEMORY.md) for the live state
+(current version, open issues, in-flight PRs).
+
+## Governance
+
+Working on this plugin? Read [`CLAUDE.md`](./CLAUDE.md) (the load-bearing
+rulebook) and [`MEMORY.md`](./MEMORY.md) (the running memory) first.
 
 ## Install (once published)
 
