@@ -16,19 +16,28 @@
 
 ## Current state (as of 2026-06-02)
 
-- **Released:** `main` @ plugin **v0.2.0** (manifest name `pgas`) — PRs #7, #8, #10 all
-  squash-merged 2026-06-02. Not yet tagged.
-- **Open issues:** **#5** — CI `server-typecheck` still SKIPs on 403; code half merged
-  (#8), reopened because the done-when (gate reports PASS not SKIP) needs the owner to
-  provision the `PLUGIN_NPM_TOKEN` secret. (#6, #9 closed.)
+- **Released:** `main` @ plugin **v0.2.0** (manifest name `pgas`), **tagged `v0.2.0`** —
+  PRs #7, #8, #10, #11 squash-merged 2026-06-02.
+- **Open issues:** none. (#5, #6, #9 closed.)
+- **CI gate live:** `PLUGIN_NPM_TOKEN` is provisioned, so the `server-typecheck` step now
+  runs the real install + `tsc --noEmit` in CI (PASS, not SKIP) — it actively catches
+  engine-import regressions. See log 2026-06-02 (#5 closed).
 - **Engine:** `@simodelne/pgas-*` published to GitHub Packages, currently **v1.9.0**
   (shipped pgas#256, the `/api` barrel). Out of scope to edit from here.
-- **Pending owner action:** provision repo secret `PLUGIN_NPM_TOKEN` (`read:packages` on
-  `simodelne`) to close #5; optionally `git tag v0.2.0`.
 - **Branches:** dead `feat/v0.1-foundation` deleted (local + remote) 2026-06-02 — its
   content was already fully on `main` (see log).
 
 ## Decision log (newest first)
+
+### 2026-06-02 — #5 closed: CI `server-typecheck` gate now live
+Owner provisioned the `PLUGIN_NPM_TOKEN` repo secret. A re-run of the `main` CI
+([run 26823450979](https://github.com/simodelne/claude-pgas-plugin/actions/runs/26823450979))
+confirmed the gate runs for real instead of SKIPping: `npm install (with NPM_TOKEN)` →
+PASS (~95s real install vs GitHub Packages), `npx tsc --noEmit` → exit 0, `PASS:
+scaffolded consumer typechecks against installed @simodelne/pgas-server` (8 pass, 0 fail);
+`smoke-tests` job 2m5s vs ~37s when it SKIPped. The agent could provision neither the
+token (no programmatic narrow-PAT minting) nor store the broad `gh` token as the secret
+(classifier hard-block — owner-only); the owner did it. Also tagged `v0.2.0`.
 
 ### 2026-06-02 — Shipped v0.2.0: merged #7, #8, #10 to `main`
 All three PRs squash-merged (owner granted merge authority in-session). Pre-merge
