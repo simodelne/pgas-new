@@ -1,6 +1,6 @@
 # {{CONSUMER_NAME}}
 
-A pgas consumer scaffolded by [`claude-pgas-plugin`](https://github.com/simodelne/claude-pgas-plugin) v0.1.
+A pgas consumer scaffolded by [`claude-pgas-plugin`](https://github.com/simodelne/claude-pgas-plugin) v0.2.
 
 **Engine pin:** `@simodelne/pgas-*@{{ENGINE_VERSION}}`
 **Status:** Phase 0 (scaffold) — write your first program under `programs/`.
@@ -72,28 +72,30 @@ Per `simodelne/pgas`/CONSUMER-VERSIONING-CONTRACT.md:
 6. The `publish.yml` workflow publishes to GitHub Packages and
    nudges (warn-only) if the architecture doc is missing.
 
-## Server bootstrap caveat (v0.1.1)
+## Server bootstrap imports
 
-`server/index.ts` imports every `@simodelne/pgas-server` symbol via
-the package's **subpath** specifiers
-(`@simodelne/pgas-server/session-manager.js`,
-`@simodelne/pgas-server/bus/consumers/inner-continuation-replay.js`, …)
-rather than a single barrel import. This mirrors the only consumer
-with FM2 closed end-to-end (`pgas-rag`).
+`server/index.ts` imports every pgas-server construction primitive
+(`SessionManager`, `ProgramRegistry`, `InMemoryEventBus`, `SqliteStore`,
+the continuation consumers) through ONE stable path:
+`@simodelne/pgas-server/api`.
 
-Reason: `@simodelne/pgas-server`'s `"."` entry is a runnable bootstrap
-file with no `export` statements — it is a process entry, not a
-library surface. The subpath form is the documented way to reach the
-exposed types until a public factory API ships.
+That `/api` barrel (shipped in `@simodelne/pgas-server@1.9.0`, closing
+[pgas#256](https://github.com/simodelne/pgas/issues/256)) is a
+**side-effect-free** re-export surface: importing it loads class/function
+definitions and returns — it never imports the engine's `"."` entry, so
+it never calls `startTelemetry()` / `serve(...)` or opens a port.
 
-This is **temporary**. Tracked upstream as
-[pgas#256](https://github.com/simodelne/pgas/issues/256) — once a
-public `createServer({...})` factory (or explicit re-exports from
-`"."`) lands in `@simodelne/pgas-server@1.9.0`, the scaffold will
-collapse back to a single grouped import. Until then, do not change
-the import shape: the docblock at the top of `server/index.ts`
-explains the rationale, and the consumer's `npx tsc --noEmit` will
-fail loudly if you try.
+Do **not** import from the bare `@simodelne/pgas-server` specifier: that
+`"."` entry resolves to a runnable bootstrap with no `export` statements
+(a process entry, not a library surface), so it both fails to typecheck
+and would open a port at import time. The docblock at the top of
+`server/index.ts` explains the rule, and `npx tsc --noEmit` fails loudly
+if you reach for `"."`.
+
+> Historical note: plugin v0.1.1 reached these symbols through deep
+> internal subpaths (`@simodelne/pgas-server/bus/consumers/…js`) as a
+> documented stopgap pending pgas#256. Plugin v0.2.0 retired that in
+> favour of the barrel above.
 
 ## License
 

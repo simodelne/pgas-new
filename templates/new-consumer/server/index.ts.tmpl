@@ -2,38 +2,29 @@
  * {{CONSUMER_NAME}} — server bootstrap.
  *
  * ──────────────────────────────────────────────────────────────────────
- * IMPORTS: WHY SUBPATH FORM (v0.1.1 — TEMPORARY)
+ * IMPORTS: the `@simodelne/pgas-server/api` barrel (v0.2 — pgas#256)
  * ──────────────────────────────────────────────────────────────────────
  *
- * Every `@simodelne/pgas-server/...js` import below uses the SUBPATH form
- * (e.g. `@simodelne/pgas-server/session-manager.js`) rather than a single
- * `from '@simodelne/pgas-server'` barrel.
+ * Every construction primitive comes in through ONE stable path:
+ * `@simodelne/pgas-server/api`. This barrel (shipped in pgas-server@1.9.0,
+ * closing pgas#256) is a SIDE-EFFECT-FREE re-export surface — it contains
+ * only `export { ... } from './...'` lines, imports nothing with import-time
+ * side effects, and in particular does NOT import the engine's `"."` entry,
+ * so it never calls `startTelemetry()` / `serve(...)` or opens a port.
  *
- * Reason: `@simodelne/pgas-server`'s package `exports` map currently
- * routes `"."` to a runnable bootstrap file (`src/index.ts`) that has
- * ZERO `export` statements — it is a process entry point, not a library
- * surface. There is no `ProgramRegistry`, no `createSessionManager`,
- * no `InMemoryEventBus` reachable from the main entry. The plugin's
- * v0.1.0 template tried to import them from the main entry and consumers
- * hit 8 TS2459/TS2305 errors on `npm run build`.
+ * Do NOT import from `@simodelne/pgas-server` (the bare `"."` specifier):
+ * that entry resolves to a RUNNABLE bootstrap (`src/index.ts`) with zero
+ * `export` statements — a process entry point, not a library surface.
+ * Importing it both fails to typecheck (the symbols below aren't exported
+ * from `"."`) and would open a port at import time. The `/api` barrel
+ * exists precisely so consumers can compose their own kernel.
  *
- * The subpath form below is the SAME pattern that the only consumer
- * which has FM2 working end-to-end (pgas-rag) uses — see
- * `~/Desktop/pgas/pgas-rag/server/src/index.ts`. Each subpath is wired
- * by `pgas-server`'s `exports` map (`"./*.js": "./src/*.ts"` and
- * sub-namespaces under `bus/`, `adapters/`, `api/`, `session-manager/`).
- *
- * This is a temporary coupling to pgas-server's INTERNAL layout. The
- * engine ask "Public factory API for pgas-server bootstrap" tracks the
- * fix: pgas-server@1.9+ will ship a `createServer({...})` or explicit
- * re-exports from `"."`, at which point this file collapses back to a
- * single barrel import. Until then, mirror pgas-rag's import pattern.
- *
- * Tracked upstream: pgas#256
- * (https://github.com/simodelne/pgas/issues/256) — "Public factory API
- * for pgas-server bootstrap (FM2 by-construction)". Remove the
- * subpath form below once that ships. See
- * `docs/PLUGIN-DEVELOPMENT.md` → "v0.1.1 — Server template fixes".
+ * History: v0.1.1 reached these symbols through deep internal subpaths
+ * (`@simodelne/pgas-server/bus/consumers/inner-continuation-replay.js`, …)
+ * as a documented stopgap, coupling the scaffold to the engine's internal
+ * file layout. pgas#256 (engine v1.9.0) replaced that with this barrel.
+ * See `docs/PLUGIN-DEVELOPMENT.md` → "v0.2 — server template migrated to
+ * the `/api` barrel".
  *
  * ──────────────────────────────────────────────────────────────────────
  * FM2 — pgas#253 closure by construction
@@ -57,15 +48,18 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 
-// pgas-server: subpath imports against the exports map.
-// See top-of-file docblock for why this is subpath-form and not a barrel.
-import { SessionManager } from '@simodelne/pgas-server/session-manager.js';
-import { ProgramRegistry } from '@simodelne/pgas-server/program-registry.js';
-import { SqliteStore } from '@simodelne/pgas-server/adapters/sqlite-store.js';
-import { InMemoryEventBus } from '@simodelne/pgas-server/bus/event-bus.js';
-import { createModeEntryContinuationConsumer } from '@simodelne/pgas-server/bus/consumers/mode-entry-continuation.js';
-import { createInnerContinuationReplayConsumer } from '@simodelne/pgas-server/bus/consumers/inner-continuation-replay.js'; // FM2 — pgas#253
-import { createSessionLockExhaustedConsumer } from '@simodelne/pgas-server/bus/consumers/session-lock-exhausted.js'; // FM2 — pgas#253
+// pgas-server construction primitives — one barrel, one stable path.
+// See top-of-file docblock for why this is `/api` and never the bare
+// `@simodelne/pgas-server` specifier.
+import {
+  SessionManager,
+  ProgramRegistry,
+  SqliteStore,
+  InMemoryEventBus,
+  createModeEntryContinuationConsumer,
+  createInnerContinuationReplayConsumer, // FM2 — pgas#253
+  createSessionLockExhaustedConsumer, // FM2 — pgas#253
+} from '@simodelne/pgas-server/api';
 
 // Auth — plugin v0.2 (Brief 2). See server/auth/README in plugin docs and
 // docs/PLUGIN-DEVELOPMENT.md → "Brief 2: Auth".
@@ -170,10 +164,12 @@ app.use('/api/*', authMiddleware);
 app.get('/health', (c) => c.json({ ok: true, consumer: '{{CONSUMER_NAME}}' }));
 
 // pgas-server REST routes (sessions / programs / admin / me) are wired
-// by importing the relevant factories from
-// `@simodelne/pgas-server/api/*.js` — see pgas-rag/server/src/index.ts
-// for the canonical example. Left as a TODO here so the scaffold stays
-// minimal; add only what your consumer needs.
+// by importing the relevant factories from the same
+// `@simodelne/pgas-server/api` barrel (it re-exports `createSessionRoutes`,
+// `createProgramRoutes`, `createAdminRoutes`, `createMeRoutes`, … alongside
+// the kernel primitives above) — see pgas-rag/server/src/index.ts for the
+// canonical example. Left as a TODO here so the scaffold stays minimal;
+// add only what your consumer needs.
 
 const port = Number(process.env.SERVER_PORT ?? 8787);
 serve({ fetch: app.fetch, port });

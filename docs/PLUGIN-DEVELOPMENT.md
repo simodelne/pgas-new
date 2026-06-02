@@ -88,7 +88,7 @@ release notes.
 Placeholder syntax: `{{NAME}}`. Recognised placeholders:
 
 - `{{CONSUMER_NAME}}` — kebab-case consumer name
-- `{{ENGINE_VERSION}}` — pgas engine version range (e.g. `^1.8.0`)
+- `{{ENGINE_VERSION}}` — pgas engine version range (e.g. `^1.9.0`)
 - `{{GH_OWNER}}` — GitHub owner (typically `simodelne`)
 - `{{GOVERNANCE_LOCKS}}` — boolean (`true`/`false`)
 - `{{PROGRAM_NAME}}` — kebab-case program name
@@ -435,19 +435,66 @@ and substituted for `secrets.GITHUB_TOKEN` in the workflow step. That
 PAT-setup is operator-side; tracked as an improvement issue but not
 blocking for v0.1.1.
 
-### Migration plan once pgas#256 ships
+### Migration plan once pgas#256 ships — ✅ DONE in v0.2.0
 
-Once pgas-server publishes either of the two surfaces above as part of
-its `"."` entry:
+This was executed in plugin **v0.2.0**. pgas#256 shipped as a `/api`
+subpath barrel (engine option b — an additive re-export surface), not a
+`"."` re-export, so the migration used `@simodelne/pgas-server/api`
+rather than the bare specifier the v0.1.1 note anticipated. See the next
+section for the as-built details.
 
-1. Replace the subpath import block in
-   `templates/new-consumer/server/index.ts.tmpl` with a single
-   `from '@simodelne/pgas-server'` barrel (or `createServer({...})` +
-   a much smaller set of imports if pgas#256 ships the factory form).
-2. Delete the v0.1.1 docblock at the top of the template.
-3. Bump `templates/new-consumer/package.json.tmpl`'s
-   `@simodelne/pgas-server` pin to `^1.9.0`.
-4. Re-run `bash tests/server-typecheck.test.sh` — must stay green
-   against the new shape.
-5. Bump the plugin to `v0.2.0` (the migration is a breaking change for
-   consumers re-scaffolding).
+## v0.2 — server template migrated to the `/api` barrel
+
+pgas#256 shipped in engine **v1.9.0** as `@simodelne/pgas-server/api` —
+a side-effect-free re-export barrel (`src/api.ts`) that surfaces every
+construction primitive a consumer bootstrap needs through one stable
+path. Plugin v0.2.0 retired the v0.1.1 subpath stopgap.
+
+**What changed**
+
+1. `templates/new-consumer/server/index.ts.tmpl` — the seven
+   `@simodelne/pgas-server/...js` subpath imports collapsed into a single
+   grouped import:
+
+   ```ts
+   import {
+     SessionManager,
+     ProgramRegistry,
+     SqliteStore,
+     InMemoryEventBus,
+     createModeEntryContinuationConsumer,
+     createInnerContinuationReplayConsumer, // FM2 — pgas#253
+     createSessionLockExhaustedConsumer,    // FM2 — pgas#253
+   } from '@simodelne/pgas-server/api';
+   ```
+
+   The top-of-file docblock now documents the barrel rule (use `/api`,
+   never the bare `"."` specifier — `"."` is a runnable bootstrap that
+   opens a port and exports nothing). The four `[pgas-plugin:*]` markers
+   and the Brief 2 auth mount order (`app.route('/auth', …)` before
+   `app.use('/api/*', authMiddleware)`) are unchanged.
+
+2. Engine pin default bumped `^1.8.0` → `^1.9.0` (the version that ships
+   the barrel) in `commands/pgas-new-consumer.md` and the test scaffolds.
+
+3. `templates/new-consumer/README.md.tmpl` — the "Server bootstrap
+   caveat (v0.1.1)" section was rewritten to "Server bootstrap imports"
+   describing the barrel; the stopgap is recorded as a historical note.
+
+**Why the barrel and not the bare specifier.** `@simodelne/pgas-server`'s
+`exports` map still routes `"."` to `./src/index.ts`, a runnable
+bootstrap (`startTelemetry()` at import, `serve(...)` at the bottom) with
+zero `export` statements. The `/api` barrel (`"./api": "./src/api.ts"`)
+is the additive library surface: `export { … } from './…'` lines only,
+no import-time side effects, no port opened.
+
+**Verification.** `tests/server-typecheck.test.sh` scaffolds a consumer,
+renders with `^1.9.0`, `npm install`s the real engine, and runs
+`npx tsc --noEmit` — green against installed `@simodelne/pgas-server@1.9.0`,
+proving the barrel resolves and every imported symbol typechecks under
+1.9.0 (a wrong path would fail with "cannot find module").
+
+> CI note: the gate above only *runs* in CI once an org-scoped
+> `read:packages` PAT is provisioned (otherwise it SKIPs on a 403) —
+> see "Known CI token caveat" above and tracking issue
+> [#5](https://github.com/simodelne/claude-pgas-plugin/issues/5).
