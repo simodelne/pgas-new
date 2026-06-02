@@ -91,7 +91,7 @@ Suppose the consumer has:
 
 ```
 my-consumer/
-├── package.json (depends on @simodelne/pgas-server@^1.8.0)
+├── package.json (depends on @simodelne/pgas-server@^1.9.0)
 ├── server/
 │   └── index.ts (imports @simodelne/pgas-server, ProgramRegistry)
 └── programs/

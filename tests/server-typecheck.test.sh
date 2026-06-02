@@ -5,8 +5,10 @@
 # that imported 8 symbols from @simodelne/pgas-server's main entry —
 # but that entry exports NOTHING (it is a runnable bootstrap, not a
 # library), so a freshly-scaffolded consumer's `npx tsc --noEmit`
-# produced 8 TS2459/TS2305 errors. The fix (pgas#256 stopgap) is the
-# subpath-import form in templates/new-consumer/server/index.ts.tmpl.
+# produced 8 TS2459/TS2305 errors. v0.1.1 worked around it with deep
+# subpath imports; v0.2.0 replaced those with the
+# `@simodelne/pgas-server/api` barrel that pgas#256 shipped in engine
+# v1.9.0 (see templates/new-consumer/server/index.ts.tmpl).
 # This script catches the next regression: anything that breaks the
 # scaffolded server's typecheck against the installed package.
 #
@@ -55,7 +57,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 CONSUMER="test-stc"     # short → keeps GHCR scope name within limits
-ENGINE_VERSION="^1.8.0"
+ENGINE_VERSION="^1.9.0"
 GH_OWNER="simodelne"
 PROGRAM="main"
 PROGRAM_SLUG="main"
