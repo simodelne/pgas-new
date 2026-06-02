@@ -1,10 +1,10 @@
 {
   "name": "claude-pgas-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Claude Code plugin for scaffolding pgas consumers and programs",
   "scripts": {
-    "test": "bash tests/plugin-manifest.test.sh && bash tests/template-render.test.sh && bash tests/auth-scaffold.test.sh"
+    "test": "bash tests/plugin-manifest.test.sh && bash tests/template-render.test.sh && bash tests/auth-scaffold.test.sh && bash tests/server-typecheck.test.sh"
   },
   "devDependencies": {
     "js-yaml": "^4.1.0"

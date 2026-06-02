@@ -72,6 +72,29 @@ Per `simodelne/pgas`/CONSUMER-VERSIONING-CONTRACT.md:
 6. The `publish.yml` workflow publishes to GitHub Packages and
    nudges (warn-only) if the architecture doc is missing.
 
+## Server bootstrap caveat (v0.1.1)
+
+`server/index.ts` imports every `@simodelne/pgas-server` symbol via
+the package's **subpath** specifiers
+(`@simodelne/pgas-server/session-manager.js`,
+`@simodelne/pgas-server/bus/consumers/inner-continuation-replay.js`, …)
+rather than a single barrel import. This mirrors the only consumer
+with FM2 closed end-to-end (`pgas-rag`).
+
+Reason: `@simodelne/pgas-server`'s `"."` entry is a runnable bootstrap
+file with no `export` statements — it is a process entry, not a
+library surface. The subpath form is the documented way to reach the
+exposed types until a public factory API ships.
+
+This is **temporary**. Tracked upstream as
+[pgas#256](https://github.com/simodelne/pgas/issues/256) — once a
+public `createServer({...})` factory (or explicit re-exports from
+`"."`) lands in `@simodelne/pgas-server@1.9.0`, the scaffold will
+collapse back to a single grouped import. Until then, do not change
+the import shape: the docblock at the top of `server/index.ts`
+explains the rationale, and the consumer's `npx tsc --noEmit` will
+fail loudly if you try.
+
 ## License
 
 (set as appropriate for your consumer — see your governance lead)

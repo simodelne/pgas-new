@@ -1,34 +1,71 @@
 /**
  * {{CONSUMER_NAME}} — server bootstrap.
  *
- * This file is scaffolded by claude-pgas-plugin v0.1. It closes
- * pgas#253 FM2 by construction: `createInnerContinuationReplayConsumer`
- * and `createSessionLockExhaustedConsumer` are wired below.
+ * ──────────────────────────────────────────────────────────────────────
+ * IMPORTS: WHY SUBPATH FORM (v0.1.1 — TEMPORARY)
+ * ──────────────────────────────────────────────────────────────────────
  *
- * DO NOT remove the FM2 wiring without first reading pgas#253 (and
- * understanding why the v1.8.1 sync-out replay model requires both
- * consumers). Removing them re-opens the silent stall path that
- * burned 50 minutes of debug time on pgas-rag.
+ * Every `@simodelne/pgas-server/...js` import below uses the SUBPATH form
+ * (e.g. `@simodelne/pgas-server/session-manager.js`) rather than a single
+ * `from '@simodelne/pgas-server'` barrel.
  *
- * The three `[pgas-plugin:*-registry]` markers are recognized by
- * /pgas-new-program — they let new programs be injected without
- * manual file editing. See docs/MARKER-PROTOCOL.md in the plugin.
+ * Reason: `@simodelne/pgas-server`'s package `exports` map currently
+ * routes `"."` to a runnable bootstrap file (`src/index.ts`) that has
+ * ZERO `export` statements — it is a process entry point, not a library
+ * surface. There is no `ProgramRegistry`, no `createSessionManager`,
+ * no `InMemoryEventBus` reachable from the main entry. The plugin's
+ * v0.1.0 template tried to import them from the main entry and consumers
+ * hit 8 TS2459/TS2305 errors on `npm run build`.
+ *
+ * The subpath form below is the SAME pattern that the only consumer
+ * which has FM2 working end-to-end (pgas-rag) uses — see
+ * `~/Desktop/pgas/pgas-rag/server/src/index.ts`. Each subpath is wired
+ * by `pgas-server`'s `exports` map (`"./*.js": "./src/*.ts"` and
+ * sub-namespaces under `bus/`, `adapters/`, `api/`, `session-manager/`).
+ *
+ * This is a temporary coupling to pgas-server's INTERNAL layout. The
+ * engine ask "Public factory API for pgas-server bootstrap" tracks the
+ * fix: pgas-server@1.9+ will ship a `createServer({...})` or explicit
+ * re-exports from `"."`, at which point this file collapses back to a
+ * single barrel import. Until then, mirror pgas-rag's import pattern.
+ *
+ * Tracked upstream: pgas#256
+ * (https://github.com/simodelne/pgas/issues/256) — "Public factory API
+ * for pgas-server bootstrap (FM2 by-construction)". Remove the
+ * subpath form below once that ships. See
+ * `docs/PLUGIN-DEVELOPMENT.md` → "v0.1.1 — Server template fixes".
+ *
+ * ──────────────────────────────────────────────────────────────────────
+ * FM2 — pgas#253 closure by construction
+ * ──────────────────────────────────────────────────────────────────────
+ *
+ * `createInnerContinuationReplayConsumer` and
+ * `createSessionLockExhaustedConsumer` are wired below. DO NOT remove
+ * them without first reading pgas#253 (and understanding why the v1.8.1
+ * sync-out replay model requires both consumers). Removing them re-opens
+ * the silent stall path that burned 50 minutes of debug time on pgas-rag.
+ *
+ * ──────────────────────────────────────────────────────────────────────
+ * Auto-injected marker comments (DO NOT REMOVE)
+ * ──────────────────────────────────────────────────────────────────────
+ *
+ * The four `[pgas-plugin:*-registry]` markers are recognized by
+ * /pgas-new-program — they let new programs be injected without manual
+ * file editing. See docs/MARKER-PROTOCOL.md in the plugin.
  */
 
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 
-// pgas-server: full hosted REST/WS surface + ProgramRegistry + bus
-import {
-  ProgramRegistry,
-  createSessionManager,
-  createBus,
-  createTriggerFn,
-  isContinuationGenerationCurrent,
-  createModeEntryContinuationConsumer,
-  createInnerContinuationReplayConsumer,  // FM2 — pgas#253
-  createSessionLockExhaustedConsumer,     // FM2 — pgas#253
-} from '@simodelne/pgas-server';
+// pgas-server: subpath imports against the exports map.
+// See top-of-file docblock for why this is subpath-form and not a barrel.
+import { SessionManager } from '@simodelne/pgas-server/session-manager.js';
+import { ProgramRegistry } from '@simodelne/pgas-server/program-registry.js';
+import { SqliteStore } from '@simodelne/pgas-server/adapters/sqlite-store.js';
+import { InMemoryEventBus } from '@simodelne/pgas-server/bus/event-bus.js';
+import { createModeEntryContinuationConsumer } from '@simodelne/pgas-server/bus/consumers/mode-entry-continuation.js';
+import { createInnerContinuationReplayConsumer } from '@simodelne/pgas-server/bus/consumers/inner-continuation-replay.js'; // FM2 — pgas#253
+import { createSessionLockExhaustedConsumer } from '@simodelne/pgas-server/bus/consumers/session-lock-exhausted.js'; // FM2 — pgas#253
 
 // Auth — plugin v0.2 (Brief 2). See server/auth/README in plugin docs and
 // docs/PLUGIN-DEVELOPMENT.md → "Brief 2: Auth".
@@ -41,21 +78,56 @@ import { authRoutes } from './auth/routes.js';
 
 // [pgas-plugin:handler-registry] — auto-injected handler imports below
 
-/**
- * Bootstrap order matters. See pgas-server's own `src/index.ts` lines
- * 160-180 for the canonical ordering.
- */
+// ──────────────────────────────────────────────────────────────────────
+// Core kernel wiring (mirrors pgas-rag's bootstrap)
+// ──────────────────────────────────────────────────────────────────────
 
+const DB_PATH = process.env.PGAS_DB ?? ':memory:';
+const store = new SqliteStore(DB_PATH);
+const bus = new InMemoryEventBus();
 const registry = new ProgramRegistry();
-const store = createSessionStore(); // your session store (SQLite, in-memory, etc.)
-const bus = createBus();
 
 // [pgas-plugin:program-registration] — auto-injected `registry.register(...)` calls below
 
-const manager = createSessionManager(registry, store, bus);
-const triggerFn = createTriggerFn(manager);
+// SessionManager constructor positional args (per pgas-server@1.8.x):
+//   (store, registry, notifications, sessionLog?, fileStore?,
+//    onPendingPrompt?, bus?, deps?, middlewareHooks?)
+//
+// The scaffold passes the minimum viable surface — store + registry +
+// a no-op notification sink + the bus. Real consumers replace the
+// notification sink with `WsNotificationSink` (or similar) and supply
+// `SessionLogWriter`, `FsFileStore`, and `PGAS_DEFAULT_MIDDLEWARE_HOOKS`
+// the way pgas-rag does. See pgas-rag/server/src/index.ts for the full
+// production wiring.
+const noopNotifications = {
+  addSubscriber: () => undefined,
+  removeSubscriber: () => undefined,
+  notifyUser: async () => undefined,
+  closeAll: () => undefined,
+};
+const manager = new SessionManager(
+  store,
+  registry,
+  // The type lives at `@simodelne/pgas-server/ports/notifications.js` —
+  // cast is intentional here because the scaffold is intentionally
+  // minimal. Wire a real sink before exposing this to users.
+  noopNotifications as never,
+  undefined, // sessionLog
+  undefined, // fileStore
+  undefined, // onPendingPrompt
+  bus,
+);
 
-// Mode-entry continuation: the engine's standard continuation path
+// Helper required by the continuation consumers.
+const isContinuationGenerationCurrent = (
+  sessionId: string,
+  generation: number | undefined,
+): boolean => manager.isContinuationGenerationCurrent(sessionId, generation);
+
+// Helper for the trigger seam — mirrors pgas-rag's `manager.trigger.bind(...)`.
+const triggerFn = manager.trigger.bind(manager);
+
+// Mode-entry continuation: the engine's standard continuation path.
 createModeEntryContinuationConsumer(
   bus,
   registry,
@@ -79,6 +151,12 @@ createSessionLockExhaustedConsumer(
     manager.markSessionFailedFromLockExhaustion(sessionId, consumer, attempts, userId),
 );
 
+await manager.initialize();
+
+// ──────────────────────────────────────────────────────────────────────
+// HTTP app
+// ──────────────────────────────────────────────────────────────────────
+
 const app = new Hono();
 
 // Auth (Brief 2). ORDER MATTERS:
@@ -91,16 +169,12 @@ app.use('/api/*', authMiddleware);
 
 app.get('/health', (c) => c.json({ ok: true, consumer: '{{CONSUMER_NAME}}' }));
 
-// pgas-server mounts its REST/WS routes here — see pgas-server docs
-// for the exact wiring for the version pinned in package.json.
+// pgas-server REST routes (sessions / programs / admin / me) are wired
+// by importing the relevant factories from
+// `@simodelne/pgas-server/api/*.js` — see pgas-rag/server/src/index.ts
+// for the canonical example. Left as a TODO here so the scaffold stays
+// minimal; add only what your consumer needs.
 
 const port = Number(process.env.SERVER_PORT ?? 8787);
 serve({ fetch: app.fetch, port });
 console.log(`[{{CONSUMER_NAME}}] listening on :${port}`);
-
-/* eslint-disable @typescript-eslint/no-unused-vars */
-// Placeholder — wire your real session store here. SQLite is the
-// recommended default (Brief 2 will land the canonical impl).
-function createSessionStore(): any {
-  return { /* TODO: implement */ };
-}

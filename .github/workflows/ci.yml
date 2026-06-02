@@ -8,6 +8,13 @@ on:
 jobs:
   smoke-tests:
     runs-on: ubuntu-latest
+    permissions:
+      # Required for server-typecheck.test.sh to `npm install` packages
+      # from GitHub Packages (the @simodelne scope is private). CI passes
+      # secrets.GITHUB_TOKEN to the test via NPM_TOKEN; the token needs
+      # `packages: read` to authenticate against npm.pkg.github.com.
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +41,15 @@ jobs:
           # CI runners have network egress so we exercise the full path
           # by default.
           SKIP_NPM: '0'
+
+      - name: Server-typecheck smoke test (v0.1.1 — pgas#256 stopgap gate)
+        run: bash tests/server-typecheck.test.sh
+        env:
+          # The scaffolded consumer pulls @simodelne/pgas-* from GitHub
+          # Packages — those packages are private to the simodelne org, so
+          # the install needs an authenticated token. secrets.GITHUB_TOKEN
+          # combined with the job's `packages: read` permission is enough.
+          NPM_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   cheap-gates:
     # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
