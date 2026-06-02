@@ -1,6 +1,6 @@
 {
   "name": "claude-pgas-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Claude Code plugin for scaffolding pgas consumers and programs",
   "scripts": {
