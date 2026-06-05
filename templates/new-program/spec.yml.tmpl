@@ -1,20 +1,31 @@
 # {{PROGRAM_NAME}} — pgas program spec
 #
-# Scaffolded by claude-pgas-plugin v0.1. Closes pgas#253 FM3 + FM5 by
-# construction:
+# Scaffolded by claude-pgas-plugin. Written against the current engine
+# loader (`loadSpecWithPatterns`, @simodelne/pgas-runtime-core ≥ 1.13.0,
+# which enforces a strict key allowlist — see pgas-runtime
+# spec-loader/unknown-keys.ts). Closes pgas#253 FM3 + FM5 by construction:
 #
 #   FM3: system_mode_entry is admitted ONLY on the bootstrap mode
 #        (`start`). Adding it to handler-result-driven modes creates
-#        duplicate-continuation foot-guns under @simodelne/pgas-* v1.8.x.
-#        See pgas#253 FM3 worked example before broadening admission.
+#        duplicate-continuation foot-guns. See pgas#253 FM3 worked
+#        example before broadening admission.
 #
-#   FM5: the engine-owned `inputs.query_meta.*` paths are spread into
-#        the schema below. They MUST stay declared — the v1.8.x sync-out
-#        replay envelope includes them. See pgas#253 FM5.
+#   FM5: the engine-owned `inputs.query_meta.*` paths are declared in
+#        the schema below. They MUST stay declared — the engine's
+#        sync-out replay envelope includes them, and an undeclared path
+#        fails validateChannelEvent. See pgas#253 FM5.
 #
 # Run /pgas:spec-validate and /pgas:mode-entry-lint after editing.
 
 name: {{PROGRAM_SLUG}}
+
+# ----- Session bounds -------------------------------------------------
+# All four keys are read by the loader's compiler checks. `pure: true`
+# additionally requires a prompt for EVERY mode (PP-1) and a projection
+# profile for every non-terminal mode (PP-2) — both provided below.
+termination: BoundedSession
+topology: AcyclicTopology
+pure: true
 
 # Cross-cutting prompt that joins the engine's static prefix once per
 # session. Update with your program-specific role + workflow language.
@@ -34,7 +45,8 @@ preamble: |
   3. When a tool's schema declares a `reasoning` parameter, pass ONE
      short phrase (not a multi-field object) — just a terse justification.
 
-mode_initial: start
+initial: start
+terminal: [complete]
 
 # ---------------------------------------------------------------------
 # Modes
@@ -46,118 +58,212 @@ mode_initial: start
 #   mode is one whose entry is NOT preceded by a handler write to a
 #   path the mode reads. `start` is the canonical bootstrap mode.
 #
-#   `working` is handler-result-driven (the example_action writes
-#   work.example which the mode's exit guard reads), so it does NOT
-#   admit system_mode_entry. The /pgas:mode-entry-lint skill enforces
-#   this.
+#   `working` is handler-result-driven (example_action writes
+#   work.example, which a reaction turns into the work.example_ready
+#   gate), so it does NOT admit system_mode_entry. The
+#   /pgas:mode-entry-lint skill enforces this.
+#
+# Transitions are PER-MODE (not top-level): each transition declares
+# `target` plus an optional predicate `guard` ({ kind, path[, value] }).
 
 modes:
   start:
     # BOOTSTRAP mode — first decision the agent makes in the loop.
-    # SAFE to admit system_mode_entry here.
-    channels: [user_text, system_mode_entry, widget_output]
-    prompts:
-      - |
-        You are in the START mode. Decide what to do next:
-          - Call `begin_work` to enter the working loop.
-          - Call `query_state` with `{"path": "<dotted.path>"}` if you
-            need any value from the WorldView.
+    # SAFE to admit system_mode_entry here (FM3).
     vocabulary: [begin_work, query_state]
+    channels: [user_text, system_mode_entry, widget_output]
+    transitions:
+      - guard: { kind: FieldTruthy, path: work.started }
+        target: working
 
   working:
-    # HANDLER-RESULT-DRIVEN mode — `example_action` writes work.example
-    # which the exit guard reads. DO NOT add system_mode_entry here
-    # (FM3 foot-gun under v1.8.x).
-    channels: [system_query_result, widget_output, tool_call]
-    prompts:
-      - |
-        You are WORKING. Call `example_action` to produce work.example,
-        then `complete_work` once you are satisfied with the result.
+    # HANDLER-RESULT-DRIVEN mode — example_action writes work.example;
+    # the open_example_gate reaction (below) owns work.example_ready.
+    # DO NOT add system_mode_entry here (FM3 foot-gun).
     vocabulary: [example_action, complete_work, query_state]
+    channels: [system_query_result, widget_output]
+    # GATE, not guard-race: complete_work is admission-gated on the
+    # reaction-owned flag. The LLM cannot call it before the gate opens.
+    preconditions:
+      complete_work:
+        - { kind: FieldTruthy, path: work.example_ready }
+    transitions:
+      - guard: { kind: FieldTruthy, path: work.done }
+        target: complete
 
   complete:
-    # Terminal mode — no further actions.
-    channels: [widget_output]
+    # Terminal mode — no further actions, widget_output only. Do NOT
+    # add system_query_result here: a terminal mode that admits it can
+    # loop on post-finalize query continuations instead of completing.
     vocabulary: []
+    channels: [widget_output]
 
 # ---------------------------------------------------------------------
-# Mode transitions
+# Action → mode routing
 # ---------------------------------------------------------------------
+# proceed_to routes an emitted action directly to its target mode (no
+# guard-evaluation latency). Each target must also be declared as a
+# transition target in some mode above — the guards double as the
+# declarative record of WHY the mode advances.
 
-transitions:
-  - from: start
-    to: working
-    trigger: begin_work
-  - from: working
-    to: complete
-    trigger: complete_work
-    guard: work.example_ready
+proceed_to:
+  begin_work: working
+  complete_work: complete
 
 # ---------------------------------------------------------------------
-# Action map — the v1.8.x action_map structure (pgas#229 + pgas#231)
+# Projection — which schema paths reach the LLM's WorldView per mode
 # ---------------------------------------------------------------------
+# Required for every non-terminal mode because pure: true (PP-2). Keep
+# these narrow: project only what the mode's prompt actually references.
+
+projection:
+  start:
+    include:
+      - inputs.answers
+      - inputs.answers.user_intent
+      - inputs.mode_entry
+      - inputs.query_result
+      - inputs.query_meta
+      - work.started
+    exclude: []
+
+  working:
+    include:
+      - inputs.query_result
+      - inputs.query_meta
+      - work.example
+      - work.example_ready
+      - work.done
+    exclude: []
+
+# ---------------------------------------------------------------------
+# Per-mode prompts — a TOP-LEVEL map keyed by mode name
+# ---------------------------------------------------------------------
+# pure: true requires a non-empty prompt for EVERY mode, including the
+# terminal one (PP-1).
+
+prompts:
+  start: |
+    You are in START mode for {{PROGRAM_NAME}}.
+
+    The user's request (if any) is at inputs.answers.user_intent in the
+    State snapshot above. Decide what to do next:
+      - Call `begin_work` (with a one-phrase `reasoning` argument) to
+        enter the working loop.
+      - Call `query_state` with {"path": "<dotted.path>"} only when you
+        need a WorldView value that is not already projected above.
+
+  working: |
+    You are WORKING for {{PROGRAM_NAME}}.
+
+    1. Call `example_action` with a `result` argument. The engine writes
+       it to work.example, and a reaction then opens the
+       work.example_ready gate — you never set the gate yourself.
+    2. Once work.example_ready is true in the State snapshot, call
+       `complete_work` to finish. Calling it earlier is rejected by the
+       engine (precondition gate).
+
+  complete: |
+    Terminal mode for {{PROGRAM_NAME}}. The session is complete; no
+    further actions are available.
+
+# ---------------------------------------------------------------------
+# Action map
+# ---------------------------------------------------------------------
+# Allowed per-action keys: description, arg_descriptions, mutations,
+# channel, bounds, result_path. Mutations use { op, path, value | from_arg }.
+#
+# `query_state` is the engine's QueryAction convention: an action_map
+# entry with `mutations: []` and NO channel. The engine's query executor
+# answers it from the WorldView and replays the result on
+# system_query_result — no consumer handler involved. (Both production
+# consumers, pgas-office and pgas-rag, declare it exactly this way.)
 
 action_map:
   begin_work:
     description: "Enter the working loop after the bootstrap mode."
-    arg_descriptions: {}
-    mutations: []
+    arg_descriptions:
+      reasoning: "ONE short phrase justifying the call."
+    mutations:
+      - { op: MSet, path: work.started, value: true }
+    channel: widget_output
 
   example_action:
     description: "Produce work.example. Replace with your real action."
     arg_descriptions:
+      result: "The produced value; the engine writes it to work.example."
       reasoning: "ONE short phrase justifying the call."
     mutations:
-      - path: work.example
-        op: MSet
-        from_arg: reasoning
-      - path: work.example_ready
-        op: MSet
-        value: true
+      - { op: MSet, path: work.example, from_arg: result }
+    channel: widget_output
 
   complete_work:
     description: "Mark the program complete; transitions to terminal mode."
-    arg_descriptions: {}
+    arg_descriptions:
+      reasoning: "ONE short phrase justifying the call."
+    mutations:
+      - { op: MSet, path: work.done, value: true }
+    channel: widget_output
+
+  query_state:
+    description: "Retrieve a value from the WorldView by dotted path."
+    arg_descriptions:
+      path: "Dotted schema path to read (e.g. work.example)."
     mutations: []
 
 # ---------------------------------------------------------------------
-# Tools (raw — handler-backed or registry-backed)
+# Reactions — gate flags are EXCLUSIVELY reaction-owned
 # ---------------------------------------------------------------------
+# The anti-pattern this scaffold avoids: letting an action's own
+# mutations set its gate flag (the LLM would open its own gate, making
+# the precondition theater). Instead the engine asserts the gate: when
+# example_action lands work.example, this declarative reaction — engine-
+# executed, no TS handler needed — opens work.example_ready. The
+# complete_work precondition above reads the flag the REACTION owns.
 #
-# Per pgas#253 FM4 (codex commit c71a2cb in pgas-rag):
-#
-#   If a tool is HANDLER-BACKED (resolved via your handlers map), it
-#   MUST have an explicit createAdapters override for `tool:<name>` AND
-#   be listed in syncOutContinuationPolicy.channels. The DEFAULT
-#   adapter resolves to `handlers['invoke_tool_<name>']`; if you don't
-#   override AND don't have that handler, the call silently returns
-#   undefined and the session stalls.
-#
-#   See the program's registration.ts (when you write it) for the
-#   canonical createAdapters override pattern.
+# Reaction shape: { event, watch, write_scope, mutations[, guidance,
+# guidance_messages] }. write_scope must be non-empty (PP-4) and
+# disjoint from watch (RC-4); mutation paths must stay inside
+# write_scope.
 
-tools:
-  query_state:
-    # Registry-backed — the engine handles this directly via
-    # pgas-server's built-in `query_state` registry tool. No
-    # createAdapters override needed.
-    description: "Retrieve a value from the WorldView by dotted path."
-    args:
-      path:
-        type: string
-        required: true
-    result_path: inputs.query_result.value_json
+reactions:
+  open_example_gate:
+    event: AfterMutation
+    watch: [work.example]
+    write_scope: [work.example_ready]
+    mutations:
+      - { op: MSet, path: work.example_ready, value: true }
+
+# ---------------------------------------------------------------------
+# Tools — none scaffolded, on purpose (FM4)
+# ---------------------------------------------------------------------
+# Named tools are declared under a top-level `tools:` map. The current
+# shape per tool is:
+#
+#   description, parameters (JSON-schema: { type: object, properties,
+#   required }), result_path (schema-declared), modes (which modes get
+#   the tool), optional backend ({ kind: mcp|http|local, ... }).
+#
+# The loader desugars each tool into an `invoke_tool_<name>` action and
+# a `tool:<name>` Sync Out channel, injected into the listed modes. A
+# tool WITHOUT a `backend:` must have an implementation registered in
+# the consumer's ToolRegistry (pgas-middleware createToolRegistry) —
+# ToolRegistry.createAdapter THROWS for unregistered tools, so a tool
+# declared here without a wired implementation breaks the program as
+# soon as the engine builds its adapters (pgas#253 FM4). That is why
+# this skeleton ships zero tools; add one only together with its
+# implementation (see the program README's FM4 section).
 
 # ---------------------------------------------------------------------
 # Channels (declared once)
 # ---------------------------------------------------------------------
+# system_query_result is Sync: it carries the engine's query replay.
 
 channels:
   user_text:           { direction: In,  sync: Async }
   system_mode_entry:   { direction: In,  sync: Async }
-  system_query_result: { direction: In,  sync: Async }
+  system_query_result: { direction: In,  sync: Sync }
   widget_output:       { direction: Out, sync: Async }
-  tool_call:           { direction: Out, sync: Async }
 
 # ---------------------------------------------------------------------
 # Schema
@@ -166,22 +272,24 @@ channels:
 # Per pgas#253 FM5 (codex commit f139799 in pgas-rag):
 #
 #   The engine-owned `inputs.query_meta.*` paths MUST be declared here.
-#   The v1.8.x sync-out replay envelope includes them; if you don't
-#   declare them, validateChannelEvent rejects the replay with
+#   The sync-out replay envelope includes them; if you don't declare
+#   them, validateChannelEvent rejects the replay with
 #   `ClientInputError: Payload path "inputs.query_meta.message" is not
 #   schema-declared`.
 #
-# TODO (v0.2 plugin release): once @simodelne/pgas-contracts exports
-# `engineOwnedContinuationPaths`, replace the block below with:
-#   schema: { ...engineOwnedContinuationPaths, ...consumerPaths }
-# As of plugin v0.1, the exported constants are individual path
-# strings (see node_modules/@simodelne/pgas-contracts/engine-paths.ts);
-# the spread import doesn't exist yet, so we inline the full path
-# list verbatim. File pgas#253 suggested upstream change #4 if you
-# want the spread import sooner.
+# The canonical path list lives in @simodelne/pgas-contracts
+# engine-paths.ts (individual string constants + the ENGINE_API_PATHS
+# set). There is no spreadable schema-map export — and YAML cannot
+# spread TS constants anyway — so the paths are inlined here verbatim.
+# Keep them in sync with engine-paths.ts when bumping the engine pin.
 
 schema:
-  # Engine-owned continuation metadata (FM5 — pgas#253)
+  # User input (pgas-server lifts a plain-string user_text payload into
+  # { <ingestion-root>: { user_intent: <text> } } — declare both paths).
+  inputs.answers: object
+  inputs.answers.user_intent: string
+
+  # Engine-owned query/continuation metadata (FM5 — pgas#253)
   inputs.query_result: object
   inputs.query_result.kind: string
   inputs.query_result.value_json: string
@@ -189,26 +297,38 @@ schema:
   inputs.query_meta.source_path: string
   inputs.query_meta.source_channel: string
   inputs.query_meta.continuation_round: number
-  inputs.query_meta.scope_redirect: string
+  inputs.query_meta.scope_redirect: boolean
   inputs.query_meta.message: string
 
-  # Engine-owned mode-entry payload (notice-continuation consumer)
-  # See pgas-rag/programs/legal-rag/specs.yml comment block for the
-  # full rationale — the engine flattens the payload to leaf paths,
-  # so each leaf must be declared individually.
+  # Engine-owned mode-entry payload (notice-continuation consumer).
+  # The engine flattens the payload to leaf paths, so each leaf must
+  # be declared individually.
   inputs.mode_entry: object
   inputs.mode_entry.mode: string
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
 
   # Program-domain paths (yours to extend)
+  work.started: boolean
   work.example: string
   work.example_ready: boolean
+  work.done: boolean
 
 # ---------------------------------------------------------------------
-# Channel → schema mapping (which paths a channel's payload writes)
+# Ingestion — which schema paths each INBOUND channel's payload writes
 # ---------------------------------------------------------------------
 
-channel_paths:
+ingestion:
+  user_text: [inputs.answers]
   system_query_result: [inputs.query_result, inputs.query_meta]
-  system_mode_entry:   [inputs.mode_entry]
+  system_mode_entry: [inputs.mode_entry]
+
+# ----- Repair + fallback ----------------------------------------------
+# Both are required: the compiler asserts repair_bound > 0 and reads
+# fallback.channel unconditionally.
+
+repair_bound: 8
+
+fallback:
+  channel: widget_output
+  payload: "{{PROGRAM_NAME}} session paused — could not complete this round. Inspect the session log and retry."
