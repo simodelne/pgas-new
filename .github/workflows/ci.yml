@@ -65,6 +65,18 @@ jobs:
           # 403s on the sibling repo's packages → graceful SKIP.
           NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
 
+      - name: Program-smoke test (scaffolded program RUNS on the real engine)
+        run: bash tests/program-smoke.test.sh
+        env:
+          # Same token contract as the two gates above: org-scoped
+          # PLUGIN_NPM_TOKEN runs the gate; the GITHUB_TOKEN fallback
+          # 403s on the sibling repo's packages → graceful SKIP. This is
+          # the RUN-level gate: it scaffolds a program, installs the REAL
+          # engine, and drives a session in-process (no live LLM, via the
+          # engine's sanctioned setAuthorDriver seam) to confirm the
+          # program registers, boots, and runs to its terminal mode.
+          NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
+
   cheap-gates:
     # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
     # can require cleanly without coupling to the main smoke-tests job.
