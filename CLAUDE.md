@@ -202,7 +202,7 @@ rule verbatim.
 | Test harness | bash (`tests/*.test.sh`) |
 | YAML parse (tests) | `js-yaml` 4.x |
 | Engine registry | GitHub Packages (`@simodelne` scope), auth via `gh auth token` / `PLUGIN_NPM_TOKEN` |
-| Engine pin (current default) | `@simodelne/pgas-*@^1.9.0` |
+| Engine pin (current default) | `@simodelne/pgas-*@^1.13.0` |
 
 ---
 

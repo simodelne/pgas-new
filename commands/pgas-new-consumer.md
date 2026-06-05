@@ -45,10 +45,11 @@ Ask the user via `AskUserQuestion`:
 1. **Consumer name** — kebab-case, e.g. `pgas-legal`, `pgas-research`.
    Used as the directory name AND the `name` in `package.json`. The
    GitHub repo MUST be created by the user under `simodelne/<name>`.
-2. **Engine version pin** — default `^1.9.0` (the engine version that
-   ships the `@simodelne/pgas-server/api` barrel the scaffold imports —
-   pgas#256). Used as the version range for every `@simodelne/pgas-*`
-   dep in the generated `package.json`.
+2. **Engine version pin** — default `^1.13.0` (the engine version whose
+   surface the scaffold depends on — it ships the `@simodelne/pgas-server/api`
+   barrel the scaffold imports (pgas#256) and is the current `spec.yml` shape
+   the program template renders). Used as the version range for every
+   `@simodelne/pgas-*` dep in the generated `package.json`.
 3. **Governance-locked parameters** — y/n. If yes, the scaffold creates
    a `governance/approved_parameters.json` stub + an `EVAL_LEDGER.md`
    stub (pgas-rag-style). If no, omit those files.
@@ -79,7 +80,7 @@ Copy every file under `${CLAUDE_PLUGIN_ROOT}/templates/new-consumer/`
 to `$TARGET`, performing placeholder substitution on every `.tmpl` file:
 
 - `{{CONSUMER_NAME}}` → the consumer name (e.g. `pgas-legal`)
-- `{{ENGINE_VERSION}}` → the pgas version range (e.g. `^1.9.0`)
+- `{{ENGINE_VERSION}}` → the pgas version range (e.g. `^1.13.0`)
 - `{{GH_OWNER}}` → resolved GitHub owner (e.g. `simodelne`)
 - `{{GOVERNANCE_LOCKS}}` → `true` or `false` (controls optional sections)
 

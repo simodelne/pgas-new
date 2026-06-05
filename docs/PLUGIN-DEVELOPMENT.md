@@ -548,3 +548,62 @@ proving the barrel resolves and every imported symbol typechecks under
 > `read:packages` PAT is provisioned (otherwise it SKIPs on a 403) —
 > see "Known CI token caveat" above and tracking issue
 > [#5](https://github.com/simodelne/claude-pgas-plugin/issues/5).
+
+## v0.3 — program scaffold loads on the real engine
+
+The engine moved on. By the time this release was cut, the latest published
+`@simodelne/pgas-*` was **1.13.0** (the pin had last been set to `^1.9.0` in
+v0.2). `^1.9.0` floats forward to 1.13.0 at install time, and the **server**
+template still typechecked clean against it (`server-typecheck`: 8 pass) — so
+nothing in CI was red. But "typechecks" is not "loads", and the **program**
+template had silently drifted out of the engine's accepted `spec.yml` shape.
+
+### The discovered failure
+
+`templates/new-program/spec.yml.tmpl` rendered a spec the 1.13-era engine
+**rejects at load time**:
+
+```
+loadSpecWithPatterns: unknown key "spec.mode_initial"
+```
+
+Observed: feeding the rendered template through the engine's
+`loadSpecWithPatterns()` throws on an unknown top-level key — the spec shape the
+template encoded predates the 1.13 schema. Nothing in CI executed `loadSpec`
+against the rendered program template, so the drift never surfaced. This is the
+[pgas#235](https://github.com/simodelne/pgas/issues/235) trap class: **a scaffold
+surface that no gate actually *executes* against the real engine can rot to the
+point of "renders fine, parses as YAML, typechecks — and the engine refuses to
+load it" without a single test going red.** The `server-typecheck` gate proved
+the *server* imports resolve; it never loaded a *spec*.
+
+### The fix set shipping in v0.3
+
+- **Spec template rewritten to the 1.13 shape** — `spec.mode_initial` and the
+  rest of the rendered spec now match the keys `loadSpecWithPatterns()` accepts
+  on engine 1.13.0.
+- **New `tests/spec-load.test.sh` gate** — renders the program template and runs
+  the engine's real `loadSpecWithPatterns()` against it. This is the gate that
+  EXECUTES the spec surface; a future drift now goes red here instead of in a
+  consumer's first `npm run dev`.
+- **`registration.ts.tmpl`** — the program now ships a registration module so the
+  scaffolded program wires into the consumer's registries by construction.
+- **Program-born tests** — the scaffolded program ships with its own tests, so a
+  freshly-scaffolded program has a green suite from the first commit.
+- **Command injection contract** — `/pgas-new-program`'s marker-injection
+  contract is documented against the as-rendered shapes the new gates assert.
+- **Engine pin default → `^1.13.0`** — the documented default, test literals, and
+  version narrative now track 1.13.0 (the lowest engine version whose surface the
+  scaffold depends on — now also the current spec shape). The plugin ships as
+  **v0.3.0** (minor: additive scaffold changes + an engine-pin bump, per the
+  versioning policy in `CLAUDE.md`).
+
+### The lesson
+
+**Typecheck is not load — every scaffold surface needs a gate that EXECUTES it.**
+The server template had a gate that ran the real engine (`server-typecheck`); the
+program template did not, and it rotted unseen. This mirrors the repo's
+verify-don't-trust-green rule: a green CI that never exercises a surface against
+the real engine is not evidence that surface works. The fix was not to patch the
+one bad key and move on — it was to add the gate that *runs* `loadSpec`, so the
+whole class of "renders but won't load" drift is caught by construction.
