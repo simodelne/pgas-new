@@ -436,6 +436,72 @@ else
   fail "FM3: system_mode_entry admitted on $SME_MODE_COUNT modes (broaden = FM3 foot-gun)"
 fi
 
+# Bonus check: a scaffolded program is born with its own test pair ---------
+# (U3) Every new program ships a minimal spec-load + registration test so
+# `npm test` in the consumer immediately verifies the program loads and
+# registers. These render under programs/<name>/tests/, which vitest's
+# default include glob picks up at any depth (excluding node_modules +
+# dist), so no consumer-level vitest config is required.
+echo "[bonus] new-program ships its born-with test pair"
+PROG_TESTS_DIR="templates/new-program/tests"
+SPEC_LOAD_TMPL="$PROG_TESTS_DIR/spec-load.test.ts.tmpl"
+REG_TMPL="$PROG_TESTS_DIR/registration.test.ts.tmpl"
+
+if [[ -f "$SPEC_LOAD_TMPL" ]]; then
+  pass "exists: $SPEC_LOAD_TMPL"
+else
+  fail "MISSING: $SPEC_LOAD_TMPL — scaffolded program has no spec-load test"
+fi
+if [[ -f "$REG_TMPL" ]]; then
+  pass "exists: $REG_TMPL"
+else
+  fail "MISSING: $REG_TMPL — scaffolded program has no registration test"
+fi
+
+# Render both with placeholder substitution and assert: zero leftover
+# {{...}} markers + each carries its load-bearing import/marker symbol.
+PROG_RENDER=$(mktemp -d)
+for tmpl in "$SPEC_LOAD_TMPL" "$REG_TMPL"; do
+  [[ -f "$tmpl" ]] || continue
+  base=$(basename "$tmpl" .tmpl)
+  sed -e 's/{{PROGRAM_NAME}}/main/g' \
+      -e 's/{{PROGRAM_SLUG}}/main/g' \
+      -e 's/{{PROGRAM_NAME_PASCAL}}/Main/g' \
+      -e 's/{{CONSUMER_NAME}}/test-consumer/g' \
+      "$tmpl" > "$PROG_RENDER/$base"
+done
+
+for f in "$PROG_RENDER"/*.ts; do
+  [[ -e "$f" ]] || continue
+  if grep -qE '\{\{[A-Z_]+\}\}' "$f"; then
+    fail "rendered program test contains unsubstituted placeholder: $(basename "$f")"
+  else
+    pass "rendered program test fully substituted: $(basename "$f")"
+  fi
+done
+
+if [[ -f "$PROG_RENDER/spec-load.test.ts" ]]; then
+  if grep -q "loadSpecWithPatterns" "$PROG_RENDER/spec-load.test.ts"; then
+    pass "spec-load test invokes loadSpecWithPatterns"
+  else
+    fail "spec-load test MISSING loadSpecWithPatterns marker"
+  fi
+fi
+if [[ -f "$PROG_RENDER/registration.test.ts" ]]; then
+  # The factory name is Pascal-templated: create{{PROGRAM_NAME_PASCAL}}-
+  # ProgramEntry → createMainProgramEntry for the render above. Both this
+  # and the brief's "createProgramEntry" marker share the ProgramEntry
+  # suffix; matching the rendered factory proves the Pascal placeholder
+  # resolved AND the registration factory is wired.
+  if grep -q "createMainProgramEntry" "$PROG_RENDER/registration.test.ts"; then
+    pass "registration test invokes the rendered createProgramEntry factory"
+  else
+    fail "registration test MISSING rendered createProgramEntry factory"
+  fi
+fi
+rm -rf "$PROG_RENDER"
+# -----------------------------------------------------------------------
+
 echo ""
 echo "=== Result: $PASS pass, $FAIL fail ==="
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
