@@ -59,6 +59,7 @@ import {
   createModeEntryContinuationConsumer,
   createInnerContinuationReplayConsumer, // FM2 — pgas#253
   createSessionLockExhaustedConsumer, // FM2 — pgas#253
+  type NotificationSink,
 } from '@simodelne/pgas-server/api';
 
 // Auth — plugin v0.2 (Brief 2). See server/auth/README in plugin docs and
@@ -93,19 +94,20 @@ const registry = new ProgramRegistry();
 // `SessionLogWriter`, `FsFileStore`, and `PGAS_DEFAULT_MIDDLEWARE_HOOKS`
 // the way pgas-rag does. See pgas-rag/server/src/index.ts for the full
 // production wiring.
-const noopNotifications = {
-  addSubscriber: () => undefined,
-  removeSubscriber: () => undefined,
-  notifyUser: async () => undefined,
-  closeAll: () => undefined,
+// No-op sink typed against the REAL `NotificationSink` port (re-exported
+// by the /api barrel: `{ notify(userId, event); hasSubscribers(userId) }`).
+// Do NOT cast a wrong-shaped object here — the engine calls
+// `notifications.notify(...)` on the first session create, and a cast
+// (`as never`) hides the crash from tsc until runtime. Replace with
+// `WsNotificationSink` (also on the barrel) for production.
+const noopNotifications: NotificationSink = {
+  notify: () => undefined,
+  hasSubscribers: () => false,
 };
 const manager = new SessionManager(
   store,
   registry,
-  // The type lives at `@simodelne/pgas-server/ports/notifications.js` —
-  // cast is intentional here because the scaffold is intentionally
-  // minimal. Wire a real sink before exposing this to users.
-  noopNotifications as never,
+  noopNotifications,
   undefined, // sessionLog
   undefined, // fileStore
   undefined, // onPendingPrompt

@@ -16,23 +16,42 @@
 
 ## Current state (as of 2026-06-05)
 
-- **Released:** `main` @ plugin **v0.3.0** (manifest name `pgas`) — the six-PR v0.3 batch
-  (#13–#18) squash-merged 2026-06-05. Tag `v0.3.0` on the seam-fix commit.
+- **Released:** `main` @ plugin **v0.3.1** (manifest name `pgas`) — v0.3 batch (#13–#19)
+  + run-level gate (#20) + runtime-defect fixes. Tags `v0.3.0`, `v0.3.1`.
 - **Open issues:** none.
-- **CI gates live (5 suites):** `plugin-manifest`, `template-render`, `auth-scaffold`,
-  `server-typecheck` (real install + tsc), and **`spec-load`** (renders the program
-  template and runs `loadSpecWithPatterns` from the REAL engine — the gate that makes
-  the v0.3 spec-shape bug class unshippable). `PLUGIN_NPM_TOKEN` powers both real gates in CI.
+- **CI gates live (6 suites):** `plugin-manifest`, `template-render`, `auth-scaffold`,
+  `server-typecheck` (real install + tsc), **`spec-load`** (REAL `loadSpecWithPatterns`),
+  and **`program-smoke`** (boots the scaffolded program on the real engine in-process via
+  the sanctioned `setAuthorDriver` scripted-author seam and drives it through the whole
+  mode graph to `Completed` — render→load→typecheck→RUN all gated).
+  `PLUGIN_NPM_TOKEN` powers the three real gates in CI.
 - **Engine:** `@simodelne/pgas-*` on GitHub Packages, currently **v1.13.0**; scaffold
   default pin `^1.13.0`. Out of scope to edit from here.
 - **Self-hosted pod:** the 70.69.192.6:19439 pod is GONE (connection refused 2026-06-05 —
   rotated). GitHub CI now covers the real gates it existed for; ask the owner for new
   coordinates if pod validation is wanted again.
-- **Next (wave 2):** session-smoke gate — scaffold → register → initialize → trigger →
-  assert mode transitions in-process (scripted author, no live LLM), the final
-  "confirmed fully functional" piece.
+- **Wave 2 DONE:** the program-smoke gate shipped (#20) and immediately caught three
+  run-level template defects, fixed in v0.3.1 (see log 2026-06-06).
 
 ## Decision log (newest first)
+
+### 2026-06-06 — v0.3.1: run-level gate shipped (#20) + the three defects it caught, fixed
+U7 delivered `tests/program-smoke.test.sh`: scaffold → install real engine → in-process
+SessionManager via the engine's exported `setAuthorDriver` scripted-author seam (the same
+seam pgas-server's own session tests use — NO live LLM) → boot + full-graph drive.
+**First run immediately caught 3 defects invisible to render+load+typecheck:**
+F1 spec schema missing engine-owned `governance.round_counter` (S-2 throws at create);
+F2 `noopNotifications` wrong-shaped vs the `NotificationSink` port — hidden by an
+`as never` cast, crashed on first create (fix: typed against the barrel-exported port,
+cast deleted); F3 handlers written as `(payload, ctx)` but the engine calls
+`handlers[action](payload)` with the snapshot at `payload.domain` as a PLAIN OBJECT —
+the FM1 resolver expected a Map (fix: one-arg convention + `DomainSnapshot = Record`).
+After fixes: program-smoke FULL ENFORCING PASS (boot + begin_work→working→example_action
+→ reaction-owned gate fires → terminal `complete`, status `Completed`); all 6 suites
+195 pass / 0 fail. **Versioning-policy clarification added to CLAUDE.md:** scaffold-output
+bug-fixes that add/remove no surface are PATCH. **Lesson:** `as never` casts on port
+boundaries hide exactly the crash class the smoke gate exists to catch — the gate found
+in minutes what would have burned a consumer's first session.
 
 ### 2026-06-05 — v0.3.0: program scaffold actually loads + runs on the real engine (six-PR batch #13–#18)
 **The headline bug (observed):** the v0.2 program scaffold's `spec.yml` was REJECTED by

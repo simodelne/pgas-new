@@ -9,20 +9,21 @@
  * implementation. The skeleton calls illustrate the FM1 pattern.
  */
 
-import { resolveDomainPath, requireDomainPath, type DomainSnapshot } from './_resolver.js';
+import { resolveDomainPath, type DomainSnapshot } from './_resolver.js';
 
 /**
- * Minimal handler context shape. Adapt to your actual program API:
- * - If you use createDeclarativeSession, your handler signature comes
- *   from there.
- * - If you use createProgramAdapters with a custom createAdapters
- *   override, your signature comes from your adapter shape (relevant
- *   for FM4 handler-backed raw tools).
+ * THE ENGINE'S REAL CALLING CONVENTION (verified against
+ * pgas-runtime-core registration-helpers.ts `createServerOutputAdapter`):
+ *
+ *   handlers[action](payload)   // ONE argument — there is no ctx param
+ *
+ * The engine injects the world snapshot INTO the payload at
+ * `payload.domain`, as a PLAIN OBJECT keyed by flat dotted paths.
+ * A two-arg `(payload, ctx)` handler crashes at runtime with
+ * `Cannot read properties of undefined (reading 'domain')` — tsc
+ * cannot catch it (the registry is widened at the adapter boundary).
+ * The plugin's program-smoke gate exercises this for real.
  */
-export interface HandlerContext {
-  domain: DomainSnapshot;
-  // Add: roundIndex, sessionId, logger, fetch, etc. as needed.
-}
 
 /**
  * example_action — your first action handler.
@@ -35,17 +36,19 @@ export interface HandlerContext {
  */
 export async function example_action(
   payload: Record<string, unknown>,
-  ctx: HandlerContext,
 ): Promise<void> {
+  // The engine-injected domain snapshot (plain object, flat dotted keys).
+  const domain = (payload.domain ?? {}) as DomainSnapshot;
+
   // FM1 pattern: read engine-managed fields via the resolver, not
   // directly from payload. Even though `reasoning` is an explicit arg
   // here, the same pattern applies to ANY field that might be
   // server-owned (work.*, inputs.*, decisions.*).
-  const reasoning = resolveDomainPath(payload, ctx.domain, 'work.example');
+  const reasoning = resolveDomainPath(payload, domain, 'work.example');
 
-  // For required fields, use requireDomainPath — it throws clearly
-  // instead of silently undefining.
-  // const userIntent = requireDomainPath<string>(payload, ctx.domain, 'inputs.answers.user_intent');
+  // For required fields, use requireDomainPath (from './_resolver.js')
+  // — it throws clearly instead of silently undefining:
+  //   const userIntent = requireDomainPath<string>(payload, domain, 'inputs.answers.user_intent');
 
   // Your real work goes here. Pure logging skeleton:
   console.log('[{{PROGRAM_NAME}}] example_action invoked, reasoning =', reasoning);
