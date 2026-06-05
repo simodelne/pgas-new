@@ -4,7 +4,7 @@
   "private": true,
   "description": "Claude Code plugin for scaffolding pgas consumers and programs",
   "scripts": {
-    "test": "bash tests/plugin-manifest.test.sh && bash tests/template-render.test.sh && bash tests/auth-scaffold.test.sh && bash tests/server-typecheck.test.sh"
+    "test": "bash tests/plugin-manifest.test.sh && bash tests/template-render.test.sh && bash tests/auth-scaffold.test.sh && bash tests/server-typecheck.test.sh && bash tests/spec-load.test.sh"
   },
   "devDependencies": {
     "js-yaml": "^4.1.0"

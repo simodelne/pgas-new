@@ -57,6 +57,14 @@ jobs:
           # See docs/PLUGIN-DEVELOPMENT.md → "CI secrets".
           NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
 
+      - name: Spec-load smoke test (program spec loads in the real engine)
+        run: bash tests/spec-load.test.sh
+        env:
+          # Same token contract as server-typecheck above: org-scoped
+          # PLUGIN_NPM_TOKEN runs the gate; the GITHUB_TOKEN fallback
+          # 403s on the sibling repo's packages → graceful SKIP.
+          NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
+
   cheap-gates:
     # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
     # can require cleanly without coupling to the main smoke-tests job.
