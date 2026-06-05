@@ -14,20 +14,51 @@
 
 ---
 
-## Current state (as of 2026-06-02)
+## Current state (as of 2026-06-05)
 
-- **Released:** `main` @ plugin **v0.2.0** (manifest name `pgas`), **tagged `v0.2.0`** —
-  PRs #7, #8, #10, #11 squash-merged 2026-06-02.
-- **Open issues:** none. (#5, #6, #9 closed.)
-- **CI gate live:** `PLUGIN_NPM_TOKEN` is provisioned, so the `server-typecheck` step now
-  runs the real install + `tsc --noEmit` in CI (PASS, not SKIP) — it actively catches
-  engine-import regressions. See log 2026-06-02 (#5 closed).
-- **Engine:** `@simodelne/pgas-*` published to GitHub Packages, currently **v1.9.0**
-  (shipped pgas#256, the `/api` barrel). Out of scope to edit from here.
-- **Branches:** dead `feat/v0.1-foundation` deleted (local + remote) 2026-06-02 — its
-  content was already fully on `main` (see log).
+- **Released:** `main` @ plugin **v0.3.0** (manifest name `pgas`) — the six-PR v0.3 batch
+  (#13–#18) squash-merged 2026-06-05. Tag `v0.3.0` on the seam-fix commit.
+- **Open issues:** none.
+- **CI gates live (5 suites):** `plugin-manifest`, `template-render`, `auth-scaffold`,
+  `server-typecheck` (real install + tsc), and **`spec-load`** (renders the program
+  template and runs `loadSpecWithPatterns` from the REAL engine — the gate that makes
+  the v0.3 spec-shape bug class unshippable). `PLUGIN_NPM_TOKEN` powers both real gates in CI.
+- **Engine:** `@simodelne/pgas-*` on GitHub Packages, currently **v1.13.0**; scaffold
+  default pin `^1.13.0`. Out of scope to edit from here.
+- **Self-hosted pod:** the 70.69.192.6:19439 pod is GONE (connection refused 2026-06-05 —
+  rotated). GitHub CI now covers the real gates it existed for; ask the owner for new
+  coordinates if pod validation is wanted again.
+- **Next (wave 2):** session-smoke gate — scaffold → register → initialize → trigger →
+  assert mode transitions in-process (scripted author, no live LLM), the final
+  "confirmed fully functional" piece.
 
 ## Decision log (newest first)
+
+### 2026-06-05 — v0.3.0: program scaffold actually loads + runs on the real engine (six-PR batch #13–#18)
+**The headline bug (observed):** the v0.2 program scaffold's `spec.yml` was REJECTED by
+the real engine loader — `loadSpecWithPatterns` → `Spec compiler check failed: unknown
+key "spec.mode_initial"` (then top-level `transitions`, per-mode `prompts`,
+`tools.*.args`, `channel_paths`, missing `fallback`…). Engine had moved 1.9.0→1.13.0
+and NO plugin gate executed `loadSpec` against the rendered template (server-typecheck
+= tsc only; template-render = YAML-parse only) — the pgas#235 trap class, self-inflicted.
+**Shipped (parallel worker batch, conflict-free file slicing, all validated):**
+#18 spec template rewritten to the 1.13 strict-keys shape (initial/terminal/termination/
+topology, per-mode transitions {target, predicate guard}, proceed_to, top-level prompts
+map, ingestion, reaction-owned gate flag — the LLM can no longer open its own gate;
+query_state corrected to an action_map QueryAction since no built-in tool exists) + the
+NEW `tests/spec-load.test.sh` gate that runs the REAL loader in CI; #16 registration.ts.tmpl
+(ProgramEntry factory + FM4 worked example) + server-typecheck injection aligned;
+#13 programs born with their own vitest pair (spec-load + registration); #15 command
+overhaul (exact 4-marker contract: 2 injected / 2 intentionally empty, opt-in design
+interview, loud SCAFFOLD VERIFICATION); #14 pin ^1.13.0 + v0.3.0; #17 skills de-staled
+(they were TEACHING the rejected keys; spec-validate pointed at the wrong loader).
+**Validation:** every PR green on GitHub CI (real gates, PAT); 6-PR local integration =
+189 pass / 0 fail incl. `LOADED_OK` from the real loader; merged-main tree verified
+byte-identical to the validated integration. Pod was unreachable (rotated) — GitHub CI
+covered its role.
+**Lesson (now structural):** *typecheck is not load, and load is not run.* Every scaffold
+surface needs a gate that EXECUTES it; the spec-load gate closes the load level, the
+wave-2 session-smoke closes the run level.
 
 ### 2026-06-02 — #5 closed: CI `server-typecheck` gate now live
 Owner provisioned the `PLUGIN_NPM_TOKEN` repo secret. A re-run of the `main` CI
