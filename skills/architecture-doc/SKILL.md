@@ -61,11 +61,22 @@ Read these inputs to derive the content:
 
 - `programs/*/spec.yml` (or `specs.yml`) — for sections 2, 3, 5, 7
 - `programs/*/handlers/*.ts` — for sections 4, 5
+- `programs/*/registration.ts` — for sections 1, 4 (the `createAdapters`
+  override + `tool:<name>` channel wiring)
 - `server/index.ts` (or equivalent) — for section 1
 - `package.json` — for section 9
 - `governance/approved_parameters.json` + `EVAL_LEDGER.md` (if present) —
   for section 6 lock binding
 - The previous doc (`$PRIOR`) — for diffing into the preamble
+
+**Current spec shape (read it correctly):** the start mode is the
+top-level `initial: <mode>` (terminal modes are `terminal: [<mode>, …]`).
+Transitions are declared PER MODE under `modes.<name>.transitions:` as an
+array of `{ guard: { kind, path, value? }, target, crystallize? }`; there
+is NO top-level `transitions:` block. Action → mode routing is the
+top-level `proceed_to:` map (action name → target mode). Inbound-channel
+ingestion paths live under top-level `ingestion:` (NOT `channel_paths:`).
+Read the mode graph from these, not from any legacy top-level block.
 
 ### Section template
 
@@ -95,12 +106,17 @@ is more readable.
 
 Every nonterminal mode plus every transition guard. The complete state
 machine the program implements. Diagram + table — name, transitions
-out, guard expressions.
+out, guard expressions. Build it from each mode's
+`modes.<name>.transitions[]` (`target` + `guard.{kind,path,value}`) plus
+the top-level `proceed_to:` action-routing map; the start node is
+`initial:` and sinks are `terminal:`. There is no top-level
+`transitions:` block to read.
 
 ## 3. Per-mode action table
 
-For each mode: legal actions, what they write (paths + types), and the
-transition condition that exits the mode.
+For each mode: legal actions (its `vocabulary:`), what they write (paths
++ types, from `action_map`), and the transition condition that exits the
+mode (the mode's own `transitions[].guard`).
 
 | Mode | Action | Writes | Exit guard |
 |------|--------|--------|------------|

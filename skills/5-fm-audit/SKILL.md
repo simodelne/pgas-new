@@ -109,8 +109,11 @@ done
 both consumer factories.
 
 **Fail condition**: either factory is missing. Cite the file + the
-canonical wiring example (pgas-server's own `src/index.ts` lines
-170-179 as of v1.8.1).
+canonical wiring example: the scaffold's
+`templates/new-consumer/server/index.ts.tmpl` (the
+`createInnerContinuationReplayConsumer(...)` +
+`createSessionLockExhaustedConsumer(...)` calls, imported from the
+`@simodelne/pgas-server/api` barrel — never the bare specifier).
 
 **Note**: if the consumer uses pgas-server's hosted `createServer()`
 factory (which wires both consumers automatically), this FM is N/A.
@@ -137,7 +140,7 @@ handler-result-driven modes.
 and is included in this plugin.
 
 ```bash
-for spec in $(find programs -name "spec.yml" -o -name "specs.yml" 2>/dev/null); do
+for spec in $(find programs -type f \( -name "spec.yml" -o -name "specs.yml" \) 2>/dev/null); do
   echo "--- $spec ---"
   # invoke the linter skill (see skills/mode-entry-lint/SKILL.md)
 done
@@ -161,30 +164,51 @@ mutations. The default adapter looks for
 
 **The fix**: handler-backed raw tools must have explicit
 `createAdapters` overrides for the `tool:<name>` channel AND must
-declare the channel in `syncOutContinuationPolicy.channels`.
+declare the channel in `syncOutContinuationPolicy.channels`. The
+canonical place for that override is the program's `registration.ts`,
+which the scaffold now ships: it calls
+`createProgramAdapters(spec, ctx, handlers)` and then re-`set`s each
+`tool:<name>` output to a registry/handler adapter inside its
+`createAdapters: (ctx) => { … }` closure. (See pgas-rag
+`programs/legal-rag/registration.ts` — the `adapters.outputs.set('tool:…', …)`
+lines after `createProgramAdapters`.)
 
 **Audit step**:
 
 ```bash
-# 1. Find every spec.yml — extract its tools declarations
-for spec in $(find programs -name "spec.yml" -o -name "specs.yml" 2>/dev/null); do
+# 1. Find every spec — extract its tools declarations
+for spec in $(find programs -type f \( -name "spec.yml" -o -name "specs.yml" \) 2>/dev/null); do
+  PROG_DIR=$(dirname "$spec")
   RAW_TOOLS=$(yq '.tools | keys[]' "$spec" 2>/dev/null)
   for t in $RAW_TOOLS; do
-    # 2. Check whether the consumer's bootstrap declares a createAdapters override for tool:$t
-    if ! grep -rln "tool:${t}" --include="*.ts" -- server src 2>/dev/null | head -1 >/dev/null; then
+    # 2. Check whether the program's registration.ts (canonical location)
+    #    or the consumer bootstrap declares a createAdapters override for
+    #    tool:$t — `adapters.outputs.set('tool:$t', …)` is the override.
+    if ! grep -rln "tool:${t}" --include="*.ts" -- "$PROG_DIR" server src 2>/dev/null | head -1 >/dev/null; then
       # 3. Check whether handlers[invoke_tool_$t] exists — if not, it's an FM4 candidate
       if ! grep -rln "invoke_tool_${t}" --include="*.ts" -- programs src 2>/dev/null | head -1 >/dev/null; then
-        echo "FM4-CANDIDATE: tool '$t' in $spec — no createAdapters override AND no invoke_tool_${t} handler"
+        echo "FM4-CANDIDATE: tool '$t' in $spec — no createAdapters override (checked $PROG_DIR/registration.ts) AND no invoke_tool_${t} handler"
       fi
     fi
   done
 done
 ```
 
+The canonical override to look for is, inside `registration.ts`'s
+`createAdapters` closure:
+
+```ts
+createAdapters: (ctx) => {
+  const adapters = createProgramAdapters(spec, ctx, handlers);
+  adapters.outputs.set('tool:<name>', /* registry/handler adapter */);
+  return adapters;
+},
+```
+
 **Pass condition**: every raw tool either (a) has a registered handler
 named `invoke_tool_<name>`, or (b) has an explicit `createAdapters`
-override for the `tool:<name>` channel AND is listed in
-`syncOutContinuationPolicy.channels`.
+override for the `tool:<name>` channel (in `registration.ts`) AND is
+listed in `syncOutContinuationPolicy.channels`.
 
 **Fail condition**: a raw tool has neither. The default adapter will
 silently `undefined` and the session will stall.
@@ -217,9 +241,10 @@ REQUIRED=(
   "inputs.query_meta.message"
 )
 
-for spec in $(find programs -name "spec.yml" -o -name "specs.yml" 2>/dev/null); do
+for spec in $(find programs -type f \( -name "spec.yml" -o -name "specs.yml" \) 2>/dev/null); do
   for p in "${REQUIRED[@]}"; do
-    if ! grep -q "^\s*${p}:" "$spec"; then
+    # Schema entries are flat dotted keys, e.g. `inputs.query_meta.message: string`.
+    if ! grep -qE "^[[:space:]]*${p}:" "$spec"; then
       echo "FM5-FAIL: $spec missing engine-owned path declaration: $p"
     fi
   done
