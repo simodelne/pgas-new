@@ -607,3 +607,48 @@ verify-don't-trust-green rule: a green CI that never exercises a surface against
 the real engine is not evidence that surface works. The fix was not to patch the
 one bad key and move on — it was to add the gate that *runs* `loadSpec`, so the
 whole class of "renders but won't load" drift is caught by construction.
+
+### The next rung: `program-smoke.test.sh` — load is not run
+
+`spec-load` proves the rendered spec *loads*; it never *runs* a session. The
+plugin now verifies the scaffold at **four** levels — render → load → typecheck →
+**run**. `tests/program-smoke.test.sh` is the run-level gate: it scaffolds a
+consumer + a bootstrap program `main` (the same render + marker-inject the other
+gates use), `npm install`s the **real** engine + `tsx`, then drives the program
+in-process with **NO live LLM**, through the engine's *sanctioned, exported*
+author seam (`setAuthorDriver` / `resetAuthorDriver` from
+`@simodelne/pgas-runtime/author/index.js` — the same seam the engine's own
+pgas-server session tests use, e.g. `client-input-error-recovery.test.ts`). No
+engine internals are monkey-patched.
+
+Two tiers:
+
+- **Tier 1 (boot)** — constructs `SqliteStore(':memory:')` + `InMemoryEventBus` +
+  `ProgramRegistry`, registers the rendered program via its
+  `create<Pascal>ProgramEntry()` factory, wires a `SessionManager` (mirroring the
+  consumer template + the three continuation consumers), `manager.create(...)`s a
+  session and asserts it boots at the spec's initial mode (`start`), then triggers
+  one `user_text` ingestion and asserts it does not crash / does not go `Failed`.
+- **Tier 2 (run)** — installs a scripted author that emits one action per round,
+  keyed off `pc_vocabulary`, walking the happy path `begin_work → example_action →
+  complete_work`, and asserts the session reaches terminal mode `complete`, that
+  `example_action` wrote `work.example`, and that the `open_example_gate` reaction
+  fired `work.example_ready`. Key engine fact discovered here: a bare
+  `EffectAction` is recognized as the terminal action but does **not** auto-apply
+  the action_map mutations — the author must emit those mutations explicitly as
+  `MutationAction`s alongside the terminal `EffectAction` (the engine's own
+  session-test pattern).
+
+**Token contract** matches the other real-engine gates: `$NPM_TOKEN` → `gh auth
+token` → SKIP; a 403 from GitHub Packages also SKIPs (loud, never a silent green).
+
+**Verdict semantics.** Because this gate actually *runs* the scaffold, it can find
+"typechecks + loads but won't run" defects that nothing else catches. When it hits
+a *known, reported* template defect it emits a loud, documented `TEMPLATE-DEFECT`
+verdict and exits 0 (the same not-silent-green contract as the 403-SKIP) rather
+than hard-failing every unrelated PR; an *unrecognized* crash is a hard FAIL. The
+moment the template defect is fixed, the same gate auto-upgrades to enforcing the
+full tier-1 + tier-2 PASS, and any future run-level regression goes red here. This
+is the run-level analogue of the "renders but won't load" lesson: **load is not
+run — the only proof a scaffolded program works is to drive a session on the real
+engine.**
