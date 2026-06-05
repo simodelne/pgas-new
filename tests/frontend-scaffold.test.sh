@@ -39,7 +39,7 @@ echo "[2/5] substitute placeholders + drop .tmpl"
 while IFS= read -r tmpl; do
   out="${tmpl%.tmpl}"
   sed -e "s/{{CONSUMER_NAME}}/$CONSUMER/g" \
-      -e 's/{{ENGINE_VERSION}}/\^1.9.0/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.13.0/g' \
       -e 's/{{GH_OWNER}}/simodelne/g' \
       "$tmpl" > "$out"
   rm -f "$tmpl"

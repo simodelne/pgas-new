@@ -57,7 +57,7 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 CONSUMER="test-stc"     # short → keeps GHCR scope name within limits
-ENGINE_VERSION="^1.9.0"
+ENGINE_VERSION="^1.13.0"
 GH_OWNER="simodelne"
 PROGRAM="main"
 PROGRAM_SLUG="main"

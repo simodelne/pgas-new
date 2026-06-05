@@ -19,9 +19,10 @@ The plugin codifies the lessons from two recent pgas governance threads
 
 ## Status
 
-Released **v0.1.1** — foundation, auth scaffold, and the vendored frontend
-snapshot have all landed. See [`MEMORY.md`](./MEMORY.md) for the live state
-(current version, open issues, in-flight PRs).
+Released **v0.3.0** — engine pin refreshed to `^1.13.0` and the program
+scaffold now loads on the real engine (spec template on the 1.13 shape, plus a
+`spec-load` gate that executes `loadSpec` against it). See [`MEMORY.md`](./MEMORY.md)
+for the live state (current version, open issues, in-flight PRs).
 
 ## Governance
 

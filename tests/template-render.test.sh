@@ -97,7 +97,7 @@ else
       -e 's/{{PROGRAM_SLUG}}/test_program/g' \
       -e 's/{{PROGRAM_NAME_PASCAL}}/TestProgram/g' \
       -e 's/{{CONSUMER_NAME}}/test-consumer/g' \
-      -e 's/{{ENGINE_VERSION}}/\^1.9.0/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.13.0/g' \
       "$SPEC_TMPL" > "$SUBSTITUTED"
 
   # Use Node + js-yaml to parse (yq isn't always available in CI)
@@ -128,7 +128,7 @@ for wf in templates/new-consumer/.github/workflows/*.yml.tmpl .github/workflows/
   [[ -f "$wf" ]] || continue
   TMP=$(mktemp)
   sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
-      -e 's/{{ENGINE_VERSION}}/\^1.9.0/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.13.0/g' \
       -e 's/{{GH_OWNER}}/simodelne/g' \
       -e 's/{{PROGRAM_NAME}}/test-p/g' \
       -e 's/{{PROGRAM_SLUG}}/test_p/g' \
@@ -255,13 +255,13 @@ RENDER_DIR=$(mktemp -d)
 for tmpl in "$AUTH_DIR"/*.tmpl; do
   base=$(basename "$tmpl" .tmpl)
   sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
-      -e 's/{{ENGINE_VERSION}}/\^1.9.0/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.13.0/g' \
       -e 's/{{GH_OWNER}}/simodelne/g' \
       "$tmpl" > "$RENDER_DIR/$base"
 done
 # Render server/index.ts too
 sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
-    -e 's/{{ENGINE_VERSION}}/\^1.9.0/g' \
+    -e 's/{{ENGINE_VERSION}}/\^1.13.0/g' \
     -e 's/{{GH_OWNER}}/simodelne/g' \
     "$SERVER_TMPL" > "$RENDER_DIR/index.ts"
 
@@ -374,7 +374,7 @@ while IFS= read -r tmpl; do
   out="$FE_RENDER/${rel%.tmpl}"
   mkdir -p "$(dirname "$out")"
   sed -e 's/{{CONSUMER_NAME}}/test-c/g' \
-      -e 's/{{ENGINE_VERSION}}/\^1.9.0/g' \
+      -e 's/{{ENGINE_VERSION}}/\^1.13.0/g' \
       -e 's/{{GH_OWNER}}/simodelne/g' \
       "$tmpl" > "$out"
 done < <(find "$FRONTEND_DIR" -name "*.tmpl" -type f 2>/dev/null)
