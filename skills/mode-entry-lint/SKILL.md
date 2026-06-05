@@ -32,11 +32,19 @@ by a handler write to one of the paths the mode reads.
 ## Step 1 — parse the spec
 
 ```bash
-SPEC="${1:-programs/*/spec.yml}"
-test -f "$SPEC" || { echo "spec.yml not found at $SPEC" >&2; exit 1; }
+# Accept an explicit path arg, else the first spec under programs/.
+# Consumers name the file spec.yml OR specs.yml — match both.
+SPEC="${1:-$(find programs -type f \( -name 'spec.yml' -o -name 'specs.yml' \) 2>/dev/null | head -1)}"
+test -f "$SPEC" || { echo "spec.yml/specs.yml not found at '$SPEC'" >&2; exit 1; }
 
-# Extract every mode and its channels: line
-yq '.modes | to_entries[] | {mode: .key, channels: .value.channels}' "$SPEC"
+# Extract every mode with its channels: list AND its transition targets.
+# Transitions are PER MODE (an array under each mode); each entry's
+# `target:` is the mode it enters, and `guard.path` is the field it reads.
+yq '.modes | to_entries[] | {mode: .key, channels: .value.channels, targets: [.value.transitions[]?.target], guard_paths: [.value.transitions[]?.guard.path]}' "$SPEC"
+
+# Top-level initial mode (the bootstrap entry point) and proceed_to map
+# (action → target mode routing) inform the bootstrap classification.
+yq '{initial: .initial, terminal: .terminal, proceed_to: .proceed_to}' "$SPEC"
 ```
 
 Use `yq` or a Node-based parser (`js-yaml`) — both are acceptable.
@@ -66,16 +74,21 @@ Classification rule:
   entered from external triggers (user input, mode-graph start) or
   from a salvage path.
   - Heuristic: the mode appears as the **starting** mode in spec.yml
-    (`mode_initial: <name>`), OR every transition `from` clause
-    targeting this mode is a salvage / fallback transition (look for
-    `salvage` in the source mode name or in a guard expression).
+    (top-level `initial: <name>`), OR every transition that TARGETS
+    this mode is a salvage / fallback transition. Transitions are
+    declared PER MODE under each source mode's `transitions:` array;
+    a transition's `target:` field names the mode it enters. So
+    "transitions into mode X" = every `target: X` across all modes'
+    `transitions:` arrays. Look for `salvage` in the source mode name
+    or in the transition's `guard.path`.
 
 - **Handler-result-driven** = at least one handler writes to a path
   the mode's prompts or guards read.
-  - Heuristic: look at the mode's transition guards. If a guard
-    references `work.*` or `decisions.*` or `summary.*` AND a
-    handler in `handlers/` writes to that same path, the mode is
-    handler-result-driven.
+  - Heuristic: look at the guards of transitions that ENTER this mode
+    (and the mode's own outgoing transition guards). If a guard's
+    `path` references `work.*` or `decisions.*` or `summary.*` AND a
+    handler in `handlers/` (or `library-handlers.ts`) writes to that
+    same path, the mode is handler-result-driven.
 
 ### 2c. Classify
 
