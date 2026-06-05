@@ -183,7 +183,9 @@ rule verbatim.
 
 - The plugin follows **SemVer**. `.claude-plugin/plugin.json` and root `package.json`
   versions are kept in **lockstep** (asserted by `plugin-manifest.test.sh`).
-- **Patch** (`x.y.Z`): doc/test/CI fixes, no scaffold-output change.
+- **Patch** (`x.y.Z`): doc/test/CI fixes with no scaffold-output change — **plus**
+  bug-fixes to scaffold output that add/remove no surface (a re-scaffold gets
+  *corrected* files, not different ones; e.g. v0.3.1's runtime-defect fixes).
 - **Minor** (`x.Y.0`): additive scaffold change (new template file, new placeholder,
   new skill/command) or an engine-pin bump that relies on a new engine surface (e.g.
   v0.2.0 = the `/api` barrel migration).

@@ -308,6 +308,12 @@ schema:
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
 
+  # Engine-owned session governance. The engine writes this cell on
+  # EVERY session at construction (world.setGovernance), and S-2 asserts
+  # the path is schema-declared — omit it and session creation throws
+  # `S-2: path "governance.round_counter" is not declared in schema`.
+  governance.round_counter: number
+
   # Program-domain paths (yours to extend)
   work.started: boolean
   work.example: string

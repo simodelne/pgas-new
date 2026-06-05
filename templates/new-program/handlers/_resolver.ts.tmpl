@@ -25,14 +25,17 @@
  *     2. Falls back to the flat domain key.
  *     3. Surfaces `undefined` only if BOTH are absent.
  *
- * USAGE:
+ * USAGE (the engine's REAL calling convention — verified against
+ * pgas-runtime-core registration-helpers.ts `createServerOutputAdapter`,
+ * which invokes `handlers[action](payload)` with ONE argument):
  *
- *   import { resolveDomainPath } from './_resolver.js';
+ *   import { resolveDomainPath, type DomainSnapshot } from './_resolver.js';
  *
- *   async function myHandler(payload: any, ctx: HandlerContext) {
+ *   async function myHandler(payload: Record<string, unknown>) {
+ *     const domain = (payload.domain ?? {}) as DomainSnapshot;
  *     const userIntent = resolveDomainPath(
  *       payload,
- *       ctx.domain,
+ *       domain,
  *       'inputs.answers.user_intent',
  *     );
  *     // userIntent is now the explicit payload override OR the flat
@@ -42,17 +45,14 @@
  */
 
 /**
- * The minimal shape a handler reads from its context. Adapt to your
- * actual handler API once you wire the program in registration.ts.
+ * The domain snapshot the engine injects into every handler call.
+ *
+ * The engine attaches the world snapshot at `payload.domain` as a
+ * PLAIN OBJECT keyed by engine-canonical flat dotted paths
+ * (`domain['inputs.answers.user_intent']`), per pgas#253 FM1.
+ * It is NOT a Map — never call `.get()` on it.
  */
-export interface DomainSnapshot {
-  /**
-   * Flat key-value map keyed by engine-canonical dotted paths.
-   * `domain['inputs.answers.user_intent']` is the canonical storage
-   * shape per pgas#253 FM1.
-   */
-  get(flatKey: string): unknown;
-}
+export type DomainSnapshot = Record<string, unknown>;
 
 /**
  * Resolve a domain-managed value with payload-override semantics.
@@ -78,8 +78,8 @@ export function resolveDomainPath(
       return explicit;
     }
   }
-  // 2. Fall back to the flat domain key
-  return domain.get(flatKey);
+  // 2. Fall back to the flat domain key (plain-object snapshot)
+  return domain[flatKey];
 }
 
 /**
