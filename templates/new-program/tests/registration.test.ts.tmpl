@@ -1,0 +1,46 @@
+/**
+ * programs/{{PROGRAM_SLUG}}/tests/registration.test.ts
+ *
+ * Born-with-tests pair (2 of 2): the registration contract test.
+ *
+ * Scaffolded by claude-pgas-plugin. Asserts the minimal invariants that
+ * keep a program registrable with the server:
+ *   - create{{PROGRAM_NAME_PASCAL}}ProgramEntry() returns a well-formed
+ *     ProgramEntry — it carries a `spec` whose name matches this program,
+ *     and a callable `createAdapters` factory
+ *
+ * Note: we assert createAdapters is a FUNCTION rather than invoking it.
+ * The engine passes createAdapters a session context (`ctx`) carrying
+ * runtime accessors such as `getDomainSnapshot` (see a real consumer's
+ * registration.ts). Constructing a faithful ctx is integration-level work;
+ * a born-with smoke test asserts the factory shape and defers exercising
+ * createAdapters to your program-specific tests once its ctx needs are known.
+ *
+ * This file mirrors the STRUCTURE of a real consumer's registration test
+ * (pgas-office programs/email-triage/tests/registration.test.ts),
+ * minimized to the surface every scaffolded program shares. Extend it with
+ * your program-specific assertions (reaction-handler binding, query/
+ * continuation/surrogate policies, output-channel wiring) as you build out
+ * registration.ts.
+ *
+ * Vitest picks this up via its default include glob (it matches
+ * `*.test.ts` at any depth, excluding node_modules + dist), so no
+ * consumer-level vitest config is required — `npm test` (`vitest run`)
+ * finds it automatically.
+ */
+
+import { describe, expect, it } from 'vitest';
+import { create{{PROGRAM_NAME_PASCAL}}ProgramEntry } from '../registration.js';
+
+describe('{{PROGRAM_SLUG}} createProgramEntry', () => {
+  it('returns a ProgramEntry carrying a spec with the expected name', () => {
+    const entry = create{{PROGRAM_NAME_PASCAL}}ProgramEntry();
+    expect(entry.spec).toBeDefined();
+    expect(entry.spec.name).toBe('{{PROGRAM_SLUG}}');
+  });
+
+  it('exposes a callable createAdapters factory', () => {
+    const entry = create{{PROGRAM_NAME_PASCAL}}ProgramEntry();
+    expect(typeof entry.createAdapters).toBe('function');
+  });
+});
