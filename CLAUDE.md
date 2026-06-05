@@ -58,7 +58,7 @@ must remember.
 | `templates/new-consumer/` | the Mode-A scaffold (server / auth / frontend / migrations) |
 | `templates/new-program/` | the Mode-B scaffold (spec / handlers / prompts) |
 | `templates/frontend/` | vendored React+Vite snapshot from simoneos |
-| `tests/` | `npm test` = `plugin-manifest` + `template-render` + `auth-scaffold` + `server-typecheck`; `frontend-scaffold` runs separately |
+| `tests/` | `npm test` = `plugin-manifest` + `template-render` + `auth-scaffold` + `server-typecheck` + `spec-load`; `frontend-scaffold` runs separately |
 | `docs/` | `MARKER-PROTOCOL.md`, `MODE-B-DETECTION.md`, `PLUGIN-DEVELOPMENT.md` |
 
 ## Key invariants & patterns
@@ -98,7 +98,7 @@ not a passing gate — confirm it actually ran (see `MEMORY.md` → CI 403 cavea
 ## Commands
 
 ```bash
-npm test                              # the 4-suite gate (run before every commit)
+npm test                              # the 5-suite gate (run before every commit)
 bash tests/server-typecheck.test.sh   # end-to-end: scaffold → install REAL engine → tsc --noEmit
 bash tests/frontend-scaffold.test.sh  # vendored frontend snapshot build (network; not in npm test)
 ```
