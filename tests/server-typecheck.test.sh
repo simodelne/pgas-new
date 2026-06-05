@@ -123,8 +123,14 @@ for marker in 'program-registry' 'spec-registry' 'handler-registry' 'program-reg
   fi
 done
 
-# (a) program-registry — import the program's createAdapters helper
-#     from pgas-runtime-core, and import its handler registry.
+# The rendered registration.ts (step 2 copied + substituted the whole
+# templates/new-program/ tree) now encapsulates spec-load + handler
+# imports + createProgramAdapters. So the marker injection is exactly
+# what /pgas-new-program produces in real life: an import of the
+# program's ProgramEntry factory at program-registry, and a
+# registry.register(...) call at program-registration. The spec-registry
+# and handler-registry markers get NOTHING injected (registration.ts owns
+# that wiring) — the markers themselves stay untouched in the template.
 python3 - <<PY
 import re, pathlib
 p = pathlib.Path("$SERVER_TS")
@@ -132,39 +138,18 @@ src = p.read_text()
 
 PROGRAM = "$PROGRAM"
 PROGRAM_SLUG = "$PROGRAM_SLUG"
+PROGRAM_PASCAL = "$PROGRAM_PASCAL"
 
-# program-registry marker — engine helpers + ProgramEntry type
+# program-registry marker — import the program's ProgramEntry factory
+# from its scaffolded registration.ts.
 imp_program = "\n".join([
-  "import { fileURLToPath } from 'node:url';",
-  "import * as nodePath from 'node:path';",
-  "import { loadSpecWithPatterns } from '@simodelne/pgas-runtime-core/pattern-composer/load-with-patterns.js';",
-  "import { createProgramAdapters } from '@simodelne/pgas-runtime-core/registration-helpers.js';",
-  "import type { ProgramEntry } from '@simodelne/pgas-runtime-core/program-entry.js';",
+  f"import {{ create{PROGRAM_PASCAL}ProgramEntry }} from '../programs/{PROGRAM}/registration.js';",
   "",
 ])
 
-# spec-registry marker — load the program's spec.yml
-load_spec = "\n".join([
-  f"const {PROGRAM_SLUG}_specDir = nodePath.dirname(fileURLToPath(import.meta.url));",
-  f"const {PROGRAM_SLUG}_loadedSpec = loadSpecWithPatterns(",
-  f"  nodePath.join({PROGRAM_SLUG}_specDir, '..', 'programs', '{PROGRAM}', 'spec.yml')",
-  ");",
-  "",
-])
-
-# handler-registry marker — import handlers
-imp_handlers = "\n".join([
-  f"import {{ handlers as {PROGRAM_SLUG}_handlers }} from '../programs/{PROGRAM}/handlers/index.js';",
-  "",
-])
-
-# program-registration marker — register(name, entry)
+# program-registration marker — register the program under its slug.
 register_call = "\n".join([
-  f"const {PROGRAM_SLUG}_entry: ProgramEntry = {{",
-  f"  spec: {PROGRAM_SLUG}_loadedSpec.spec,",
-  f"  createAdapters: (ctx) => createProgramAdapters({PROGRAM_SLUG}_loadedSpec.spec, ctx, {PROGRAM_SLUG}_handlers as never),",
-  f"}};",
-  f"registry.register('{PROGRAM}', {PROGRAM_SLUG}_entry);",
+  f"registry.register('{PROGRAM_SLUG}', create{PROGRAM_PASCAL}ProgramEntry());",
   "",
 ])
 
@@ -172,9 +157,10 @@ def inject_above(text, marker, content):
   pat = re.compile(rf"^(.*\[pgas-plugin:{re.escape(marker)}\].*)$", re.M)
   return pat.sub(lambda m: content + m.group(1), text)
 
+# spec-registry + handler-registry: inject NOTHING — registration.ts
+# encapsulates the spec load and handler imports. The markers remain in
+# place for any consumer that hand-wires a program without registration.ts.
 src = inject_above(src, "program-registry", imp_program)
-src = inject_above(src, "spec-registry", load_spec)
-src = inject_above(src, "handler-registry", imp_handlers)
 src = inject_above(src, "program-registration", register_call)
 
 p.write_text(src)
