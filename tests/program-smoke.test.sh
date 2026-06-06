@@ -500,15 +500,27 @@ if [[ "$RUN_RC" -eq 0 ]] && grep -q 'SMOKE_DONE failures=0' /tmp/program-smoke-r
   echo "[6/6] consumer npm test (vitest → born-with program tests)"
   pushd "$WORK" >/dev/null
   set +e
-  ./node_modules/.bin/vitest run > /tmp/program-smoke-vitest.log 2>&1
+  # NO_COLOR: in GitHub Actions vitest emits ANSI color codes that break
+  # plain-text summary matching (locally a pipe disables color — the
+  # classic local-green/CI-red trap; observed on PR #22's first CI run).
+  NO_COLOR=1 ./node_modules/.bin/vitest run > /tmp/program-smoke-vitest.log 2>&1
   VITEST_RC=$?
   set -e
   popd >/dev/null
-  if [[ "$VITEST_RC" -eq 0 ]] && grep -qE 'Tests +[0-9]+ passed' /tmp/program-smoke-vitest.log; then
-    pass "born-with program tests pass under the consumer's vitest ($(grep -oE 'Tests +[0-9]+ passed \([0-9]+\)' /tmp/program-smoke-vitest.log | head -1 | tr -s ' '))"
+  # Strip any residual ANSI escapes before asserting, so the check is
+  # environment-independent regardless of color-env precedence.
+  sed $'s/\x1b\\[[0-9;]*m//g' /tmp/program-smoke-vitest.log > /tmp/program-smoke-vitest.clean.log
+  if [[ "$VITEST_RC" -eq 0 ]] && grep -qE 'Tests +[0-9]+ passed' /tmp/program-smoke-vitest.clean.log; then
+    pass "born-with program tests pass under the consumer's vitest ($(grep -oE 'Tests +[0-9]+ passed \([0-9]+\)' /tmp/program-smoke-vitest.clean.log | head -1 | tr -s ' '))"
+  elif [[ "$VITEST_RC" -eq 0 ]]; then
+    fail "vitest exited 0 but no 'Tests N passed' summary found — reporter output changed; inspect:"
+    tail -30 /tmp/program-smoke-vitest.clean.log | sed 's/^/          /'
+    echo ""
+    echo "=== Result: $PASS pass, $FAIL fail ==="
+    exit 1
   else
     fail "consumer vitest run FAILED (exit $VITEST_RC) — the born-with tests are broken out of the box:"
-    tail -30 /tmp/program-smoke-vitest.log | sed 's/^/          /'
+    tail -30 /tmp/program-smoke-vitest.clean.log | sed 's/^/          /'
     echo ""
     echo "=== Result: $PASS pass, $FAIL fail ==="
     exit 1
