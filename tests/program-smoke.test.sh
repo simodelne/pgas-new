@@ -23,6 +23,10 @@
 #      sanctioned author-driver seam (`setAuthorDriver`, exported from
 #      `@simodelne/pgas-runtime/author/index.js` — the same seam the engine's
 #      own pgas-server tests use, e.g. client-input-error-recovery.test.ts).
+#   4. Run the consumer's own `vitest run` in the same installed tree, so the
+#      born-with program tests (templates/new-program/tests/) are verified to
+#      pass out of the box — vitest glob pickup, the `.js`→`.ts` import of
+#      registration, and the loaded-spec accessor assumptions are all gated.
 #
 # ── Tiers ────────────────────────────────────────────────────────────────
 #
@@ -90,7 +94,7 @@ PROGRAM_SLUG="main"
 PROGRAM_PASCAL="Main"
 
 # ----- Step 1: scaffold the consumer ---------------------------------
-echo "[1/5] scaffolding consumer at $WORK"
+echo "[1/6] scaffolding consumer at $WORK"
 cp -R templates/new-consumer/. "$WORK/"
 while IFS= read -r tmpl; do
   out="${tmpl%.tmpl}"
@@ -103,7 +107,7 @@ done < <(find "$WORK" -name "*.tmpl" -type f)
 pass "rendered new-consumer templates"
 
 # ----- Step 2: scaffold the bootstrap program ------------------------
-echo "[2/5] scaffolding bootstrap program '$PROGRAM' under programs/$PROGRAM/"
+echo "[2/6] scaffolding bootstrap program '$PROGRAM' under programs/$PROGRAM/"
 mkdir -p "$WORK/programs/$PROGRAM"
 cp -R templates/new-program/. "$WORK/programs/$PROGRAM/"
 while IFS= read -r tmpl; do
@@ -129,7 +133,7 @@ else
 fi
 
 # ----- Step 3: npm install the real engine + tsx ---------------------
-echo "[3/5] npm install (real engine, ^1.13.0) + tsx"
+echo "[3/6] npm install (real engine, ^1.13.0) + tsx"
 pushd "$WORK" >/dev/null
 # The scaffolded consumer's package.json already declares the @simodelne/*
 # deps at $ENGINE_VERSION; install it, then add tsx so we can run TS directly.
@@ -164,7 +168,7 @@ popd >/dev/null
 
 
 # ----- Step 4: write the smoke driver --------------------------------
-echo "[4/5] writing the in-process smoke driver"
+echo "[4/6] writing the in-process smoke driver"
 #
 # The smoke script lives INSIDE the scaffolded consumer so its imports resolve
 # against the consumer's installed node_modules and its tsconfig (ESM, NodeNext).
@@ -469,7 +473,7 @@ SMOKE
 pass "wrote smoke.ts"
 
 # ----- Step 5: run the smoke driver ----------------------------------
-echo "[5/5] running the in-process smoke driver (npx tsx smoke.ts)"
+echo "[5/6] running the in-process smoke driver (npx tsx smoke.ts)"
 pushd "$WORK" >/dev/null
 set +e
 ./node_modules/.bin/tsx smoke.ts > /tmp/program-smoke-run.log 2>&1
@@ -485,6 +489,31 @@ npm cache clean --force >/dev/null 2>&1 || true
 
 if [[ "$RUN_RC" -eq 0 ]] && grep -q 'SMOKE_DONE failures=0' /tmp/program-smoke-run.log; then
   pass "scaffolded program registered, booted at 'start', ran rounds, and reached 'complete' on the real engine"
+
+  # ----- Step 6: the consumer's own test run (born-with vitest pair) ----
+  # The scaffolded program ships tests (templates/new-program/tests/) that
+  # the CONSUMER runs via `npm test` (vitest). Run them here in the same
+  # installed tree so "a fresh consumer's npm test passes out of the box"
+  # is GATED, not assumed: vitest's default glob must pick the files up,
+  # the `../registration.js` specifier must resolve to registration.ts,
+  # and the tests' loaded-spec accessors must match the real spec shape.
+  echo "[6/6] consumer npm test (vitest → born-with program tests)"
+  pushd "$WORK" >/dev/null
+  set +e
+  ./node_modules/.bin/vitest run > /tmp/program-smoke-vitest.log 2>&1
+  VITEST_RC=$?
+  set -e
+  popd >/dev/null
+  if [[ "$VITEST_RC" -eq 0 ]] && grep -qE 'Tests +[0-9]+ passed' /tmp/program-smoke-vitest.log; then
+    pass "born-with program tests pass under the consumer's vitest ($(grep -oE 'Tests +[0-9]+ passed \([0-9]+\)' /tmp/program-smoke-vitest.log | head -1 | tr -s ' '))"
+  else
+    fail "consumer vitest run FAILED (exit $VITEST_RC) — the born-with tests are broken out of the box:"
+    tail -30 /tmp/program-smoke-vitest.log | sed 's/^/          /'
+    echo ""
+    echo "=== Result: $PASS pass, $FAIL fail ==="
+    exit 1
+  fi
+
   echo ""
   echo "=== Result: $PASS pass, $FAIL fail ==="
   exit 0
