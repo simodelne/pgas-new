@@ -14,10 +14,11 @@
 
 ---
 
-## Current state (as of 2026-06-05)
+## Current state (as of 2026-06-06)
 
-- **Released:** `main` @ plugin **v0.3.1** (manifest name `pgas`) — v0.3 batch (#13–#19)
-  + run-level gate (#20) + runtime-defect fixes. Tags `v0.3.0`, `v0.3.1`.
+- **Released:** `main` @ plugin **v1.0.0** (first stable; manifest name `pgas`). Tags
+  `v0.3.0`, `v0.3.1`, `v1.0.0` + GitHub Release v1.0.0. Architecture paper at
+  `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (pgas#254 contract, adapted to tooling).
 - **Open issues:** none.
 - **CI gates live (6 suites):** `plugin-manifest`, `template-render`, `auth-scaffold`,
   `server-typecheck` (real install + tsc), **`spec-load`** (REAL `loadSpecWithPatterns`),
@@ -34,6 +35,15 @@
   run-level template defects, fixed in v0.3.1 (see log 2026-06-06).
 
 ## Decision log (newest first)
+
+### 2026-06-06 — v1.0.0: first stable cut + architecture paper
+Criterion for 1.0: every scaffold surface gated by EXECUTION against the real engine
+(6 suites, 196 assertions: render → load → typecheck → run → consumer-vitest) and the
+full user journey dogfooded green (~3.5 min, install-bound). Content-identical to
+v0.3.1 plus the architecture paper (`audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md`,
+the 10-section pgas#254 structure adapted to the tooling layer — satisfying the
+plugin's own arch-doc-on-`.0` hook) and the version graduation. The paper's diff
+against the next minor's edition is the standing drift-detection forcing function.
 
 ### 2026-06-06 — v0.3.1: run-level gate shipped (#20) + the three defects it caught, fixed
 U7 delivered `tests/program-smoke.test.sh`: scaffold → install real engine → in-process

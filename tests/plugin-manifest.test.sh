@@ -28,11 +28,11 @@ else
   fail ".claude-plugin/plugin.json missing or invalid JSON"
 fi
 
-# 1a. plugin.json + package.json version pin — both must be 0.3.1.
+# 1a. plugin.json + package.json version pin — both must be 1.0.0.
 # The plugin-manifest version and the package.json version are kept in
 # lockstep; a mismatch means a release was prepared but only half-bumped.
-echo "[1a/4] plugin.json + package.json version pinned to 0.3.1"
-EXPECTED_VERSION="0.3.1"
+echo "[1a/4] plugin.json + package.json version pinned to 1.0.0"
+EXPECTED_VERSION="1.0.0"
 MANIFEST_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version ?? '')" 2>/dev/null)
 PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version ?? '')" 2>/dev/null)
 if [[ "$MANIFEST_VERSION" == "$EXPECTED_VERSION" ]]; then
