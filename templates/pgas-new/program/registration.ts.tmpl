@@ -14,12 +14,21 @@ export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   const { spec: loaded } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
   const spec = enableNotebook(loaded, { excludeTerminal: true });
-  const tools = createToolRegistry();
-  register{{PASCAL_NAME}}Tools(tools);
+  const toolRegistry = createToolRegistry();
+  register{{PASCAL_NAME}}Tools(toolRegistry);
 
   return {
     spec,
-    tools,
-    createAdapters: (ctx) => createProgramAdapters(spec, ctx, handlers),
+    createAdapters: (ctx) => {
+      const adapters = createProgramAdapters(spec, ctx, handlers);
+      if (spec.tools) {
+        for (const [name, decl] of spec.tools) {
+          if (toolRegistry.has(name)) {
+            adapters.outputs.set(decl.channelId, toolRegistry.createAdapter(name));
+          }
+        }
+      }
+      return adapters;
+    },
   };
 }

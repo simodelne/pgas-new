@@ -8,10 +8,19 @@ import {
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
 
+function stubHandles() {
+  const complete = async (): Promise<string> => JSON.stringify({ actions: [] });
+  return {
+    authorHandle: { modelId: 'stub-author', complete },
+    observerHandle: { modelId: 'stub-observer', complete },
+  };
+}
+
 describe('{{SLUG}} API black-box contract', () => {
   it('creates and reads a session through the in-process external API transport', async () => {
     const server = await createPgasServer({
       programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
+      drivers: stubHandles(),
       devMode: true,
     });
 

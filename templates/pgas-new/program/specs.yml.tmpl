@@ -1,119 +1,206 @@
 name: "{{SLUG}}"
-version: "0.1.0"
-initial_mode: intake_intelligence
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
 
-schema:
-  session.current_mode:
-    type: string
-  session.active_session_id:
-    type: string
-    optional: true
-  session.active_session_running:
-    type: boolean
-  intake.mandate:
-    type: string
-    optional: true
-  intake.research_confirmed:
-    type: boolean
-  intake.user_requested_research:
-    type: boolean
-  notebook.entries:
-    type: array
-  notebook.pins:
-    type: array
-  research.queries:
-    type: array
-  research.completed:
-    type: boolean
-  repo.target_kind:
-    type: string
-  repo.wiring_manifest.status:
-    type: string
-  repo.required_facilities_missing:
-    type: array
-  program.runtime:
-    type: string
-  program.slug:
-    type: string
-  artifact_plan.status:
-    type: string
-  artifacts.written:
-    type: boolean
-  graduation.static_verification:
-    type: string
-  graduation.live_verification:
-    type: string
-  graduation.rebase_verification:
-    type: string
-  graduation.live_provider_intent:
-    type: boolean
-  governance.round_counter:
-    type: number
+preamble: |
+  Program: {{NAME}}. You create PGAS programs through governed modes,
+  explicit artifact planning, repo-curator wiring manifests, and static
+  then live verification. Use only the current mode vocabulary and keep
+  user decisions in the notebook-backed domain.
 
-notebook_pins:
-  - intake.mandate
-  - artifact_plan.status
-  - graduation.static_verification
-  - graduation.live_verification
+initial: intake_intelligence
+terminal: [pr_graduation]
+
+features:
+  - base
+  - runtime_control
+
+channels:
+  user_text: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Async }
 
 modes:
   intake_intelligence:
-    description: Capture mandate, user ideas, notebook notes, and user-confirmed research intent.
-    legal_actions:
-      - record_user_note
-      - web_research
-      - session_new
-      - session_abort_current
-      - session_status
-      - session_history
-      - session_resume
-      - session_help
+    vocabulary: [record_user_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [user_text, widget_output]
+    transitions:
+      - target: repo_targeting
+        guard: { kind: FieldTruthy, path: intake.mandate }
   repo_targeting:
-    description: Select standalone or existing-repo target and validate fixed wiring manifest.
-    legal_actions:
-      - select_repo_target
-      - load_wiring_manifest
-      - create_curator_request
+    vocabulary: [select_repo_target, load_wiring_manifest, create_curator_request]
+    channels: [widget_output]
+    transitions:
+      - target: architecture_design
+        guard: { kind: FieldTruthy, path: repo.target_kind }
+      - target: curator_request
+        guard: { kind: FieldTruthy, path: repo.blocked }
   architecture_design:
-    description: Design the PGAS-specific program architecture and attachment points.
-    legal_actions:
-      - design_architecture
-      - record_user_note
+    vocabulary: [design_architecture, record_user_note]
+    channels: [widget_output]
+    transitions:
+      - target: scaffold_plan
+        guard: { kind: FieldTruthy, path: program.architecture_ready }
   scaffold_plan:
-    description: Build the artifact plan before any file writes.
-    legal_actions:
-      - plan_artifacts
-      - approve_artifact_plan
+    vocabulary: [plan_artifacts, approve_artifact_plan]
+    channels: [widget_output]
+    transitions:
+      - target: branch_write
+        guard: { kind: FieldTruthy, path: artifact_plan.approved }
   branch_write:
-    description: Write planned artifacts only after gates pass.
-    legal_actions:
-      - write_scaffold_artifacts
-      - git_status
+    vocabulary: [write_scaffold_artifacts, git_status]
+    channels: [widget_output]
+    transitions:
+      - target: static_verify
+        guard: { kind: FieldTruthy, path: artifacts.written }
   static_verify:
-    description: Run install, typecheck, deterministic, control-plane, and API black-box gates.
-    legal_actions:
-      - npm_install
-      - npm_typecheck
-      - npm_test
-      - run_static_verification
+    vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification]
+    channels: [widget_output]
+    transitions:
+      - target: live_verify
+        guard: { kind: FieldTruthy, path: graduation.static_passed }
   live_verify:
-    description: Run real-provider verification through the exposed external API.
-    legal_actions:
-      - run_api_blackbox_verification
-      - run_live_provider_verification
+    vocabulary: [run_api_blackbox_verification, run_live_provider_verification]
+    channels: [widget_output]
+    transitions:
+      - target: rebase_verify
+        guard: { kind: FieldTruthy, path: graduation.live_passed }
   rebase_verify:
-    description: Rebase on latest target repo state and rerun static verification.
-    legal_actions:
-      - git_rebase_latest
-      - run_static_verification
+    vocabulary: [git_rebase_latest, run_static_verification]
+    channels: [widget_output]
+    transitions:
+      - target: pr_graduation
+        guard: { kind: FieldTruthy, path: graduation.rebase_passed }
   pr_graduation:
-    description: Open the PR only after post-rebase verification succeeds.
-    legal_actions:
-      - open_pull_request
+    vocabulary: [open_pull_request]
+    channels: [widget_output]
   curator_request:
-    description: Request missing repo wiring or facilities from the repo curator.
-    legal_actions:
-      - create_curator_request
+    vocabulary: [create_curator_request]
+    channels: [widget_output]
+    transitions:
+      - target: repo_targeting
+        guard: { kind: FieldTruthy, path: repo.curator_request_lodged }
+
+proceed_to:
+  select_repo_target: architecture_design
+  design_architecture: scaffold_plan
+  approve_artifact_plan: branch_write
+  write_scaffold_artifacts: static_verify
+  run_static_verification: live_verify
+  run_live_provider_verification: rebase_verify
+  git_rebase_latest: pr_graduation
+
+projection:
+  intake_intelligence:
+    include: [intake.mandate, notebook.entries, notebook.pins]
+    exclude: []
+  repo_targeting:
+    include: [repo.target_kind, repo.wiring_manifest.status, repo.required_facilities_missing]
+    exclude: []
+  architecture_design:
+    include: [program.slug, program.runtime, program.architecture_ready]
+    exclude: []
+  scaffold_plan:
+    include: [artifact_plan.status, artifact_plan.approved]
+    exclude: []
+  branch_write:
+    include: [artifacts.written, artifacts.generated_paths]
+    exclude: []
+  static_verify:
+    include: [graduation.static_verification, graduation.static_passed]
+    exclude: []
+  live_verify:
+    include: [graduation.live_verification, graduation.live_provider_intent, graduation.live_passed]
+    exclude: []
+  rebase_verify:
+    include: [graduation.rebase_verification, graduation.rebase_passed]
+    exclude: []
+  curator_request:
+    include: [repo.curator_request_lodged, repo.required_facilities_missing]
+    exclude: []
+
+prompts:
+  intake_intelligence: "Capture mandate, notebook notes, and confirmed research scope."
+  repo_targeting: "Validate target mode and fixed .pgas/wiring.yml if attaching to an existing repo."
+  architecture_design: "Design the PGAS-specific program and attachment points."
+  scaffold_plan: "Create and approve the artifact plan before writes."
+  branch_write: "Write only planned artifacts."
+  static_verify: "Run static verification and record evidence."
+  live_verify: "Run real-provider verification through the external API."
+  rebase_verify: "Rebase on latest target repo state and rerun static verification."
+  pr_graduation: "Open the PR after post-rebase verification."
+  curator_request: "Prepare a curator request for missing repo wiring."
+
+ingestion:
+  user_text: [intake.mandate]
+
+action_map:
+  record_user_note: { description: "Record a notebook note.", mutations: [], channel: widget_output }
+  web_research: { description: "Run user-confirmed web research.", mutations: [], channel: widget_output }
+  session_new: { description: "Control-plane new session command.", mutations: [], channel: widget_output }
+  session_abort_current: { description: "Control-plane abort current session command.", mutations: [], channel: widget_output }
+  session_status: { description: "Control-plane status command.", mutations: [], channel: widget_output }
+  session_history: { description: "Control-plane history command.", mutations: [], channel: widget_output }
+  session_resume: { description: "Control-plane resume command.", mutations: [], channel: widget_output }
+  session_help: { description: "Control-plane help command.", mutations: [], channel: widget_output }
+  select_repo_target:
+    description: "Select standalone or existing-repo target."
+    mutations: [{ op: MSet, path: repo.target_kind, from_arg: target_kind }]
+    channel: widget_output
+  load_wiring_manifest: { description: "Load .pgas/wiring.yml.", mutations: [], channel: widget_output }
+  create_curator_request:
+    description: "Prepare a repo curator request."
+    mutations: [{ op: MSet, path: repo.curator_request_lodged, value: true }]
+    channel: widget_output
+  design_architecture:
+    description: "Mark architecture ready."
+    mutations: [{ op: MSet, path: program.architecture_ready, value: true }]
+    channel: widget_output
+  plan_artifacts: { description: "Plan artifacts.", mutations: [{ op: MSet, path: artifact_plan.status, value: draft }], channel: widget_output }
+  approve_artifact_plan: { description: "Approve artifact plan.", mutations: [{ op: MSet, path: artifact_plan.approved, value: true }], channel: widget_output }
+  write_scaffold_artifacts: { description: "Write planned artifacts.", mutations: [{ op: MSet, path: artifacts.written, value: true }], channel: widget_output }
+  git_status: { description: "Read git status.", mutations: [], channel: widget_output }
+  npm_install: { description: "Install dependencies.", mutations: [], channel: widget_output }
+  npm_typecheck: { description: "Run typecheck.", mutations: [], channel: widget_output }
+  npm_test: { description: "Run tests.", mutations: [], channel: widget_output }
+  run_static_verification: { description: "Record static verification.", mutations: [{ op: MSet, path: graduation.static_passed, value: true }], channel: widget_output }
+  run_api_blackbox_verification: { description: "Run black-box API verification.", mutations: [], channel: widget_output }
+  run_live_provider_verification: { description: "Run live provider verification.", mutations: [{ op: MSet, path: graduation.live_passed, value: true }], channel: widget_output }
+  git_rebase_latest: { description: "Rebase and mark rebase verification.", mutations: [{ op: MSet, path: graduation.rebase_passed, value: true }], channel: widget_output }
+  open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
+
+schema:
+  intake.mandate: string
+  notebook.entries: array
+  notebook.pins: array
+  repo.target_kind: string
+  repo.blocked: boolean
+  repo.curator_request_lodged: boolean
+  repo.wiring_manifest.status: string
+  repo.required_facilities_missing: array
+  program.runtime: string
+  program.slug: string
+  program.architecture_ready: boolean
+  artifact_plan.status: string
+  artifact_plan.approved: boolean
+  artifacts.written: boolean
+  artifacts.generated_paths: array
+  graduation.static_verification: string
+  graduation.static_passed: boolean
+  graduation.live_verification: string
+  graduation.live_provider_intent: boolean
+  graduation.live_passed: boolean
+  graduation.rebase_verification: string
+  graduation.rebase_passed: boolean
+  governance.round_counter: number
+
+repair_bound: 2
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+guidance: {}
 
 control_plane:
   version: 1
@@ -186,10 +273,21 @@ control_plane:
           view: status
       presentation:
         priority: contextual
+    resume:
+      title: Resume
+      aliases: ["/resume"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: send_runtime_control
+          session: "$active_session.id"
+          control: resume
+      presentation:
+        priority: contextual
     help:
       title: Help
       aliases: ["/help"]
       dispatch:
-        - op: render_controls
+        - op: render_help
       presentation:
         priority: secondary

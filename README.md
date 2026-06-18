@@ -1,63 +1,47 @@
-# claude-pgas-plugin
+# pgas-new
 
-Claude Code plugin for scaffolding **pgas** consumers and programs.
+`pgas-new` is a PGAS-specific foundry for creating TypeScript/Node PGAS programs. It is not a general coding assistant and it does not scaffold frontend, auth, database, or persistence services beyond explicit attachment points.
 
-The plugin codifies the lessons from two recent pgas governance threads
-([pgas#253](https://github.com/simodelne/pgas/issues/253),
-[pgas#254](https://github.com/simodelne/pgas/issues/254)) into:
+The generated code targets the current public `@simodelne/pgas-server` v2 surfaces:
 
-- Slash commands for scaffolding new pgas consumers (Mode A) and new
-  programs inside an existing consumer (Mode B).
-- Skills for auditing a consumer against the 5 failure modes from
-  pgas#253, for generating the per-version architecture doc per
-  pgas#254, for validating `spec.yml`, and for linting `system_mode_entry`
-  breadth.
-- Hooks that block staging an invalid `spec.yml` and nudge for the
-  architecture doc on `.0` publishes.
-- Templates that close each FM **by construction** — a freshly-scaffolded
-  consumer ships with the FM-closing patterns already in place.
+- `@simodelne/pgas-server/plugin.js`
+- `@simodelne/pgas-server/create-server.js`
+- `@simodelne/pgas-server/client.js`
+- `@simodelne/pgas-server/client/http.js`
+- `@simodelne/pgas-server/channels/index.js`
+- `@simodelne/pgas-server/routes/index.js`
+- `@simodelne/pgas-server/testing.js`
 
-## Status
+Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`. Without that fixed-path manifest, `pgas-new` refuses writes and produces a curator request.
 
-Released **v1.0.0** — first stable. Every scaffold surface is gated by
-EXECUTION against the real engine (render → load → typecheck → run →
-consumer-tests), and the full user journey is dogfooded green (~3.5 min,
-install-bound). Architecture paper:
-[`audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md`](./audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md).
-See [`MEMORY.md`](./MEMORY.md) for live state.
-
-## Governance
-
-Working on this plugin? Read [`CLAUDE.md`](./CLAUDE.md) (the load-bearing
-rulebook) and [`MEMORY.md`](./MEMORY.md) (the running memory) first.
-
-## Install (once published)
-
-Add the marketplace to Claude Code and install the plugin via the
-in-app plugin manager. Local-dev install:
+## Commands
 
 ```bash
-git clone git@github.com:simodelne/claude-pgas-plugin.git ~/claude-pgas-plugin
-ln -s ~/claude-pgas-plugin ~/.claude/plugins/cache/local/claude-pgas-plugin/0.1.0
-# (then point your local marketplace at it)
+npm run pgas-new -- version
+npm run pgas-new -- plan-standalone --slug pgas-new --name "PGAS New"
+npm run pgas-new -- render-standalone --slug pgas-new --name "PGAS New" --out /tmp/pgas-new
+npm run pgas-new -- validate-manifest --repo /path/to/repo
+npm run pgas-new -- plan-attach --repo /path/to/repo --slug review --name Review
+npm run pgas-new -- curator-request --repo /path/to/repo --slug review --name Review --github-owner simodelne --github-repo simoneos
 ```
 
-See `docs/PLUGIN-DEVELOPMENT.md` for the in-development workflow.
+Session lifecycle commands map to the generated PGAS `control_plane` vocabulary:
 
-## Usage
-
+```bash
+npm run pgas-new -- session new
+npm run pgas-new -- session abort
+npm run pgas-new -- session status
+npm run pgas-new -- session history
+npm run pgas-new -- session resume
+npm run pgas-new -- session help
 ```
-/pgas-new-consumer        # scaffold a fresh pgas consumer repo (Mode A)
-/pgas-new-program         # scaffold a program inside the current consumer (Mode B)
+
+## Verification
+
+```bash
+npm test
 ```
 
-Plus the four bundled skills, auto-discovered by Claude Code:
+The default test path typechecks this package, runs the unit/static suite, renders a standalone v2 scaffold, checks for banned imports, parses the generated spec, and optionally installs/tests the generated scaffold when GitHub Packages access is available.
 
-- `pgas:5-fm-audit` — audit a consumer against pgas#253 FM1-FM5
-- `pgas:architecture-doc` — generate/update `audit/ARCHITECTURE-*.md`
-- `pgas:spec-validate` — `loadSpec()` a consumer's spec.yml
-- `pgas:mode-entry-lint` — flag the FM3 `system_mode_entry` breadth foot-gun
-
-## License
-
-MIT — see `LICENSE`.
+Final graduation still requires a user-selected live test with a real provider round trip through the generated external API.

@@ -1,6 +1,6 @@
 {
   "name": "pgas",
-  "description": "Scaffolding + audit toolkit for pgas consumers and programs (closes pgas#253 FM1-FM5 by construction)",
+  "description": "PGAS-new foundry for creating TypeScript/Node PGAS programs on current pgas-server surfaces",
   "version": "1.0.0",
   "author": {
     "name": "Simone Del Nevo",

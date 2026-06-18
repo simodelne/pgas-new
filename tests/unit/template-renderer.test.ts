@@ -111,11 +111,12 @@ describe('template renderer', () => {
       ]) {
         expect(spec).toContain(`${mode}:`);
       }
-      for (const control of ['ask:', 'abort:', 'new:', 'history:', 'status:', 'help:']) {
+      for (const control of ['ask:', 'abort:', 'new:', 'history:', 'status:', 'resume:', 'help:']) {
         expect(spec).toContain(control);
       }
       expect(spec).toContain('control_plane:');
-      expect(spec).toContain('notebook_pins:');
+      expect(spec).toContain('notebook.entries');
+      expect(spec).toContain('notebook.pins');
       expect(spec).toContain('session_abort_current');
       expect(tests.join('\n')).toContain('real provider round trip through the external API');
       expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');

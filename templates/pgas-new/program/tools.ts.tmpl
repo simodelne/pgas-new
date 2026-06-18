@@ -1,6 +1,4 @@
-type ToolRegistryLike = {
-  register?: (name: string, definition: unknown) => void;
-};
+import type { ToolImpl, ToolRegistry } from '@simodelne/pgas-server/plugin.js';
 
 const semanticTools = [
   'repo_read_file',
@@ -25,11 +23,13 @@ const semanticTools = [
   'session_help',
 ] as const;
 
-export function register{{PASCAL_NAME}}Tools(registry: ToolRegistryLike): void {
+const noopTool: ToolImpl = {
+  kind: 'local',
+  fn: async (args) => ({ ok: true, args }),
+};
+
+export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
   for (const name of semanticTools) {
-    registry.register?.(name, {
-      description: `{{NAME}} semantic tool: ${name}`,
-      arbitrary_bash: false,
-    });
+    registry.register(name, noopTool);
   }
 }
