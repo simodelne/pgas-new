@@ -1,0 +1,14 @@
+import { describe, expect, it } from 'vitest';
+import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
+
+describe('{{SLUG}} control plane', () => {
+  it('declares REPL controls including session lifecycle commands', () => {
+    const entry = create{{PASCAL_NAME}}ProgramEntry();
+    const controls = entry.spec.control_plane?.controls ?? {};
+
+    expect(Object.keys(controls)).toEqual(expect.arrayContaining(['ask', 'abort', 'new', 'history', 'status', 'help']));
+    expect(controls.abort.presentation?.confirm).toBe(true);
+    expect(controls.new.aliases).toContain('/new');
+    expect(controls.abort.aliases).toContain('/abort');
+  });
+});

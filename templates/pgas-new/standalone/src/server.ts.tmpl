@@ -1,0 +1,9 @@
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { create{{PASCAL_NAME}}ProgramEntry } from './programs/{{SLUG}}/registration.js';
+
+const server = await createPgasServer({
+  programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
+  devMode: process.env.PGAS_DEV_MODE === '1',
+});
+
+await server.start();

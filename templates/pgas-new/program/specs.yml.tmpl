@@ -1,0 +1,195 @@
+name: "{{SLUG}}"
+version: "0.1.0"
+initial_mode: intake_intelligence
+
+schema:
+  session.current_mode:
+    type: string
+  session.active_session_id:
+    type: string
+    optional: true
+  session.active_session_running:
+    type: boolean
+  intake.mandate:
+    type: string
+    optional: true
+  intake.research_confirmed:
+    type: boolean
+  intake.user_requested_research:
+    type: boolean
+  notebook.entries:
+    type: array
+  notebook.pins:
+    type: array
+  research.queries:
+    type: array
+  research.completed:
+    type: boolean
+  repo.target_kind:
+    type: string
+  repo.wiring_manifest.status:
+    type: string
+  repo.required_facilities_missing:
+    type: array
+  program.runtime:
+    type: string
+  program.slug:
+    type: string
+  artifact_plan.status:
+    type: string
+  artifacts.written:
+    type: boolean
+  graduation.static_verification:
+    type: string
+  graduation.live_verification:
+    type: string
+  graduation.rebase_verification:
+    type: string
+  graduation.live_provider_intent:
+    type: boolean
+  governance.round_counter:
+    type: number
+
+notebook_pins:
+  - intake.mandate
+  - artifact_plan.status
+  - graduation.static_verification
+  - graduation.live_verification
+
+modes:
+  intake_intelligence:
+    description: Capture mandate, user ideas, notebook notes, and user-confirmed research intent.
+    legal_actions:
+      - record_user_note
+      - web_research
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+  repo_targeting:
+    description: Select standalone or existing-repo target and validate fixed wiring manifest.
+    legal_actions:
+      - select_repo_target
+      - load_wiring_manifest
+      - create_curator_request
+  architecture_design:
+    description: Design the PGAS-specific program architecture and attachment points.
+    legal_actions:
+      - design_architecture
+      - record_user_note
+  scaffold_plan:
+    description: Build the artifact plan before any file writes.
+    legal_actions:
+      - plan_artifacts
+      - approve_artifact_plan
+  branch_write:
+    description: Write planned artifacts only after gates pass.
+    legal_actions:
+      - write_scaffold_artifacts
+      - git_status
+  static_verify:
+    description: Run install, typecheck, deterministic, control-plane, and API black-box gates.
+    legal_actions:
+      - npm_install
+      - npm_typecheck
+      - npm_test
+      - run_static_verification
+  live_verify:
+    description: Run real-provider verification through the exposed external API.
+    legal_actions:
+      - run_api_blackbox_verification
+      - run_live_provider_verification
+  rebase_verify:
+    description: Rebase on latest target repo state and rerun static verification.
+    legal_actions:
+      - git_rebase_latest
+      - run_static_verification
+  pr_graduation:
+    description: Open the PR only after post-rebase verification succeeds.
+    legal_actions:
+      - open_pull_request
+  curator_request:
+    description: Request missing repo wiring or facilities from the repo curator.
+    legal_actions:
+      - create_curator_request
+
+control_plane:
+  version: 1
+  session:
+    program: "{{SLUG}}"
+    binding: identity_channel_program
+    concurrency:
+      policy: single_active
+      on_busy: reject_with_status
+  free_text:
+    control: ask
+    bind:
+      query: "$text"
+  controls:
+    ask:
+      title: Ask
+      aliases: ["/ask"]
+      args:
+        query:
+          type: string
+          required: true
+          capture: rest
+      dispatch:
+        - op: create_session
+          as: session
+          program: "{{SLUG}}"
+          domain_context:
+            query: "$args.query"
+        - op: trigger
+          session: "$session.id"
+          channel: user_text
+          payload: "$args.query"
+          mode: async
+    abort:
+      title: Abort run
+      aliases: ["/abort", "/stop"]
+      availability:
+        when: "active_session.running"
+      dispatch:
+        - op: abort_session
+          session: "$active_session.id"
+      presentation:
+        priority: destructive
+        confirm: true
+    new:
+      title: New session
+      aliases: ["/new", "/reset", "/restart"]
+      dispatch:
+        - op: create_session
+          as: session
+          program: "{{SLUG}}"
+      presentation:
+        priority: secondary
+    history:
+      title: Recent sessions
+      aliases: ["/history", "/recent"]
+      dispatch:
+        - op: list_sessions
+          as: sessions
+      presentation:
+        priority: secondary
+    status:
+      title: Status
+      aliases: ["/status"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: render_session
+          session: "$active_session.id"
+          view: status
+      presentation:
+        priority: contextual
+    help:
+      title: Help
+      aliases: ["/help"]
+      dispatch:
+        - op: render_controls
+      presentation:
+        priority: secondary

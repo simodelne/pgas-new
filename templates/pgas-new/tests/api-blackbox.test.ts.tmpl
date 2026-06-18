@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest';
+import {
+  appTransport,
+  createPgasClient,
+  fetchTransport,
+  normalizeSessionDomain,
+} from '@simodelne/pgas-server/client.js';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
+
+describe('{{SLUG}} API black-box contract', () => {
+  it('can construct API clients for app and fetch transports', async () => {
+    const server = await createPgasServer({
+      programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
+      devMode: true,
+    });
+
+    const appClient = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+    const httpClient = createPgasClient(fetchTransport({ baseUrl: 'http://127.0.0.1:0', token: 'dev-token' }));
+    const normalized = normalizeSessionDomain({});
+
+    expect(appClient).toBeDefined();
+    expect(httpClient).toBeDefined();
+    expect(normalized).toBeDefined();
+  });
+});

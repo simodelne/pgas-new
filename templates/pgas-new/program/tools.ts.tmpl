@@ -1,0 +1,35 @@
+type ToolRegistryLike = {
+  register?: (name: string, definition: unknown) => void;
+};
+
+const semanticTools = [
+  'repo_read_file',
+  'repo_list_files',
+  'load_wiring_manifest',
+  'plan_artifacts',
+  'write_scaffold_artifacts',
+  'npm_install',
+  'npm_typecheck',
+  'npm_test',
+  'run_static_verification',
+  'run_api_blackbox_verification',
+  'run_live_provider_verification',
+  'git_status',
+  'git_rebase_latest',
+  'open_pull_request',
+  'session_new',
+  'session_abort_current',
+  'session_status',
+  'session_history',
+  'session_resume',
+  'session_help',
+] as const;
+
+export function register{{PASCAL_NAME}}Tools(registry: ToolRegistryLike): void {
+  for (const name of semanticTools) {
+    registry.register?.(name, {
+      description: `{{NAME}} semantic tool: ${name}`,
+      arbitrary_bash: false,
+    });
+  }
+}

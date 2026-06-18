@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest';
+import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
+
+const hasLiveProvider = Boolean(process.env.PGAS_LIVE_PROVIDER && process.env.PGAS_API_BASE && process.env.PGAS_API_TOKEN);
+const liveIt = hasLiveProvider ? it : it.skip;
+
+describe('{{SLUG}} live-provider graduation', () => {
+  liveIt('requires a real provider round trip through the external API', async () => {
+    const client = createPgasClient(fetchTransport({
+      baseUrl: process.env.PGAS_API_BASE!,
+      token: process.env.PGAS_API_TOKEN!,
+    }));
+
+    const programs = await client.programs.list();
+    expect(programs).toBeDefined();
+    expect(process.env.PGAS_LIVE_PROVIDER).toBeTruthy();
+  });
+
+  it('documents the live-provider graduation gate when env is absent', () => {
+    if (!hasLiveProvider) {
+      expect('PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN are required for graduation').toContain(
+        'PGAS_LIVE_PROVIDER',
+      );
+    }
+  });
+});

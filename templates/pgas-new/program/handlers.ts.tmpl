@@ -1,0 +1,22 @@
+export const handlers = {
+  record_user_note(payload: unknown) {
+    return {
+      kind: 'note_recorded',
+      payload,
+    };
+  },
+
+  create_curator_request(payload: unknown) {
+    return {
+      kind: 'curator_request_prepared',
+      payload,
+    };
+  },
+
+  write_scaffold_artifacts(payload: unknown) {
+    return {
+      kind: 'artifact_write_requested',
+      payload,
+    };
+  },
+};
