@@ -14,27 +14,42 @@
 
 ---
 
-## Current state (as of 2026-06-06)
+## Current state (as of 2026-06-18)
 
-- **Released:** `main` @ plugin **v1.0.0** (first stable; manifest name `pgas`). Tags
-  `v0.3.0`, `v0.3.1`, `v1.0.0` + GitHub Release v1.0.0. Architecture paper at
-  `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (pgas#254 contract, adapted to tooling).
-- **Open issues:** none.
-- **CI gates live (6 suites):** `plugin-manifest`, `template-render`, `auth-scaffold`,
-  `server-typecheck` (real install + tsc), **`spec-load`** (REAL `loadSpecWithPatterns`),
-  and **`program-smoke`** (boots the scaffolded program on the real engine in-process via
-  the sanctioned `setAuthorDriver` scripted-author seam and drives it through the whole
-  mode graph to `Completed` — render→load→typecheck→RUN all gated).
-  `PLUGIN_NPM_TOKEN` powers the three real gates in CI.
-- **Engine:** `@simodelne/pgas-*` on GitHub Packages, currently **v1.13.0**; scaffold
-  default pin `^1.13.0`. Out of scope to edit from here.
-- **Self-hosted pod:** the 70.69.192.6:19439 pod is GONE (connection refused 2026-06-05 —
-  rotated). GitHub CI now covers the real gates it existed for; ask the owner for new
-  coordinates if pod validation is wanted again.
-- **Wave 2 DONE:** the program-smoke gate shipped (#20) and immediately caught three
-  run-level template defects, fixed in v0.3.1 (see log 2026-06-06).
+- **Active branch:** `feat/pgas-new-foundry`.
+- **Direction:** this repo is being converted from the older `claude-pgas-plugin`
+  scaffold plugin into `pgas-new`, a PGAS-specific TypeScript/Node foundry for
+  creating governed PGAS programs.
+- **Current engine target:** latest checked `@simodelne/pgas-server` package is
+  `2.8.3`; generated code uses public `pgas-server` entrypoints only.
+- **Implemented static surface:** domain model, gates, wiring manifest parser,
+  artifact planner, renderer, existing-repo curator requests, verification
+  evidence, CLI/session commands, generated REPL/control-plane scaffold, and
+  generated deterministic/API/live test files.
+- **Current verification:** `npm test` passes locally on 2026-06-18: typecheck,
+  Vitest 11 files / 48 tests, and `tests/pgas-new-static.test.sh` including a
+  generated scaffold install/typecheck/test when GitHub Packages access is
+  available.
+- **Still pending:** user-selected live graduation with a real provider round
+  trip through the generated external API, followed by rebase on latest target
+  repo state, post-rebase static verification, and PR opening.
+- **Do not touch:** `.remember/` is an unrelated untracked session-memory
+  directory in this checkout.
 
 ## Decision log (newest first)
+
+### 2026-06-18 — pgas-new foundry branch replaces the v1 scaffold surface
+The approved design became executable code on `feat/pgas-new-foundry`. The new
+surface is PGAS-specific, TypeScript/Node only, and aligned to
+`@simodelne/pgas-server@2.8.3` public exports. Existing-repo attachment is
+manifest-bound at `.pgas/wiring.yml`; without the manifest, `pgas-new` refuses
+writes and emits a curator request. The generated control plane now includes
+REPL/session lifecycle controls (`ask`, `new`, `abort`, `history`, `status`,
+`resume`, `help`), while the CLI exposes matching `session` commands. Notebook
+state is the durable memory mechanism for user ideas, research, decisions, and
+artifact/graduation evidence; `ActivationAction` is reserved for static
+advisory procedures and is not the primary memory mechanism. Static verification
+is green; live graduation remains explicitly pending.
 
 ### 2026-06-06 — v1.0.0: first stable cut + architecture paper
 Criterion for 1.0: every scaffold surface gated by EXECUTION against the real engine

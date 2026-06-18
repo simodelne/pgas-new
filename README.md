@@ -14,6 +14,11 @@ The generated code targets the current public `@simodelne/pgas-server` v2 surfac
 
 Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`. Without that fixed-path manifest, `pgas-new` refuses writes and produces a curator request.
 
+## Docs
+
+- [PGAS-new architecture](./docs/PGAS-NEW-ARCHITECTURE.md)
+- [Live graduation procedure](./docs/PGAS-NEW-LIVE-GRADUATION.md)
+
 ## Commands
 
 ```bash
