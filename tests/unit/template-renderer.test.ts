@@ -9,6 +9,7 @@ describe('template renderer', () => {
   it('fails on missing and unused tokens', () => {
     expect(() => renderTemplate('hello {{NAME}}', {})).toThrow(/missing template token: NAME/);
     expect(() => renderTemplate('hello', { NAME: 'pgas-new' })).toThrow(/unused template token: NAME/);
+    expect(() => renderTemplate('hello {{Slug}}', {})).toThrow(/unrendered template token remains/);
     expect(renderTemplate('hello {{NAME}}', { NAME: 'pgas-new' })).toBe('hello pgas-new');
   });
 
@@ -46,6 +47,7 @@ describe('template renderer', () => {
       const server = readFileSync(join(outDir, 'src/server.ts'), 'utf8');
       const repl = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
       const apiTest = readFileSync(join(outDir, 'tests/api-blackbox.test.ts'), 'utf8');
+      const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
       expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^2.8.3"');
@@ -63,6 +65,13 @@ describe('template renderer', () => {
       expect(apiTest).toContain('appTransport');
       expect(apiTest).toContain('fetchTransport');
       expect(apiTest).toContain('normalizeSessionDomain');
+      expect(apiTest).toContain('await client.programs.list()');
+      expect(apiTest).toContain('await client.sessions.create');
+      expect(apiTest).toContain('await client.sessions.get');
+      expect(apiTest).toContain('await client.sessions.world');
+      expect(liveTest).toContain('await client.sessions.create');
+      expect(liveTest).toContain('await client.sessions.trigger');
+      expect(liveTest).toContain('await client.sessions.get');
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
       expect(deterministicTest).toContain('createTestHarness');
 

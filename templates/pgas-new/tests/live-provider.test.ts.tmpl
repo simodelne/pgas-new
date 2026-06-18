@@ -11,8 +11,20 @@ describe('{{SLUG}} live-provider graduation', () => {
       token: process.env.PGAS_API_TOKEN!,
     }));
 
-    const programs = await client.programs.list();
-    expect(programs).toBeDefined();
+    const session = await client.sessions.create({
+      program: '{{SLUG}}',
+      domain_context: {
+        query: `live provider graduation via ${process.env.PGAS_LIVE_PROVIDER}`,
+      },
+    });
+    const result = await client.sessions.trigger(session.sessionId, {
+      channel: 'user_text',
+      payload: 'confirm pgas-new live-provider graduation',
+    });
+    const envelope = await client.sessions.get(session.sessionId);
+
+    expect(result).toBeDefined();
+    expect(envelope.sessionId).toBe(session.sessionId);
     expect(process.env.PGAS_LIVE_PROVIDER).toBeTruthy();
   });
 

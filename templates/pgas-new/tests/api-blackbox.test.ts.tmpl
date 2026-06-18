@@ -9,18 +9,27 @@ import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
 
 describe('{{SLUG}} API black-box contract', () => {
-  it('can construct API clients for app and fetch transports', async () => {
+  it('creates and reads a session through the in-process external API transport', async () => {
     const server = await createPgasServer({
       programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
       devMode: true,
     });
 
-    const appClient = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
     const httpClient = createPgasClient(fetchTransport({ baseUrl: 'http://127.0.0.1:0', token: 'dev-token' }));
-    const normalized = normalizeSessionDomain({});
 
-    expect(appClient).toBeDefined();
-    expect(httpClient).toBeDefined();
+    const programs = await client.programs.list();
+    const session = await client.sessions.create({
+      program: '{{SLUG}}',
+      domain_context: { query: 'static black-box verification' },
+    });
+    const envelope = await client.sessions.get(session.sessionId);
+    const world = await client.sessions.world(session.sessionId);
+    const normalized = normalizeSessionDomain(world.domain);
+
+    expect(programs).toBeDefined();
+    expect(envelope.sessionId).toBe(session.sessionId);
     expect(normalized).toBeDefined();
+    expect(httpClient).toBeDefined();
   });
 });
