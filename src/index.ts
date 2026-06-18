@@ -43,3 +43,14 @@ export {
   type PlannedArtifact,
   type ProgramIdentity,
 } from "./pgas-new/artifact-plan.js";
+
+export {
+  renderMissingWiringRequest,
+  renderRegistrationRequest,
+  type MissingWiringRequestOptions,
+} from "./pgas-new/curator-request.js";
+
+export {
+  prepareExistingRepoAttachment,
+  type ExistingRepoAttachmentResult,
+} from "./pgas-new/existing-repo.js";
