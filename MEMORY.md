@@ -16,8 +16,9 @@ decisions. It is not a changelog and not a session handoff.
 - Existing-repo attachment requires fixed `.pgas/wiring.yml`. Without a valid
   manifest, `pgas-new` must not write to that repo and may create a curator
   request.
-- Static implementation is in progress on this branch. Live graduation is still
-  pending and must be user-selected before PR graduation.
+- Static implementation and static verification are complete on this branch:
+  `npm test` passed on 2026-06-18 after focused re-review. Live graduation is
+  still pending and must be user-selected before PR graduation.
 - Do not touch `.remember/`; it is unrelated untracked session memory in this
   checkout.
 
@@ -44,6 +45,14 @@ Generated specs should not let a tool call directly manufacture success by
 setting `*_passed` booleans. Verification actions record status and evidence ids;
 mode transitions check those state fields.
 
+### 2026-06-18 - Spec, model, and gate contracts stay aligned
+
+The generated PGAS spec, TypeScript model, and local gate checks now share the
+same state facts for artifact approval, architecture readiness, research
+authorization, and live-provider intent. Default `npm test` includes the
+manifest/legacy-surface cleanup gate, and the public-import scan uses the
+TypeScript AST rather than regex-only `from` import matching.
+
 ### 2026-06-18 - Notebook is durable program state
 
 User inputs, ideas, design notes, and evidence belong in the notebook-backed
@@ -52,7 +61,6 @@ but it is not the primary memory mechanism for `pgas-new`.
 
 ## Pending Before Graduation
 
-- Run full local static verification after the current cleanup.
 - Conduct a real-provider live test through the generated external API.
 - Rebase the graduation branch on the latest target branch.
 - Rerun static verification after rebase.
