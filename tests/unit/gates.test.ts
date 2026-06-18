@@ -27,9 +27,12 @@ function existingRepoState(): PgasNewState {
       ...initial.program,
       slug: 'legal-rag',
       name: 'Legal RAG',
+      architecture_ready: true,
     },
     artifact_plan: {
       status: 'approved',
+      approved: true,
+      write_authorized: true,
       artifacts: [],
     },
   };
@@ -56,6 +59,7 @@ describe('pgas-new gates', () => {
         ...written.graduation,
         static_verification: 'passed',
         live_provider_intent: true,
+        ready_for_live: true,
       },
     } satisfies PgasNewState;
     expect(canTransition(withMode(staticPassed, 'static_verify'), 'static_verify', 'live_verify')).toMatchObject({ allowed: true });
@@ -183,6 +187,42 @@ describe('pgas-new gates', () => {
     expect(legalActionsForMode(standalone, 'repo_targeting')).toContain('authorize_standalone_target');
   });
 
+  it('requires architecture readiness before scaffold planning', () => {
+    const state = {
+      ...withMode(existingRepoState(), 'architecture_design'),
+      program: { ...existingRepoState().program, architecture_ready: false },
+    } satisfies PgasNewState;
+
+    expect(canTransition(state, 'architecture_design', 'scaffold_plan')).toEqual({
+      allowed: false,
+      reason: 'scaffold_plan_requires_architecture_ready',
+    });
+
+    expect(canTransition({ ...state, program: { ...state.program, architecture_ready: true } }, 'architecture_design', 'scaffold_plan')).toEqual({
+      allowed: true,
+    });
+  });
+
+  it('requires complete artifact approval before branch writes', () => {
+    const draft = {
+      ...withMode(existingRepoState(), 'scaffold_plan'),
+      artifact_plan: { status: 'draft', approved: false, write_authorized: false, artifacts: [] },
+    } satisfies PgasNewState;
+    const approvedButNotWriteAuthorized = {
+      ...draft,
+      artifact_plan: { status: 'approved', approved: true, write_authorized: false, artifacts: [] },
+    } satisfies PgasNewState;
+
+    expect(canTransition(draft, 'scaffold_plan', 'branch_write')).toEqual({
+      allowed: false,
+      reason: 'branch_write_requires_approved_artifact_plan',
+    });
+    expect(canTransition(approvedButNotWriteAuthorized, 'scaffold_plan', 'branch_write')).toEqual({
+      allowed: false,
+      reason: 'branch_write_requires_artifact_write_authorization',
+    });
+  });
+
   it('requires successful rebase before post-rebase static verification action', () => {
     const state = withMode(existingRepoState(), 'rebase_verify');
 
@@ -274,6 +314,19 @@ describe('pgas-new gates', () => {
       allowed: false,
       reason: 'live_verify_requires_live_provider_intent',
     });
+    const intentWithoutReady = {
+      ...staticPassed,
+      graduation: { ...staticPassed.graduation, live_provider_intent: true, ready_for_live: false },
+    } satisfies PgasNewState;
+    expect(canTransition(intentWithoutReady, 'static_verify', 'live_verify')).toEqual({
+      allowed: false,
+      reason: 'live_verify_requires_ready_for_live',
+    });
+    const ready = {
+      ...staticPassed,
+      graduation: { ...staticPassed.graduation, live_provider_intent: true, ready_for_live: true },
+    } satisfies PgasNewState;
+    expect(canTransition(ready, 'static_verify', 'live_verify')).toEqual({ allowed: true });
     const staticPassedInLiveMode = withMode(staticPassed, 'live_verify');
     expect(legalActionsForMode(staticPassedInLiveMode, 'live_verify')).not.toContain('run_api_blackbox_verification');
     expect(() => assertActionAllowed(staticPassedInLiveMode, 'live_verify', 'run_api_blackbox_verification')).toThrow(

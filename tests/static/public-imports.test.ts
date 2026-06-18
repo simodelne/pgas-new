@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import {
   isAllowedPgasServerImport,
@@ -37,6 +38,22 @@ describe('generated public PGAS imports', () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  it('detects side-effect, dynamic, require, and export module specifiers', () => {
+    expect(
+      importSpecifiers(`
+        import '@simodelne/pgas-server/testing.js';
+        const client = await import('@simodelne/pgas-server/client.js');
+        const routes = require('@simodelne/pgas-server/routes/index.js');
+        export { x } from '@simodelne/pgas-server/plugin.js';
+      `),
+    ).toEqual([
+      '@simodelne/pgas-server/testing.js',
+      '@simodelne/pgas-server/client.js',
+      '@simodelne/pgas-server/routes/index.js',
+      '@simodelne/pgas-server/plugin.js',
+    ]);
+  });
 });
 
 function tsFiles(root: string): string[] {
@@ -55,5 +72,31 @@ function tsFiles(root: string): string[] {
 }
 
 function importSpecifiers(body: string): string[] {
-  return [...body.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((match) => match[1]);
+  const sourceFile = ts.createSourceFile('generated.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const specifiers: string[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    }
+
+    if (
+      ts.isCallExpression(node) &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteral(node.arguments[0]) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+    ) {
+      specifiers.push(node.arguments[0].text);
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return specifiers;
 }

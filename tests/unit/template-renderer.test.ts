@@ -121,8 +121,11 @@ describe('template renderer', () => {
       expect(spec).toContain('notebook.entries');
       expect(spec).toContain('notebook.pins');
       expect(spec).toContain('pin_notebook_note');
+      expect(spec).toContain('confirm_research_scope');
+      expect(spec).toContain('record_user_requested_research');
       expect(spec).toContain('session_abort_current');
       expect(spec).toContain('authorize_existing_repo_target');
+      expect(spec).toContain('confirm_live_provider_intent');
       expect(spec).toContain('run_rebase_static_verification');
       expect(tests.join('\n')).toContain('real provider round trip through the external API');
       expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
@@ -150,11 +153,21 @@ describe('template renderer', () => {
       expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
       expect(parsed.schema['repo.write_authorized']).toBe('boolean');
       expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+      expect(parsed.schema['intake.research_allowed']).toBe('boolean');
       expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
+      expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
       expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
       expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
       expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
+      expect(parsed.proceed_to.run_static_verification).toBeUndefined();
+      expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
       expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
+      expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.research_allowed' }]),
+      );
+      expect(parsed.modes.architecture_design.preconditions?.web_research).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.research_allowed' }]),
+      );
       expect(parsed.modes.repo_targeting.preconditions?.authorize_existing_repo_target).toEqual(
         expect.arrayContaining([
           { kind: 'FieldEquals', path: 'repo.wiring_manifest.status', value: 'valid' },
@@ -165,19 +178,35 @@ describe('template renderer', () => {
         expect.arrayContaining([{ kind: 'FieldTruthy', path: 'repo.write_authorized' }]),
       );
       expect(parsed.modes.branch_write.preconditions?.write_scaffold_artifacts).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' }]),
+        expect.arrayContaining([
+          { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' },
+          { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' },
+        ]),
       );
       expect(parsed.modes.scaffold_plan.transitions).toEqual(
         expect.arrayContaining([
-          { target: 'branch_write', guard: { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' } },
+          { target: 'branch_write', guard: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
         ]),
       );
       expect(parsed.modes.static_verify.transitions).toEqual(
         expect.arrayContaining([
           {
             target: 'live_verify',
-            guard: { kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' },
+            guard: { kind: 'FieldTruthy', path: 'graduation.ready_for_live' },
           },
+        ]),
+      );
+      expect(parsed.modes.static_verify.preconditions?.confirm_live_provider_intent).toEqual(
+        expect.arrayContaining([{ kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' }]),
+      );
+      expect(parsed.modes.live_verify.preconditions?.run_live_provider_verification).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'graduation.live_provider_intent' }]),
+      );
+      expect(parsed.action_map.select_repo_target.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'repo.target_kind', from_arg: 'target_kind' }),
+          expect.objectContaining({ path: 'repo.write_authorized', value: false }),
+          expect.objectContaining({ path: 'repo.blocked', value: false }),
         ]),
       );
       expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
@@ -190,6 +219,12 @@ describe('template renderer', () => {
         expect.arrayContaining([
           expect.objectContaining({ path: 'graduation.static_verification', from_arg: 'status' }),
           expect.objectContaining({ path: 'graduation.static_evidence_id', from_arg: 'evidence_id' }),
+        ]),
+      );
+      expect(parsed.action_map.confirm_live_provider_intent.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'graduation.live_provider_intent', value: true }),
+          expect.objectContaining({ path: 'graduation.ready_for_live', value: true }),
         ]),
       );
     } finally {

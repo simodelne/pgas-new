@@ -22,8 +22,11 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_user_note, pin_notebook_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, widget_output]
+    preconditions:
+      web_research:
+        - { kind: FieldTruthy, path: intake.research_allowed }
     transitions:
       - target: repo_targeting
         guard: { kind: FieldTruthy, path: intake.mandate }
@@ -47,6 +50,9 @@ modes:
   architecture_design:
     vocabulary: [design_architecture, record_user_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [widget_output]
+    preconditions:
+      web_research:
+        - { kind: FieldTruthy, path: intake.research_allowed }
     transitions:
       - target: scaffold_plan
         guard: { kind: FieldTruthy, path: program.architecture_ready }
@@ -58,25 +64,34 @@ modes:
         - { kind: FieldTruthy, path: repo.write_authorized }
     transitions:
       - target: branch_write
-        guard: { kind: FieldTruthy, path: artifact_plan.write_authorized }
+        guard: { kind: FieldEquals, path: artifact_plan.status, value: approved }
   branch_write:
     vocabulary: [write_scaffold_artifacts, git_status, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [widget_output]
     preconditions:
       write_scaffold_artifacts:
+        - { kind: FieldEquals, path: artifact_plan.status, value: approved }
         - { kind: FieldTruthy, path: artifact_plan.write_authorized }
     transitions:
       - target: static_verify
         guard: { kind: FieldTruthy, path: artifacts.written }
   static_verify:
-    vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification, confirm_live_provider_intent, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [widget_output]
+    preconditions:
+      confirm_live_provider_intent:
+        - { kind: FieldEquals, path: graduation.static_verification, value: passed }
     transitions:
       - target: live_verify
-        guard: { kind: FieldEquals, path: graduation.static_verification, value: passed }
+        guard: { kind: FieldTruthy, path: graduation.ready_for_live }
   live_verify:
     vocabulary: [run_api_blackbox_verification, run_live_provider_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [widget_output]
+    preconditions:
+      run_api_blackbox_verification:
+        - { kind: FieldTruthy, path: graduation.live_provider_intent }
+      run_live_provider_verification:
+        - { kind: FieldTruthy, path: graduation.live_provider_intent }
     transitions:
       - target: rebase_verify
         guard: { kind: FieldEquals, path: graduation.live_verification, value: passed }
@@ -105,13 +120,13 @@ proceed_to:
   design_architecture: scaffold_plan
   approve_artifact_plan: branch_write
   write_scaffold_artifacts: static_verify
-  run_static_verification: live_verify
+  confirm_live_provider_intent: live_verify
   run_live_provider_verification: rebase_verify
   run_rebase_static_verification: pr_graduation
 
 projection:
   intake_intelligence:
-    include: [intake.mandate, notebook.entries, notebook.pins]
+    include: [intake.mandate, intake.research_allowed, intake.research_confirmed, intake.user_requested_research, notebook.entries, notebook.pins]
     exclude: []
   repo_targeting:
     include: [repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.write_authorized, repo.required_facilities_missing]
@@ -126,7 +141,7 @@ projection:
     include: [artifacts.written, artifacts.generated_paths]
     exclude: []
   static_verify:
-    include: [graduation.static_verification, graduation.static_evidence_id]
+    include: [graduation.static_verification, graduation.static_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
     exclude: []
   live_verify:
     include: [graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id]
@@ -156,6 +171,19 @@ ingestion:
 action_map:
   record_user_note: { description: "Record a notebook note.", mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }], channel: widget_output }
   pin_notebook_note: { description: "Pin a notebook note for next-turn projection.", mutations: [{ op: MAppend, path: notebook.pins, from_arg: key }], channel: widget_output }
+  confirm_research_scope:
+    description: "Confirm discretionary web research for the current mandate."
+    mutations:
+      - { op: MSet, path: intake.research_confirmed, value: true }
+      - { op: MSet, path: intake.research_allowed, value: true }
+    channel: widget_output
+  record_user_requested_research:
+    description: "Record user-requested research as authorized."
+    mutations:
+      - { op: MSet, path: intake.user_requested_research, value: true }
+      - { op: MSet, path: intake.research_allowed, value: true }
+      - { op: MAppend, path: research.queries, from_arg: query }
+    channel: widget_output
   web_research: { description: "Run user-confirmed web research.", mutations: [], channel: widget_output }
   session_new: { description: "Control-plane new session command.", mutations: [], channel: widget_output }
   session_abort_current: { description: "Control-plane abort current session command.", mutations: [], channel: widget_output }
@@ -165,7 +193,10 @@ action_map:
   session_help: { description: "Control-plane help command.", mutations: [], channel: widget_output }
   select_repo_target:
     description: "Select standalone or existing-repo target."
-    mutations: [{ op: MSet, path: repo.target_kind, from_arg: target_kind }]
+    mutations:
+      - { op: MSet, path: repo.target_kind, from_arg: target_kind }
+      - { op: MSet, path: repo.write_authorized, value: false }
+      - { op: MSet, path: repo.blocked, value: false }
     channel: widget_output
   authorize_standalone_target:
     description: "Authorize standalone repo writes after target selection."
@@ -193,10 +224,17 @@ action_map:
     description: "Mark architecture ready."
     mutations: [{ op: MSet, path: program.architecture_ready, value: true }]
     channel: widget_output
-  plan_artifacts: { description: "Plan artifacts.", mutations: [{ op: MSet, path: artifact_plan.status, value: draft }], channel: widget_output }
+  plan_artifacts:
+    description: "Plan artifacts."
+    mutations:
+      - { op: MSet, path: artifact_plan.status, value: draft }
+      - { op: MSet, path: artifact_plan.approved, value: false }
+      - { op: MSet, path: artifact_plan.write_authorized, value: false }
+    channel: widget_output
   approve_artifact_plan:
     description: "Approve artifact plan after write authorization."
     mutations:
+      - { op: MSet, path: artifact_plan.status, value: approved }
       - { op: MSet, path: artifact_plan.approved, value: true }
       - { op: MSet, path: artifact_plan.write_authorized, value: true }
     channel: widget_output
@@ -210,6 +248,12 @@ action_map:
     mutations:
       - { op: MSet, path: graduation.static_verification, from_arg: status }
       - { op: MSet, path: graduation.static_evidence_id, from_arg: evidence_id }
+    channel: widget_output
+  confirm_live_provider_intent:
+    description: "Confirm user-selected live-provider graduation after static verification."
+    mutations:
+      - { op: MSet, path: graduation.live_provider_intent, value: true }
+      - { op: MSet, path: graduation.ready_for_live, value: true }
     channel: widget_output
   run_api_blackbox_verification: { description: "Run black-box API verification.", mutations: [], channel: widget_output }
   run_live_provider_verification:
@@ -234,8 +278,13 @@ action_map:
 
 schema:
   intake.mandate: string
+  intake.research_confirmed: boolean
+  intake.user_requested_research: boolean
+  intake.research_allowed: boolean
   notebook.entries: array
   notebook.pins: array
+  research.queries: array
+  research.completed: boolean
   repo.target_kind: string
   repo.blocked: boolean
   repo.write_authorized: boolean
@@ -255,6 +304,7 @@ schema:
   graduation.static_evidence_id: string
   graduation.live_verification: string
   graduation.live_provider_intent: boolean
+  graduation.ready_for_live: boolean
   graduation.live_evidence_id: string
   graduation.rebase_status: string
   graduation.rebase_evidence_id: string

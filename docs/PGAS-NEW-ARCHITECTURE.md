@@ -36,12 +36,12 @@ The state dictionary is the source of truth. Conversation history is not state.
 
 | Mode | Purpose | Main Legal Actions | Exit Gate |
 | --- | --- | --- | --- |
-| `intake_intelligence` | Capture mandate, notebook notes, and confirmed research scope. | `record_user_note`, `web_research`, session controls | Mandate exists. |
+| `intake_intelligence` | Capture mandate, notebook notes, and confirmed research scope. | `record_user_note`, `confirm_research_scope`, `record_user_requested_research`, `web_research`, session controls | Mandate exists. |
 | `repo_targeting` | Choose standalone or existing repo and load wiring manifest. | `select_repo_target`, `authorize_standalone_target`, `load_wiring_manifest`, `authorize_existing_repo_target`, `create_curator_request` | Target authorized, or route to curator. |
 | `architecture_design` | Design the PGAS program and service attachment points. | `design_architecture`, `web_research`, `record_user_note` | Architecture marked ready. |
 | `scaffold_plan` | Produce first-class artifact plan before writes. | `plan_artifacts`, `approve_artifact_plan`, `create_curator_request` | Artifact plan approved. |
 | `branch_write` | Write only planned artifacts. | `write_scaffold_artifacts`, `git_status` | Artifacts written. |
-| `static_verify` | Install/typecheck/test deterministically. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification` | Static verification passed. |
+| `static_verify` | Install/typecheck/test deterministically and confirm live graduation intent. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification`, `confirm_live_provider_intent` | Static verification passed and live-provider intent confirmed. |
 | `live_verify` | Verify through the external API with a real provider. | `run_api_blackbox_verification`, `run_live_provider_verification` | Live verification passed. |
 | `rebase_verify` | Rebase on latest target repo state and rerun static verification. | `git_status`, `git_rebase_latest`, `run_rebase_static_verification` | Post-rebase verification passed. |
 | `pr_graduation` | Open the PR. | `open_pull_request` | Terminal graduation mode. |

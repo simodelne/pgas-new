@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { createNodeCommandRunner, type SpawnImpl } from '../../src/pgas-new/command-runner.js';
+import {
+  createNodeCommandRunner,
+  isSafeGitBranchName,
+  type SpawnImpl,
+} from '../../src/pgas-new/command-runner.js';
 
 interface SpawnCall {
   command: string;
@@ -89,5 +93,31 @@ describe('node command runner', () => {
     expect(result.stderr_excerpt).toContain('fetch failed');
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toEqual(['fetch', 'origin', 'main', '--prune']);
+  });
+
+  it('rejects option-like or unsafe branch names before invoking git', async () => {
+    const { calls, spawn } = fakeSpawn([{ code: 0, stdout: 'must not run' }]);
+    const runner = createNodeCommandRunner(spawn);
+
+    await expect(runner.gitRebaseLatest({ cwd: '/tmp/repo', branch: '--upload-pack=evil' })).resolves.toMatchObject({
+      command_id: 'gitRebaseLatest',
+      exit_code: 1,
+      stderr_excerpt: 'invalid git branch name: --upload-pack=evil',
+    });
+    await expect(runner.gitRebaseLatest({ cwd: '/tmp/repo', branch: 'feature bad' })).resolves.toMatchObject({
+      exit_code: 1,
+      stderr_excerpt: 'invalid git branch name: feature bad',
+    });
+    expect(calls).toEqual([]);
+  });
+
+  it('validates branch names conservatively', () => {
+    expect(isSafeGitBranchName('main')).toBe(true);
+    expect(isSafeGitBranchName('release/2026-06-18')).toBe(true);
+    expect(isSafeGitBranchName('-main')).toBe(false);
+    expect(isSafeGitBranchName('feature bad')).toBe(false);
+    expect(isSafeGitBranchName('feature..bad')).toBe(false);
+    expect(isSafeGitBranchName('feature@{bad')).toBe(false);
+    expect(isSafeGitBranchName('feature.lock')).toBe(false);
   });
 });

@@ -39,6 +39,8 @@ export const PGAS_NEW_ACTIONS = [
   'session_help',
   'record_user_note',
   'pin_notebook_note',
+  'confirm_research_scope',
+  'record_user_requested_research',
   'web_research',
   'select_repo_target',
   'authorize_standalone_target',
@@ -53,6 +55,7 @@ export const PGAS_NEW_ACTIONS = [
   'npm_typecheck',
   'npm_test',
   'run_static_verification',
+  'confirm_live_provider_intent',
   'run_api_blackbox_verification',
   'run_live_provider_verification',
   'git_status',
@@ -78,6 +81,7 @@ export interface PgasNewState {
     mandate?: string;
     research_confirmed: boolean;
     user_requested_research: boolean;
+    research_allowed: boolean;
   };
   notebook: {
     entries: string[];
@@ -103,9 +107,12 @@ export interface PgasNewState {
     runtime: 'typescript-node';
     slug?: string;
     name?: string;
+    architecture_ready: boolean;
   };
   artifact_plan: {
     status: PlanningStatus;
+    approved: boolean;
+    write_authorized: boolean;
     artifacts: unknown[];
   };
   artifacts: {
@@ -118,6 +125,7 @@ export interface PgasNewState {
     rebase_status: VerificationStatus;
     rebase_verification: VerificationStatus;
     live_provider_intent: boolean;
+    ready_for_live: boolean;
     static_evidence_id?: string;
     live_evidence_id?: string;
     rebase_evidence_id?: string;
@@ -137,6 +145,7 @@ export function createInitialState(): PgasNewState {
     intake: {
       research_confirmed: false,
       user_requested_research: false,
+      research_allowed: false,
     },
     notebook: {
       entries: [],
@@ -157,9 +166,12 @@ export function createInitialState(): PgasNewState {
     },
     program: {
       runtime: 'typescript-node',
+      architecture_ready: false,
     },
     artifact_plan: {
       status: 'none',
+      approved: false,
+      write_authorized: false,
       artifacts: [],
     },
     artifacts: {
@@ -172,6 +184,7 @@ export function createInitialState(): PgasNewState {
       rebase_status: 'pending',
       rebase_verification: 'pending',
       live_provider_intent: false,
+      ready_for_live: false,
     },
     curator_requests: {
       requests: [],

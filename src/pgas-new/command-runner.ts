@@ -65,6 +65,9 @@ export function createNodeCommandRunner(spawnImpl: SpawnImpl = spawn as unknown 
     gitStatus: (request) => runSemanticCommand('gitStatus', request, { command: 'git', args: ['status', '--short'] }, spawnImpl),
     gitRebaseLatest: (request) => {
       const branch = request.branch ?? 'main';
+      if (!isSafeGitBranchName(branch)) {
+        return Promise.resolve(invalidCommandResult('gitRebaseLatest', request, `invalid git branch name: ${branch}`));
+      }
       return runSemanticCommand(
         'gitRebaseLatest',
         request,
@@ -79,6 +82,22 @@ export function createNodeCommandRunner(spawnImpl: SpawnImpl = spawn as unknown 
     },
     ghCreatePr: (request) => runSemanticCommand('ghCreatePr', request, { command: 'gh', args: ['pr', 'create', '--fill'] }, spawnImpl),
   };
+}
+
+export function isSafeGitBranchName(branch: string): boolean {
+  if (branch.length === 0 || branch.startsWith('-') || branch.endsWith('/') || branch.endsWith('.')) {
+    return false;
+  }
+
+  if (/[\s\0~^:?*[\]\\]/u.test(branch)) {
+    return false;
+  }
+
+  if (branch.includes('..') || branch.includes('//') || branch.includes('@{')) {
+    return false;
+  }
+
+  return branch.split('/').every((part) => part.length > 0 && part !== '.' && part !== '..' && !part.endsWith('.lock'));
 }
 
 async function runSemanticCommand(
@@ -159,4 +178,19 @@ function excerpt(value: string): string {
   }
 
   return value.slice(-MAX_EXCERPT_LENGTH);
+}
+
+function invalidCommandResult(
+  commandId: SemanticCommandId,
+  request: CommandRequest,
+  message: string,
+): CommandResult {
+  return {
+    command_id: commandId,
+    cwd: request.cwd,
+    exit_code: 1,
+    duration_ms: 0,
+    stdout_excerpt: '',
+    stderr_excerpt: message,
+  };
 }

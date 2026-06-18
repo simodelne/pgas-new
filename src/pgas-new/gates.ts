@@ -23,7 +23,14 @@ const SESSION_CONTROL_ACTIONS = [
 ] as const satisfies readonly PgasNewAction[];
 
 const BASE_ACTIONS_BY_MODE: ActionSet = {
-  intake_intelligence: [...SESSION_CONTROL_ACTIONS, 'record_user_note', 'pin_notebook_note', 'web_research'],
+  intake_intelligence: [
+    ...SESSION_CONTROL_ACTIONS,
+    'record_user_note',
+    'pin_notebook_note',
+    'confirm_research_scope',
+    'record_user_requested_research',
+    'web_research',
+  ],
   repo_targeting: [
     ...SESSION_CONTROL_ACTIONS,
     'select_repo_target',
@@ -35,7 +42,14 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
   architecture_design: [...SESSION_CONTROL_ACTIONS, 'design_architecture', 'web_research', 'record_user_note'],
   scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'approve_artifact_plan', 'create_curator_request'],
   branch_write: [...SESSION_CONTROL_ACTIONS, 'write_scaffold_artifacts', 'git_status'],
-  static_verify: [...SESSION_CONTROL_ACTIONS, 'npm_install', 'npm_typecheck', 'npm_test', 'run_static_verification'],
+  static_verify: [
+    ...SESSION_CONTROL_ACTIONS,
+    'npm_install',
+    'npm_typecheck',
+    'npm_test',
+    'run_static_verification',
+    'confirm_live_provider_intent',
+  ],
   live_verify: [...SESSION_CONTROL_ACTIONS, 'run_api_blackbox_verification', 'run_live_provider_verification'],
   rebase_verify: [...SESSION_CONTROL_ACTIONS, 'git_status', 'git_rebase_latest', 'run_rebase_static_verification'],
   pr_graduation: [...SESSION_CONTROL_ACTIONS, 'open_pull_request'],
@@ -84,8 +98,9 @@ export function canTransition(
 
   switch (transition) {
     case 'intake_intelligence->repo_targeting':
-    case 'architecture_design->scaffold_plan':
       return allow();
+    case 'architecture_design->scaffold_plan':
+      return state.program.architecture_ready ? allow() : deny('scaffold_plan_requires_architecture_ready');
     case 'repo_targeting->architecture_design':
       return canEnterArchitectureDesign(state);
     case 'repo_targeting->curator_request':
@@ -117,7 +132,7 @@ function canUseAction(state: PgasNewState, mode: PgasNewMode, action: PgasNewAct
 }
 
 function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: PgasNewAction): GateResult {
-  if (action === 'web_research' && !state.intake.research_confirmed && !state.intake.user_requested_research) {
+  if (action === 'web_research' && !isResearchAllowed(state)) {
     return deny('research_requires_user_confirmation');
   }
 
@@ -146,6 +161,10 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
     (action === 'run_api_blackbox_verification' || action === 'run_live_provider_verification')
   ) {
     return canEnterLiveVerify(state);
+  }
+
+  if (action === 'confirm_live_provider_intent' && state.graduation.static_verification !== 'passed') {
+    return deny('live_provider_intent_requires_static_passed');
   }
 
   if (action === 'run_rebase_static_verification' && state.graduation.rebase_status !== 'passed') {
@@ -207,8 +226,12 @@ function canEnterBranchWrite(state: PgasNewState): GateResult {
     }
   }
 
-  if (state.artifact_plan.status !== 'approved') {
+  if (state.artifact_plan.status !== 'approved' || !state.artifact_plan.approved) {
     return deny('branch_write_requires_approved_artifact_plan');
+  }
+
+  if (!state.artifact_plan.write_authorized) {
+    return deny('branch_write_requires_artifact_write_authorization');
   }
 
   return allow();
@@ -221,6 +244,10 @@ function canEnterLiveVerify(state: PgasNewState): GateResult {
 
   if (!state.graduation.live_provider_intent) {
     return deny('live_verify_requires_live_provider_intent');
+  }
+
+  if (!state.graduation.ready_for_live) {
+    return deny('live_verify_requires_ready_for_live');
   }
 
   return allow();
@@ -240,6 +267,10 @@ function shouldRouteToCurator(state: PgasNewState): boolean {
       state.repo.wiring_manifest.status === 'invalid' ||
       state.repo.required_facilities_missing.length > 0)
   );
+}
+
+function isResearchAllowed(state: PgasNewState): boolean {
+  return state.intake.research_allowed || state.intake.research_confirmed || state.intake.user_requested_research;
 }
 
 function baseActionsForMode(mode: PgasNewMode): readonly PgasNewAction[] {
