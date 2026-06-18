@@ -70,6 +70,28 @@ describe('pgas-new CLI', () => {
     }
   });
 
+  it('rejects unsafe slugs before rendering files', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pgas-new-cli-unsafe-'));
+    const outDir = join(root, 'out');
+    try {
+      const result = await runCli([
+        'render-standalone',
+        '--slug',
+        '../../../../pgas-new-escape',
+        '--name',
+        'PGAS New',
+        '--out',
+        outDir,
+      ]);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('invalid --slug');
+      expect(readDirSafe(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('validates manifests and plans existing repo attachment without writes', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'pgas-new-cli-attach-'));
     try {

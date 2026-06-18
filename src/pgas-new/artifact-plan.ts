@@ -21,6 +21,20 @@ export interface ProgramIdentity {
   name: string;
 }
 
+const SAFE_PROGRAM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function validateProgramIdentity(program: ProgramIdentity): ProgramIdentity {
+  if (!SAFE_PROGRAM_SLUG.test(program.slug)) {
+    throw new Error('invalid --slug: use lowercase letters, numbers, and single hyphens only');
+  }
+
+  if (program.name.trim().length === 0) {
+    throw new Error('invalid --name: value must not be empty');
+  }
+
+  return program;
+}
+
 export interface PlannedArtifact {
   kind: ArtifactKind;
   path: string;
@@ -41,10 +55,11 @@ export interface ArtifactPlan {
 }
 
 export function createStandaloneArtifactPlan(program: ProgramIdentity): ArtifactPlan {
-  const slug = program.slug;
+  const safeProgram = validateProgramIdentity(program);
+  const slug = safeProgram.slug;
   return {
     target: 'standalone_repo',
-    program,
+    program: safeProgram,
     artifacts: [
       artifact('manifest', FIXED_WIRING_MANIFEST_PATH, 'Declare repository wiring contract for pgas-new.', 'repo_targeting', [
         'parse-wiring-manifest',
@@ -105,14 +120,15 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
 }
 
 export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifest: WiringManifest): ArtifactPlan {
-  const slug = program.slug;
+  const safeProgram = validateProgramIdentity(program);
+  const slug = safeProgram.slug;
   const programsDir = trimSlashes(manifest.paths.programs_dir);
   const pgasNewDir = trimSlashes(manifest.paths.pgas_new_dir);
   const auditDir = trimSlashes(manifest.paths.audit_dir);
 
   return {
     target: 'existing_repo',
-    program,
+    program: safeProgram,
     registration_patch_request: {
       strategy: manifest.registration.strategy,
       requested: true,
