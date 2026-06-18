@@ -36,6 +36,10 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
 };
 
 export function legalActionsForMode(state: PgasNewState, mode: PgasNewMode): PgasNewAction[] {
+  if (state.session.current_mode !== mode) {
+    return [];
+  }
+
   const actions = new Set(baseActionsForMode(mode));
 
   if (mode === 'repo_targeting' && shouldRouteToCurator(state)) {
@@ -50,6 +54,10 @@ export function assertActionAllowed(
   mode: PgasNewMode,
   action: PgasNewAction,
 ): void {
+  if (state.session.current_mode !== mode) {
+    throw new Error('mode_must_match_state_current_mode');
+  }
+
   const actionGate = canUseAction(state, mode, action);
   if (!actionGate.allowed) {
     throw new Error(actionGate.reason);
@@ -61,6 +69,10 @@ export function canTransition(
   from: PgasNewMode,
   to: PgasNewMode,
 ): GateResult {
+  if (state.session.current_mode !== from) {
+    return deny('from_mode_must_match_state_current_mode');
+  }
+
   const transition = `${from}->${to}`;
 
   switch (transition) {
