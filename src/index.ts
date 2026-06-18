@@ -55,3 +55,19 @@ export {
   type ExistingRepoAttachmentOptions,
   type ExistingRepoAttachmentResult,
 } from "./pgas-new/existing-repo.js";
+
+export {
+  runLiveProviderVerification,
+  runPostRebaseVerification,
+  runStaticVerification,
+  createMockCommandRunner,
+  type VerificationEvidence,
+  type VerificationStatus,
+} from "./pgas-new/verify.js";
+
+export {
+  type CommandRequest,
+  type CommandResult,
+  type CommandRunner,
+  type SemanticCommandId,
+} from "./pgas-new/command-runner.js";
