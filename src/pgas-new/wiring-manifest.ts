@@ -1,10 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, posix, sep } from 'node:path';
 import { load } from 'js-yaml';
 import { FIXED_WIRING_MANIFEST_PATH } from './model.js';
 import { PGAS_SERVER_PACKAGE, isAllowedPgasServerImport, isBannedImport } from './version.js';
 
 export const WIRING_MANIFEST_PATH = FIXED_WIRING_MANIFEST_PATH;
+const WIRING_MANIFEST_SCHEMA_VERSION = 1;
+const REPO_KINDS = ['existing_repo', 'standalone_repo'] as const;
+const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'] as const;
+const REGISTRATION_STRATEGIES = ['curator_request'] as const;
+const REQUIRED_VERIFICATION_COMMANDS = ['install', 'typecheck', 'test'] as const;
 
 export interface WiringManifest {
   schema_version: number;
@@ -82,6 +87,14 @@ export function parseWiringManifest(source: string): WiringManifestResult {
   requireString(curator, 'github_owner', errors, 'curator.github_owner');
   requireString(curator, 'github_repo', errors, 'curator.github_repo');
 
+  if (parsed.schema_version !== WIRING_MANIFEST_SCHEMA_VERSION) {
+    errors.push(`schema_version must be ${WIRING_MANIFEST_SCHEMA_VERSION}`);
+  }
+
+  requireEnum(repo, 'kind', REPO_KINDS, errors, 'repo.kind');
+  requireEnum(repo, 'package_manager', PACKAGE_MANAGERS, errors, 'repo.package_manager');
+  requireEnum(registration, 'strategy', REGISTRATION_STRATEGIES, errors, 'registration.strategy');
+
   if (isRecord(pgas)) {
     if (pgas.server_package !== PGAS_SERVER_PACKAGE) {
       errors.push(`pgas.server_package must be ${PGAS_SERVER_PACKAGE}`);
@@ -95,8 +108,31 @@ export function parseWiringManifest(source: string): WiringManifestResult {
         if (isBannedImport(specifier)) {
           errors.push(`pgas.allowed_imports contains banned import: ${specifier}`);
         } else if (!isAllowedPgasServerImport(specifier)) {
-          errors.push(`pgas.allowed_imports contains non-approved import: ${specifier}`);
+          errors.push(`pgas.allowed_imports contains non-approved runtime import: ${specifier}`);
         }
+      }
+    }
+  }
+
+  if (isRecord(paths)) {
+    for (const key of ['programs_dir', 'audit_dir', 'pgas_new_dir'] as const) {
+      const value = paths[key];
+      if (typeof value === 'string' && !isSafeRepoRelativePath(value)) {
+        errors.push(`paths.${key} must be a safe repo-relative path`);
+      }
+    }
+  }
+
+  if (isRecord(verification?.commands)) {
+    for (const command of REQUIRED_VERIFICATION_COMMANDS) {
+      if (typeof verification.commands[command] !== 'string' || verification.commands[command].length === 0) {
+        errors.push(`verification.commands.${command} must be a non-empty string`);
+      }
+    }
+
+    for (const [name, value] of Object.entries(verification.commands)) {
+      if (typeof value !== 'string' || value.length === 0) {
+        errors.push(`verification.commands.${name} must be a non-empty string`);
       }
     }
   }
@@ -129,11 +165,42 @@ function requireNumber(parent: unknown, key: string, errors: string[], label = k
   }
 }
 
+function requireEnum<T extends string>(
+  parent: unknown,
+  key: string,
+  values: readonly T[],
+  errors: string[],
+  label = key,
+): void {
+  const value = isRecord(parent) ? parent[key] : undefined;
+  if (typeof value === 'string' && !(values as readonly string[]).includes(value)) {
+    errors.push(`${label} must be one of: ${values.join(', ')}`);
+  }
+}
+
 function requireStringArray(parent: unknown, key: string, errors: string[], label = key): void {
   const value = isRecord(parent) ? parent[key] : undefined;
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
     errors.push(`missing string array: ${label}`);
   }
+}
+
+export function isSafeRepoRelativePath(path: string): boolean {
+  if (path.length === 0 || path === '.' || path.includes('\0')) {
+    return false;
+  }
+
+  const normalized = path.split(sep).join('/');
+  if (isAbsolute(path) || normalized.startsWith('/') || normalized.includes('\\')) {
+    return false;
+  }
+
+  const clean = posix.normalize(normalized);
+  if (clean === '.' || clean.startsWith('../') || clean === '..') {
+    return false;
+  }
+
+  return clean === normalized.replace(/\/+$/u, '');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

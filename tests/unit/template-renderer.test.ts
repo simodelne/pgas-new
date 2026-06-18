@@ -74,6 +74,7 @@ describe('template renderer', () => {
       expect(liveTest).toContain('await client.sessions.create');
       expect(liveTest).toContain('await client.sessions.trigger');
       expect(liveTest).toContain('await client.sessions.get');
+      expect(liveTest).toContain('await client.sessions.rounds');
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
       expect(deterministicTest).toContain('createTestHarness');
 
@@ -119,7 +120,10 @@ describe('template renderer', () => {
       expect(spec).toContain('control_plane:');
       expect(spec).toContain('notebook.entries');
       expect(spec).toContain('notebook.pins');
+      expect(spec).toContain('pin_notebook_note');
       expect(spec).toContain('session_abort_current');
+      expect(spec).toContain('authorize_existing_repo_target');
+      expect(spec).toContain('run_rebase_static_verification');
       expect(tests.join('\n')).toContain('real provider round trip through the external API');
       expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
     } finally {
@@ -135,8 +139,10 @@ describe('template renderer', () => {
       const parsed = load(spec) as {
         modes: Record<string, {
           preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown }>>;
-          transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
+          transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
         }>;
+        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+        proceed_to: Record<string, string>;
         schema: Record<string, string>;
         control_plane: { controls: Record<string, unknown> };
       };
@@ -144,6 +150,17 @@ describe('template renderer', () => {
       expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
       expect(parsed.schema['repo.write_authorized']).toBe('boolean');
       expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+      expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
+      expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
+      expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
+      expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
+      expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
+      expect(parsed.modes.repo_targeting.preconditions?.authorize_existing_repo_target).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldEquals', path: 'repo.wiring_manifest.status', value: 'valid' },
+          { kind: 'FieldEquals', path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' },
+        ]),
+      );
       expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
         expect.arrayContaining([{ kind: 'FieldTruthy', path: 'repo.write_authorized' }]),
       );
@@ -153,6 +170,26 @@ describe('template renderer', () => {
       expect(parsed.modes.scaffold_plan.transitions).toEqual(
         expect.arrayContaining([
           { target: 'branch_write', guard: { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' } },
+        ]),
+      );
+      expect(parsed.modes.static_verify.transitions).toEqual(
+        expect.arrayContaining([
+          {
+            target: 'live_verify',
+            guard: { kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' },
+          },
+        ]),
+      );
+      expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'repo.wiring_manifest.status', from_arg: 'status' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.path', from_arg: 'path' }),
+        ]),
+      );
+      expect(parsed.action_map.run_static_verification.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'graduation.static_verification', from_arg: 'status' }),
+          expect.objectContaining({ path: 'graduation.static_evidence_id', from_arg: 'evidence_id' }),
         ]),
       );
     } finally {

@@ -11,10 +11,8 @@ const MANIFEST: WiringManifest = {
       '@simodelne/pgas-server/plugin.js',
       '@simodelne/pgas-server/create-server.js',
       '@simodelne/pgas-server/client.js',
-      '@simodelne/pgas-server/client/http.js',
       '@simodelne/pgas-server/channels/index.js',
       '@simodelne/pgas-server/routes/index.js',
-      '@simodelne/pgas-server/testing.js',
     ],
   },
   paths: {
@@ -80,6 +78,17 @@ describe('artifact planner', () => {
       '.pgas/pgas-new/review/artifacts.json',
       'audit/PGAS-NEW-review.md',
     ]);
+  });
+
+  it('rejects unsafe manifest paths before planning writes', () => {
+    const unsafeManifest: WiringManifest = {
+      ...MANIFEST,
+      paths: { ...MANIFEST.paths, programs_dir: '../programs' },
+    };
+
+    expect(() => createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, unsafeManifest)).toThrow(
+      /paths\.programs_dir must be a safe repo-relative path/,
+    );
   });
 
   it('marks every artifact with ownership, mode, purpose, and verification metadata', () => {

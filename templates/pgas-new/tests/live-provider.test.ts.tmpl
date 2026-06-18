@@ -22,9 +22,13 @@ describe('{{SLUG}} live-provider graduation', () => {
       payload: 'confirm pgas-new live-provider graduation',
     });
     const envelope = await client.sessions.get(session.sessionId);
+    const rounds = await client.sessions.rounds(session.sessionId);
+    const resultPayload = JSON.stringify(result.result ?? result);
 
     expect(result).toBeDefined();
+    expect(resultPayload.length).toBeGreaterThan(2);
     expect(envelope.sessionId).toBe(session.sessionId);
+    expect(rounds.rounds.length).toBeGreaterThan(0);
     expect(process.env.PGAS_LIVE_PROVIDER).toBeTruthy();
   });
 

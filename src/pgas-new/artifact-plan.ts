@@ -1,5 +1,5 @@
 import { FIXED_WIRING_MANIFEST_PATH, type PgasNewMode } from './model.js';
-import type { WiringManifest } from './wiring-manifest.js';
+import { isSafeRepoRelativePath, type WiringManifest } from './wiring-manifest.js';
 
 export type ArtifactKind =
   | 'manifest'
@@ -122,6 +122,9 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
 export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifest: WiringManifest): ArtifactPlan {
   const safeProgram = validateProgramIdentity(program);
   const slug = safeProgram.slug;
+  assertSafeManifestDir('paths.programs_dir', manifest.paths.programs_dir);
+  assertSafeManifestDir('paths.pgas_new_dir', manifest.paths.pgas_new_dir);
+  assertSafeManifestDir('paths.audit_dir', manifest.paths.audit_dir);
   const programsDir = trimSlashes(manifest.paths.programs_dir);
   const pgasNewDir = trimSlashes(manifest.paths.pgas_new_dir);
   const auditDir = trimSlashes(manifest.paths.audit_dir);
@@ -178,4 +181,10 @@ function artifact(
 
 function trimSlashes(path: string): string {
   return path.replace(/^\/+|\/+$/g, '');
+}
+
+function assertSafeManifestDir(label: string, path: string): void {
+  if (!isSafeRepoRelativePath(path)) {
+    throw new Error(`${label} must be a safe repo-relative path`);
+  }
 }

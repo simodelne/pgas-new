@@ -24,13 +24,20 @@ const SESSION_CONTROL_ACTIONS = [
 
 const BASE_ACTIONS_BY_MODE: ActionSet = {
   intake_intelligence: [...SESSION_CONTROL_ACTIONS, 'record_user_note', 'pin_notebook_note', 'web_research'],
-  repo_targeting: [...SESSION_CONTROL_ACTIONS, 'select_repo_target', 'load_wiring_manifest', 'create_curator_request'],
+  repo_targeting: [
+    ...SESSION_CONTROL_ACTIONS,
+    'select_repo_target',
+    'authorize_standalone_target',
+    'load_wiring_manifest',
+    'authorize_existing_repo_target',
+    'create_curator_request',
+  ],
   architecture_design: [...SESSION_CONTROL_ACTIONS, 'design_architecture', 'web_research', 'record_user_note'],
   scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'approve_artifact_plan', 'create_curator_request'],
   branch_write: [...SESSION_CONTROL_ACTIONS, 'write_scaffold_artifacts', 'git_status'],
   static_verify: [...SESSION_CONTROL_ACTIONS, 'npm_install', 'npm_typecheck', 'npm_test', 'run_static_verification'],
   live_verify: [...SESSION_CONTROL_ACTIONS, 'run_api_blackbox_verification', 'run_live_provider_verification'],
-  rebase_verify: [...SESSION_CONTROL_ACTIONS, 'git_status', 'git_rebase_latest', 'run_static_verification'],
+  rebase_verify: [...SESSION_CONTROL_ACTIONS, 'git_status', 'git_rebase_latest', 'run_rebase_static_verification'],
   pr_graduation: [...SESSION_CONTROL_ACTIONS, 'open_pull_request'],
   curator_request: [...SESSION_CONTROL_ACTIONS, 'create_curator_request', 'record_user_note'],
 };
@@ -77,9 +84,10 @@ export function canTransition(
 
   switch (transition) {
     case 'intake_intelligence->repo_targeting':
-    case 'repo_targeting->architecture_design':
     case 'architecture_design->scaffold_plan':
       return allow();
+    case 'repo_targeting->architecture_design':
+      return canEnterArchitectureDesign(state);
     case 'repo_targeting->curator_request':
     case 'scaffold_plan->curator_request':
       return shouldRouteToCurator(state) ? allow() : deny('curator_request_requires_repo_blocker');
@@ -121,11 +129,27 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
     return canEnterBranchWrite(state);
   }
 
+  if (action === 'authorize_standalone_target' && state.repo.target_kind !== 'standalone_repo') {
+    return deny('standalone_authorization_requires_standalone_target');
+  }
+
+  if (action === 'load_wiring_manifest' && state.repo.target_kind !== 'existing_repo') {
+    return deny('load_wiring_manifest_requires_existing_repo_target');
+  }
+
+  if (action === 'authorize_existing_repo_target') {
+    return canAuthorizeExistingRepo(state);
+  }
+
   if (
     mode === 'live_verify' &&
     (action === 'run_api_blackbox_verification' || action === 'run_live_provider_verification')
   ) {
     return canEnterLiveVerify(state);
+  }
+
+  if (action === 'run_rebase_static_verification' && state.graduation.rebase_status !== 'passed') {
+    return deny('post_rebase_static_verification_requires_successful_rebase');
   }
 
   if (action === 'open_pull_request') {
@@ -139,16 +163,48 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
   return allow();
 }
 
-function canEnterBranchWrite(state: PgasNewState): GateResult {
-  if (state.repo.target_kind === 'existing_repo' && state.repo.wiring_manifest.status !== 'valid') {
+function canEnterArchitectureDesign(state: PgasNewState): GateResult {
+  if (state.repo.target_kind === 'unknown') {
+    return deny('architecture_design_requires_repo_target');
+  }
+
+  if (!state.repo.write_authorized) {
+    return deny('architecture_design_requires_write_authorization');
+  }
+
+  if (state.repo.target_kind === 'existing_repo') {
+    return canAuthorizeExistingRepo(state);
+  }
+
+  return allow();
+}
+
+function canAuthorizeExistingRepo(state: PgasNewState): GateResult {
+  if (state.repo.target_kind !== 'existing_repo') {
+    return deny('existing_repo_authorization_requires_existing_repo_target');
+  }
+
+  if (state.repo.wiring_manifest.status !== 'valid') {
     return deny('existing_repo_requires_valid_wiring_manifest');
   }
 
-  if (
-    state.repo.target_kind === 'existing_repo' &&
-    state.repo.wiring_manifest.path !== FIXED_WIRING_MANIFEST_PATH
-  ) {
+  if (state.repo.wiring_manifest.path !== FIXED_WIRING_MANIFEST_PATH) {
     return deny('existing_repo_requires_fixed_path_wiring_manifest');
+  }
+
+  return allow();
+}
+
+function canEnterBranchWrite(state: PgasNewState): GateResult {
+  if (!state.repo.write_authorized) {
+    return deny('branch_write_requires_write_authorization');
+  }
+
+  if (state.repo.target_kind === 'existing_repo') {
+    const gate = canAuthorizeExistingRepo(state);
+    if (!gate.allowed) {
+      return gate;
+    }
   }
 
   if (state.artifact_plan.status !== 'approved') {
@@ -179,7 +235,8 @@ function canEnterPrGraduation(state: PgasNewState): GateResult {
 function shouldRouteToCurator(state: PgasNewState): boolean {
   return (
     state.repo.target_kind === 'existing_repo' &&
-    (state.repo.wiring_manifest.status === 'absent' ||
+    (state.repo.blocked ||
+      state.repo.wiring_manifest.status === 'absent' ||
       state.repo.wiring_manifest.status === 'invalid' ||
       state.repo.required_facilities_missing.length > 0)
   );

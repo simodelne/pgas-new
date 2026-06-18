@@ -15,10 +15,8 @@ pgas:
     - "@simodelne/pgas-server/plugin.js"
     - "@simodelne/pgas-server/create-server.js"
     - "@simodelne/pgas-server/client.js"
-    - "@simodelne/pgas-server/client/http.js"
     - "@simodelne/pgas-server/channels/index.js"
     - "@simodelne/pgas-server/routes/index.js"
-    - "@simodelne/pgas-server/testing.js"
 paths:
   programs_dir: "programs"
   audit_dir: "audit"
@@ -81,13 +79,67 @@ describe('wiring manifest parser', () => {
   it('rejects private or non-approved pgas imports', () => {
     const result = parseWiringManifest(
       VALID_MANIFEST.replace(
-        '"@simodelne/pgas-server/testing.js"',
+        '"@simodelne/pgas-server/routes/index.js"',
         '"@simodelne/pgas-server/src/testing.js"',
       ),
     );
 
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('pgas.allowed_imports contains banned import: @simodelne/pgas-server/src/testing.js');
+  });
+
+  it('rejects test-only and obsolete public imports from runtime wiring', () => {
+    const result = parseWiringManifest(
+      VALID_MANIFEST.replace(
+        '"@simodelne/pgas-server/routes/index.js"',
+        '"@simodelne/pgas-server/testing.js"',
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('pgas.allowed_imports contains non-approved runtime import: @simodelne/pgas-server/testing.js');
+  });
+
+  it('requires exact schema, enums, command strings, and safe repo-relative paths', () => {
+    const result = parseWiringManifest(`
+schema_version: 2
+repo:
+  kind: other
+  package_manager: bun
+pgas:
+  server_package: "@simodelne/pgas-server"
+  allowed_imports:
+    - "@simodelne/pgas-server/plugin.js"
+paths:
+  programs_dir: "../programs"
+  audit_dir: "/tmp/audit"
+  pgas_new_dir: "."
+registration:
+  strategy: direct_patch
+verification:
+  commands:
+    install: ["npm", "install"]
+    typecheck: ""
+curator:
+  github_owner: simodelne
+  github_repo: simoneos
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        'schema_version must be 1',
+        'repo.kind must be one of: existing_repo, standalone_repo',
+        'repo.package_manager must be one of: npm, pnpm, yarn',
+        'registration.strategy must be one of: curator_request',
+        'paths.programs_dir must be a safe repo-relative path',
+        'paths.audit_dir must be a safe repo-relative path',
+        'paths.pgas_new_dir must be a safe repo-relative path',
+        'verification.commands.install must be a non-empty string',
+        'verification.commands.typecheck must be a non-empty string',
+        'verification.commands.test must be a non-empty string',
+      ]),
+    );
   });
 
   it('ships a valid manifest template', () => {

@@ -19,6 +19,8 @@ function existingRepoState(): PgasNewState {
     repo: {
       ...initial.repo,
       target_kind: 'existing_repo',
+      blocked: false,
+      write_authorized: true,
       wiring_manifest: { status: 'valid', path: '.pgas/wiring.yml' },
     },
     program: {
@@ -66,7 +68,7 @@ describe('pgas-new gates', () => {
 
     const rebased = {
       ...withMode(livePassed, 'rebase_verify'),
-      graduation: { ...livePassed.graduation, rebase_verification: 'passed' },
+      graduation: { ...livePassed.graduation, rebase_status: 'passed', rebase_verification: 'passed' },
     } satisfies PgasNewState;
     expect(canTransition(rebased, 'rebase_verify', 'pr_graduation')).toMatchObject({ allowed: true });
   });
@@ -89,6 +91,8 @@ describe('pgas-new gates', () => {
       ...withMode(existingRepoState(), 'scaffold_plan'),
       repo: {
         target_kind: 'existing_repo',
+        blocked: false,
+        write_authorized: true,
         wiring_manifest: { status: 'absent' },
         required_facilities_missing: [],
       },
@@ -106,6 +110,8 @@ describe('pgas-new gates', () => {
       ...withMode(existingRepoState(), 'scaffold_plan'),
       repo: {
         target_kind: 'existing_repo',
+        blocked: false,
+        write_authorized: true,
         wiring_manifest: { status: 'valid' },
         required_facilities_missing: [],
       },
@@ -121,12 +127,20 @@ describe('pgas-new gates', () => {
     const absent = {
       ...createInitialState(),
       session: { ...createInitialState().session, current_mode: 'repo_targeting' },
-      repo: { target_kind: 'existing_repo', wiring_manifest: { status: 'absent' }, required_facilities_missing: [] },
+      repo: {
+        target_kind: 'existing_repo',
+        blocked: false,
+        write_authorized: false,
+        wiring_manifest: { status: 'absent' },
+        required_facilities_missing: [],
+      },
     } satisfies PgasNewState;
     const invalid = {
       ...absent,
       repo: {
         target_kind: 'existing_repo',
+        blocked: false,
+        write_authorized: false,
         wiring_manifest: { status: 'invalid', errors: ['pgas.allowed_imports contains a private import'] },
         required_facilities_missing: [],
       },
@@ -135,6 +149,8 @@ describe('pgas-new gates', () => {
       ...absent,
       repo: {
         target_kind: 'existing_repo',
+        blocked: false,
+        write_authorized: false,
         wiring_manifest: { status: 'valid', path: '.pgas/wiring.yml' },
         required_facilities_missing: ['registration_marker'],
       },
@@ -143,6 +159,43 @@ describe('pgas-new gates', () => {
     expect(canTransition(absent, 'repo_targeting', 'curator_request')).toMatchObject({ allowed: true });
     expect(canTransition(invalid, 'repo_targeting', 'curator_request')).toMatchObject({ allowed: true });
     expect(canTransition(missingFacility, 'repo_targeting', 'curator_request')).toMatchObject({ allowed: true });
+  });
+
+  it('requires explicit target authorization before architecture design', () => {
+    const existing = withMode({ ...existingRepoState(), repo: { ...existingRepoState().repo, write_authorized: false } }, 'repo_targeting');
+
+    expect(canTransition(existing, 'repo_targeting', 'architecture_design')).toEqual({
+      allowed: false,
+      reason: 'architecture_design_requires_write_authorization',
+    });
+    expect(legalActionsForMode(existing, 'repo_targeting')).toContain('authorize_existing_repo_target');
+
+    const standalone = {
+      ...createInitialState(),
+      session: { ...createInitialState().session, current_mode: 'repo_targeting' },
+      repo: {
+        ...createInitialState().repo,
+        target_kind: 'standalone_repo',
+        write_authorized: false,
+        wiring_manifest: { status: 'not_required' },
+      },
+    } satisfies PgasNewState;
+    expect(legalActionsForMode(standalone, 'repo_targeting')).toContain('authorize_standalone_target');
+  });
+
+  it('requires successful rebase before post-rebase static verification action', () => {
+    const state = withMode(existingRepoState(), 'rebase_verify');
+
+    expect(legalActionsForMode(state, 'rebase_verify')).not.toContain('run_rebase_static_verification');
+    expect(() => assertActionAllowed(state, 'rebase_verify', 'run_rebase_static_verification')).toThrow(
+      /post_rebase_static_verification_requires_successful_rebase/,
+    );
+
+    const rebased = {
+      ...state,
+      graduation: { ...state.graduation, rebase_status: 'passed' },
+    } satisfies PgasNewState;
+    expect(legalActionsForMode(rebased, 'rebase_verify')).toContain('run_rebase_static_verification');
   });
 
   it('only allows curator request creation when a repo blocker exists or while in curator_request mode', () => {

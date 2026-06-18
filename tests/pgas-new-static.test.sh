@@ -21,7 +21,7 @@ test -f "$WORK/src/repl/index.ts" && pass "rendered REPL" || fail "missing gener
 test -f "$WORK/tests/live-provider.test.ts" && pass "rendered live provider test" || fail "missing generated live provider test"
 
 echo "[2/6] generated scaffold has no banned imports"
-if grep -R --line-number -E '@simodelne/pgas-server/api|@simodelne/pgas-server/src|@simodelne/pgas-runtime|@simodelne/pgas-contracts|@simodelne/pgas-middleware|@simodelne/pgas-drivers' "$WORK"; then
+if grep -R --line-number -E '@simodelne/pgas-server/api|@simodelne/pgas-server/src|@simodelne/pgas-server/client/http|@simodelne/pgas-runtime|@simodelne/pgas-contracts|@simodelne/pgas-middleware|@simodelne/pgas-drivers' "$WORK"; then
   fail "generated scaffold contains banned imports"
 else
   pass "no banned imports"

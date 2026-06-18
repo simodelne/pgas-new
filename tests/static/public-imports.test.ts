@@ -2,7 +2,11 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isAllowedPgasServerImport, isBannedImport } from '../../src/pgas-new/version.js';
+import {
+  isAllowedPgasServerImport,
+  isAllowedPgasServerTestImport,
+  isBannedImport,
+} from '../../src/pgas-new/version.js';
 import { renderStandaloneScaffold } from '../../src/pgas-new/template-renderer.js';
 
 describe('generated public PGAS imports', () => {
@@ -14,11 +18,16 @@ describe('generated public PGAS imports', () => {
       const violations: string[] = [];
       for (const file of tsFiles(outDir)) {
         const body = readFileSync(file, 'utf8');
+        const relativePath = relative(outDir, file);
         for (const specifier of importSpecifiers(body)) {
           if (isBannedImport(specifier)) {
-            violations.push(`${relative(outDir, file)} imports banned ${specifier}`);
-          } else if (specifier.startsWith('@simodelne/pgas-server') && !isAllowedPgasServerImport(specifier)) {
-            violations.push(`${relative(outDir, file)} imports non-approved ${specifier}`);
+            violations.push(`${relativePath} imports banned ${specifier}`);
+          } else if (
+            specifier.startsWith('@simodelne/pgas-server') &&
+            !isAllowedPgasServerImport(specifier) &&
+            !(relativePath.startsWith('tests/') && isAllowedPgasServerTestImport(specifier))
+          ) {
+            violations.push(`${relativePath} imports non-approved ${specifier}`);
           }
         }
       }

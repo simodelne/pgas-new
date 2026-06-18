@@ -11,7 +11,6 @@ Generated consumers target `@simodelne/pgas-server@2.8.3` and use only these pub
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
 - `@simodelne/pgas-server/client.js`
-- `@simodelne/pgas-server/client/http.js`
 - `@simodelne/pgas-server/channels/index.js`
 - `@simodelne/pgas-server/routes/index.js`
 - `@simodelne/pgas-server/testing.js` in tests
@@ -38,13 +37,13 @@ The state dictionary is the source of truth. Conversation history is not state.
 | Mode | Purpose | Main Legal Actions | Exit Gate |
 | --- | --- | --- | --- |
 | `intake_intelligence` | Capture mandate, notebook notes, and confirmed research scope. | `record_user_note`, `web_research`, session controls | Mandate exists. |
-| `repo_targeting` | Choose standalone or existing repo and load wiring manifest. | `select_repo_target`, `load_wiring_manifest`, `create_curator_request` | Target selected, or route to curator. |
+| `repo_targeting` | Choose standalone or existing repo and load wiring manifest. | `select_repo_target`, `authorize_standalone_target`, `load_wiring_manifest`, `authorize_existing_repo_target`, `create_curator_request` | Target authorized, or route to curator. |
 | `architecture_design` | Design the PGAS program and service attachment points. | `design_architecture`, `web_research`, `record_user_note` | Architecture marked ready. |
 | `scaffold_plan` | Produce first-class artifact plan before writes. | `plan_artifacts`, `approve_artifact_plan`, `create_curator_request` | Artifact plan approved. |
 | `branch_write` | Write only planned artifacts. | `write_scaffold_artifacts`, `git_status` | Artifacts written. |
 | `static_verify` | Install/typecheck/test deterministically. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification` | Static verification passed. |
 | `live_verify` | Verify through the external API with a real provider. | `run_api_blackbox_verification`, `run_live_provider_verification` | Live verification passed. |
-| `rebase_verify` | Rebase on latest target repo state and rerun static verification. | `git_status`, `git_rebase_latest`, `run_static_verification` | Post-rebase verification passed. |
+| `rebase_verify` | Rebase on latest target repo state and rerun static verification. | `git_status`, `git_rebase_latest`, `run_rebase_static_verification` | Post-rebase verification passed. |
 | `pr_graduation` | Open the PR. | `open_pull_request` | Terminal graduation mode. |
 | `curator_request` | Produce a repo-curator request when wiring is absent or invalid. | `create_curator_request`, `record_user_note` | Curator request lodged, then return to targeting. |
 

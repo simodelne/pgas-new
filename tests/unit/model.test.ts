@@ -45,16 +45,23 @@ describe('pgas-new governed model', () => {
     expect(state.session.active_session_running).toBe(false);
     expect(state.program.runtime).toBe('typescript-node');
     expect(state.repo.target_kind).toBe('unknown');
+    expect(state.repo.blocked).toBe(false);
+    expect(state.repo.write_authorized).toBe(false);
     expect(state.repo.wiring_manifest.status).toBe('unknown');
     expect(state.artifact_plan.status).toBe('none');
     expect(state.graduation.static_verification).toBe('pending');
     expect(state.graduation.live_verification).toBe('pending');
+    expect(state.graduation.rebase_status).toBe('pending');
+    expect(state.graduation.rebase_verification).toBe('pending');
     expect(state.notebook.entries).toEqual([]);
   });
 
   it('includes semantic actions instead of exposing arbitrary bash', () => {
     expect(PGAS_NEW_ACTIONS).toContain('npm_install');
+    expect(PGAS_NEW_ACTIONS).toContain('authorize_standalone_target');
+    expect(PGAS_NEW_ACTIONS).toContain('authorize_existing_repo_target');
     expect(PGAS_NEW_ACTIONS).toContain('git_rebase_latest');
+    expect(PGAS_NEW_ACTIONS).toContain('run_rebase_static_verification');
     expect(PGAS_NEW_ACTIONS).toContain('open_pull_request');
     expect(PGAS_NEW_ACTIONS).toContain('session_new');
     expect(PGAS_NEW_ACTIONS).toContain('session_abort_current');

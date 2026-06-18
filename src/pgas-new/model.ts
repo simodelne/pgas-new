@@ -41,6 +41,8 @@ export const PGAS_NEW_ACTIONS = [
   'pin_notebook_note',
   'web_research',
   'select_repo_target',
+  'authorize_standalone_target',
+  'authorize_existing_repo_target',
   'load_wiring_manifest',
   'create_curator_request',
   'design_architecture',
@@ -55,13 +57,14 @@ export const PGAS_NEW_ACTIONS = [
   'run_live_provider_verification',
   'git_status',
   'git_rebase_latest',
+  'run_rebase_static_verification',
   'open_pull_request',
 ] as const;
 
 export type PgasNewAction = (typeof PGAS_NEW_ACTIONS)[number];
 
 export type RepoTargetKind = 'unknown' | 'standalone_repo' | 'existing_repo';
-export type WiringManifestStatus = 'unknown' | 'absent' | 'invalid' | 'valid';
+export type WiringManifestStatus = 'unknown' | 'absent' | 'invalid' | 'valid' | 'not_required';
 export type PlanningStatus = 'none' | 'draft' | 'approved';
 export type VerificationStatus = 'pending' | 'passed' | 'failed' | 'skipped';
 
@@ -86,12 +89,15 @@ export interface PgasNewState {
   };
   repo: {
     target_kind: RepoTargetKind;
+    blocked: boolean;
+    write_authorized: boolean;
     wiring_manifest: {
       status: WiringManifestStatus;
       path?: typeof FIXED_WIRING_MANIFEST_PATH;
       errors?: string[];
     };
     required_facilities_missing: string[];
+    curator_request_lodged?: boolean;
   };
   program: {
     runtime: 'typescript-node';
@@ -109,8 +115,13 @@ export interface PgasNewState {
   graduation: {
     static_verification: VerificationStatus;
     live_verification: VerificationStatus;
+    rebase_status: VerificationStatus;
     rebase_verification: VerificationStatus;
     live_provider_intent: boolean;
+    static_evidence_id?: string;
+    live_evidence_id?: string;
+    rebase_evidence_id?: string;
+    rebase_static_evidence_id?: string;
   };
   curator_requests: {
     requests: string[];
@@ -137,6 +148,8 @@ export function createInitialState(): PgasNewState {
     },
     repo: {
       target_kind: 'unknown',
+      blocked: false,
+      write_authorized: false,
       wiring_manifest: {
         status: 'unknown',
       },
@@ -156,6 +169,7 @@ export function createInitialState(): PgasNewState {
     graduation: {
       static_verification: 'pending',
       live_verification: 'pending',
+      rebase_status: 'pending',
       rebase_verification: 'pending',
       live_provider_intent: false,
     },
