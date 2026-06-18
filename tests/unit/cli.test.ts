@@ -91,6 +91,8 @@ describe('pgas-new CLI', () => {
   it('returns curator request text when attachment manifest is missing', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'pgas-new-cli-curator-'));
     try {
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      writeFileSync(join(repo, '.git/config'), '[remote "origin"]\n  url = git@github.com:simodelne/simoneos.git\n');
       const result = await runCli([
         'curator-request',
         '--repo',
@@ -99,10 +101,6 @@ describe('pgas-new CLI', () => {
         'review',
         '--name',
         'Review',
-        '--github-owner',
-        'simodelne',
-        '--github-repo',
-        'simoneos',
       ]);
 
       expect(result.exitCode).toBe(0);

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from './pgas-new/artifact-plan.js';
 import { prepareExistingRepoAttachment } from './pgas-new/existing-repo.js';
@@ -105,10 +107,12 @@ function planAttach(options: ParsedOptions): CliResult {
 
 function curatorRequest(options: ParsedOptions): CliResult {
   const repo = required(options, 'repo');
+  const manifest = loadWiringManifest(repo);
+  const target = resolveTargetRepo(repo, options, manifest.manifest);
   const result = prepareExistingRepoAttachment(repo, {
     ...programOptions(options),
-    githubOwner: required(options, 'github-owner'),
-    githubRepo: required(options, 'github-repo'),
+    githubOwner: target.githubOwner,
+    githubRepo: target.githubRepo,
   });
 
   if (result.ok) {
@@ -116,6 +120,42 @@ function curatorRequest(options: ParsedOptions): CliResult {
   }
 
   return ok(result.curator_request);
+}
+
+function resolveTargetRepo(
+  repo: string,
+  options: ParsedOptions,
+  manifest?: { curator: { github_owner: string; github_repo: string } },
+): { githubOwner: string; githubRepo: string } {
+  const explicitOwner = optional(options, 'github-owner');
+  const explicitRepo = optional(options, 'github-repo');
+  if (explicitOwner && explicitRepo) {
+    return { githubOwner: explicitOwner, githubRepo: explicitRepo };
+  }
+
+  if (manifest) {
+    return { githubOwner: manifest.curator.github_owner, githubRepo: manifest.curator.github_repo };
+  }
+
+  const remote = readOriginRemote(repo);
+  if (remote) {
+    return remote;
+  }
+
+  throw new Error('missing target repo: provide --github-owner/--github-repo or configure remote.origin.url');
+}
+
+function readOriginRemote(repo: string): { githubOwner: string; githubRepo: string } | undefined {
+  try {
+    const config = readFileSync(join(repo, '.git/config'), 'utf8');
+    const match = config.match(/url\s*=\s*(?:git@github\.com:|https:\/\/github\.com\/)([^/\s]+)\/([^.\s]+)(?:\.git)?/);
+    if (!match) {
+      return undefined;
+    }
+    return { githubOwner: match[1], githubRepo: match[2] };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseArgs(argv: string[]): ParsedOptions {
