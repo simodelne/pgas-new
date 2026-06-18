@@ -330,11 +330,18 @@ Implementation:
 
 - Add CLI commands:
   - `pgas-new version`
+  - `pgas-new session new`
+  - `pgas-new session abort`
+  - `pgas-new session status`
+  - `pgas-new session history`
+  - `pgas-new session resume`
+  - `pgas-new session help`
   - `pgas-new plan-standalone --slug <slug> --name <name>`
   - `pgas-new render-standalone --slug <slug> --name <name> --out <dir>`
   - `pgas-new validate-manifest --repo <dir>`
   - `pgas-new plan-attach --repo <dir> --slug <slug> --name <name>`
   - `pgas-new curator-request --repo <dir> --slug <slug> --name <name>`
+- Session commands dispatch through the generated PGAS `control_plane` vocabulary (`ask`, `new`, `abort`, `history`, `status`, `help`) rather than a bespoke parser.
 - CLI writes only on explicit `render-standalone`; existing-repo attach remains plan/request only until a valid manifest and write confirmation are represented by the PGAS state machine.
 
 TDD:
