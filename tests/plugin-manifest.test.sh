@@ -79,6 +79,13 @@ else
   fail "missing: MEMORY.md"
 fi
 
+echo "[bonus] local session artifacts ignored"
+if git check-ignore -q .remember/remember.md; then
+  pass ".remember/ is ignored"
+else
+  fail ".remember/remember.md is not ignored"
+fi
+
 echo ""
 echo "=== Result: $PASS pass, $FAIL fail ==="
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1

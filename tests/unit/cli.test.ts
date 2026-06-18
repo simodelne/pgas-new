@@ -35,6 +35,17 @@ curator:
 `;
 
 describe('pgas-new CLI', () => {
+  it('prints root help for --help and help', async () => {
+    await expect(runCli(['--help'])).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: expect.stringContaining('pgas-new commands:'),
+    });
+    await expect(runCli(['help'])).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: expect.stringContaining('render-standalone'),
+    });
+  });
+
   it('prints version contract information', async () => {
     const result = await runCli(['version']);
 

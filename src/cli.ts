@@ -21,10 +21,16 @@ interface ParsedOptions {
 
 export async function runCli(argv: string[]): Promise<CliResult> {
   try {
+    if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
+      return ok(helpText());
+    }
+
     const parsed = parseArgs(argv);
     const [command, subcommand] = parsed._;
 
     switch (command) {
+      case 'help':
+        return ok(helpText());
       case 'version':
         return ok(`pgas-new\nPGAS server: ${PGAS_SERVER_PACKAGE}@${PGAS_SERVER_VERSION}`);
       case 'session':
@@ -193,6 +199,19 @@ function optional(options: ParsedOptions, key: string): string | undefined {
 
 function formatPlan(paths: string[]): string {
   return paths.map((path) => `- ${path}`).join('\n');
+}
+
+function helpText(): string {
+  return [
+    'pgas-new commands:',
+    '  version',
+    '  plan-standalone --slug <slug> --name <name>',
+    '  render-standalone --slug <slug> --name <name> --out <dir>',
+    '  validate-manifest --repo <repo>',
+    '  plan-attach --repo <repo> --slug <slug> --name <name>',
+    '  curator-request --repo <repo> --slug <slug> --name <name> [--github-owner <owner> --github-repo <repo>]',
+    '  session new|abort|status|history|resume|help',
+  ].join('\n');
 }
 
 function ok(stdout: string): CliResult {

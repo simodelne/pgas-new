@@ -27,3 +27,4 @@ build/
 # Claude Code session artifacts
 .claude/sessions/
 .claude/
+.remember/
