@@ -37,7 +37,8 @@ describe('curator requests', () => {
     const request = renderRegistrationRequest({ manifest: MANIFEST, plan });
 
     expect(request).toContain('simodelne/simoneos');
-    expect(request).toContain('programs/review/specs.yml');
+    expect(request).toContain('spec: programs/review/specs.yml');
+    expect(request).toContain('verification=spec-load');
     expect(request).toContain('audit/PGAS-NEW-review.md');
     expect(request).toContain('registration strategy: curator_request');
     expect(request).toContain('Patch points requested');

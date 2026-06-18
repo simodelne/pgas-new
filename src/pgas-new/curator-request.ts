@@ -24,7 +24,11 @@ export function renderMissingWiringRequest(options: MissingWiringRequestOptions)
 }
 
 export function renderRegistrationRequest(options: { manifest: WiringManifest; plan: ArtifactPlan }): string {
-  const artifactList = options.plan.artifacts.map((artifact) => `- ${artifact.path}`).join('\n');
+  const artifactList = options.plan.artifacts
+    .map((artifact) => {
+      return `- ${artifact.kind}: ${artifact.path} | purpose=${artifact.purpose} | verification=${artifact.verification.join(',')}`;
+    })
+    .join('\n');
   return renderTemplate(readTemplate('registration-request.md.tmpl'), {
     ARTIFACTS: artifactList,
     GITHUB_OWNER: options.manifest.curator.github_owner,

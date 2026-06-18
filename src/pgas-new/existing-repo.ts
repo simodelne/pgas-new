@@ -20,9 +20,14 @@ export type ExistingRepoAttachmentResult =
       errors: string[];
     };
 
+export interface ExistingRepoAttachmentOptions extends ProgramIdentity {
+  githubOwner?: string;
+  githubRepo?: string;
+}
+
 export function prepareExistingRepoAttachment(
   repoRoot: string,
-  program: ProgramIdentity,
+  program: ExistingRepoAttachmentOptions,
 ): ExistingRepoAttachmentResult {
   const manifestResult = loadWiringManifest(repoRoot);
 
@@ -32,8 +37,8 @@ export function prepareExistingRepoAttachment(
       ok: false,
       writes_performed: false,
       curator_request: renderMissingWiringRequest({
-        githubOwner: 'repo-curator',
-        githubRepo: 'target-repo',
+        githubOwner: program.githubOwner ?? 'unknown-owner',
+        githubRepo: program.githubRepo ?? 'unknown-repo',
         reason,
         action: 'Publish or correct the binding wiring manifest at .pgas/wiring.yml.',
       }),

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -31,11 +31,18 @@ describe('existing repo attachment preparation', () => {
   it('denies attachment without a fixed-path wiring manifest and performs no writes', () => {
     const repo = mkdtempSync(join(tmpdir(), 'pgas-new-attach-missing-'));
     try {
-      const result = prepareExistingRepoAttachment(repo, { slug: 'review', name: 'Review' });
+      const result = prepareExistingRepoAttachment(repo, {
+        slug: 'review',
+        name: 'Review',
+        githubOwner: 'simodelne',
+        githubRepo: 'simoneos',
+      });
 
       expect(result.ok).toBe(false);
       expect(result.writes_performed).toBe(false);
+      expect(readdirSync(repo)).toEqual([]);
       expect(result.plan).toBeUndefined();
+      expect(result.curator_request).toContain('simodelne/simoneos');
       expect(result.curator_request).toContain('missing .pgas/wiring.yml');
       expect(result.curator_request).toContain('No local writes were performed');
     } finally {
@@ -49,10 +56,17 @@ describe('existing repo attachment preparation', () => {
       mkdirSync(join(repo, '.pgas'), { recursive: true });
       writeFileSync(join(repo, '.pgas/wiring.yml'), VALID_MANIFEST.replace('@simodelne/pgas-server', '@bad/server'));
 
-      const result = prepareExistingRepoAttachment(repo, { slug: 'review', name: 'Review' });
+      const result = prepareExistingRepoAttachment(repo, {
+        slug: 'review',
+        name: 'Review',
+        githubOwner: 'simodelne',
+        githubRepo: 'simoneos',
+      });
 
       expect(result.ok).toBe(false);
       expect(result.writes_performed).toBe(false);
+      expect(readdirSync(join(repo, '.pgas'))).toEqual(['wiring.yml']);
+      expect(result.curator_request).toContain('simodelne/simoneos');
       expect(result.curator_request).toContain('pgas.server_package must be @simodelne/pgas-server');
       expect(result.curator_request).toContain('.pgas/wiring.yml');
     } finally {

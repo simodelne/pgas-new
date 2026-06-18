@@ -52,5 +52,6 @@ export {
 
 export {
   prepareExistingRepoAttachment,
+  type ExistingRepoAttachmentOptions,
   type ExistingRepoAttachmentResult,
 } from "./pgas-new/existing-repo.js";
