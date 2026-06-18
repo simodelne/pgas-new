@@ -3,7 +3,6 @@ export type SemanticCommandId =
   | 'npmTypecheck'
   | 'npmTest'
   | 'runGeneratedStaticTests'
-  | 'runLiveProviderVerification'
   | 'gitStatus'
   | 'gitRebaseLatest'
   | 'ghCreatePr';
@@ -19,7 +18,7 @@ export interface CommandResult {
   cwd: string;
   exit_code: number;
   duration_ms: number;
-  stdout_excerpt?: string;
+  stdout_excerpt: string;
   stderr_excerpt?: string;
   output_path?: string;
 }
@@ -29,7 +28,6 @@ export interface CommandRunner {
   npmTypecheck(request: CommandRequest): Promise<CommandResult>;
   npmTest(request: CommandRequest): Promise<CommandResult>;
   runGeneratedStaticTests(request: CommandRequest): Promise<CommandResult>;
-  runLiveProviderVerification(request: CommandRequest): Promise<CommandResult>;
   gitStatus(request: CommandRequest): Promise<CommandResult>;
   gitRebaseLatest(request: CommandRequest): Promise<CommandResult>;
   ghCreatePr(request: CommandRequest): Promise<CommandResult>;

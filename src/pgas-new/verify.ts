@@ -3,7 +3,7 @@ import type { CommandRequest, CommandResult, CommandRunner, SemanticCommandId } 
 export type VerificationStatus = 'pass' | 'fail' | 'skip';
 
 export interface VerificationEvidence {
-  command_id: SemanticCommandId | 'runLiveProviderVerification';
+  command_id: SemanticCommandId | 'liveProviderRoundTrip';
   cwd: string;
   exit_code: number | null;
   duration_ms: number;
@@ -16,6 +16,13 @@ export interface VerificationEvidence {
 export interface VerificationOptions {
   cwd: string;
   runner: CommandRunner;
+}
+
+export interface LiveProviderVerifier {
+  verify(request: {
+    cwd: string;
+    env: Record<string, string | undefined>;
+  }): Promise<Omit<VerificationEvidence, 'command_id' | 'cwd'>>;
 }
 
 export async function runStaticVerification(options: VerificationOptions): Promise<VerificationEvidence[]> {
@@ -39,12 +46,12 @@ export async function runPostRebaseVerification(
 }
 
 export async function runLiveProviderVerification(
-  options: VerificationOptions & { env: Record<string, string | undefined> },
+  options: { cwd: string; env: Record<string, string | undefined>; verifier?: LiveProviderVerifier },
 ): Promise<VerificationEvidence[]> {
   if (!options.env.PGAS_LIVE_PROVIDER || !options.env.PGAS_API_BASE || !options.env.PGAS_API_TOKEN) {
     return [
       {
-        command_id: 'runLiveProviderVerification',
+        command_id: 'liveProviderRoundTrip',
         cwd: options.cwd,
         duration_ms: 0,
         exit_code: null,
@@ -54,7 +61,22 @@ export async function runLiveProviderVerification(
     ];
   }
 
-  return evidenceFor([await options.runner.runLiveProviderVerification(commandRequest(options))]);
+  const result = options.verifier
+    ? await options.verifier.verify({ cwd: options.cwd, env: options.env })
+    : {
+        duration_ms: 0,
+        exit_code: null,
+        status: 'skip' as const,
+        stdout_excerpt: 'live provider verifier not configured',
+      };
+
+  return [
+    {
+      command_id: 'liveProviderRoundTrip',
+      cwd: options.cwd,
+      ...result,
+    },
+  ];
 }
 
 export function createMockCommandRunner(): CommandRunner & { calls: SemanticCommandId[] } {
@@ -76,7 +98,6 @@ export function createMockCommandRunner(): CommandRunner & { calls: SemanticComm
     npmTypecheck: (request) => run('npmTypecheck', request),
     npmTest: (request) => run('npmTest', request),
     runGeneratedStaticTests: (request) => run('runGeneratedStaticTests', request),
-    runLiveProviderVerification: (request) => run('runLiveProviderVerification', request),
     gitStatus: (request) => run('gitStatus', request),
     gitRebaseLatest: (request) => run('gitRebaseLatest', request),
     ghCreatePr: (request) => run('ghCreatePr', request),

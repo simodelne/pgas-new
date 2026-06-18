@@ -27,13 +27,11 @@ describe('verification runner', () => {
   });
 
   it('skips live-provider verification with explicit evidence when env is absent', async () => {
-    const runner = createMockCommandRunner();
-    const evidence = await runLiveProviderVerification({ cwd: '/repo', runner, env: {} });
+    const evidence = await runLiveProviderVerification({ cwd: '/repo', env: {} });
 
-    expect(runner.calls).toEqual([]);
     expect(evidence).toEqual([
       {
-        command_id: 'runLiveProviderVerification',
+        command_id: 'liveProviderRoundTrip',
         cwd: '/repo',
         duration_ms: 0,
         exit_code: null,
@@ -44,19 +42,27 @@ describe('verification runner', () => {
   });
 
   it('runs live-provider verification separately from static evidence when env is present', async () => {
-    const runner = createMockCommandRunner();
     const evidence = await runLiveProviderVerification({
       cwd: '/repo',
-      runner,
       env: {
         PGAS_LIVE_PROVIDER: 'openai',
         PGAS_API_BASE: 'http://127.0.0.1:3000',
         PGAS_API_TOKEN: 'token',
       },
+      verifier: {
+        async verify() {
+          return {
+            duration_ms: 5,
+            exit_code: 0,
+            status: 'pass',
+            stdout_excerpt: 'live provider round trip ok',
+          };
+        },
+      },
     });
 
-    expect(runner.calls).toEqual(['runLiveProviderVerification']);
     expect(evidence).toHaveLength(1);
+    expect(evidence[0].command_id).toBe('liveProviderRoundTrip');
     expect(evidence[0].status).toBe('pass');
   });
 
