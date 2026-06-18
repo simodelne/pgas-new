@@ -26,3 +26,11 @@ export {
   legalActionsForMode,
   type GateResult,
 } from "./pgas-new/gates.js";
+
+export {
+  WIRING_MANIFEST_PATH,
+  loadWiringManifest,
+  parseWiringManifest,
+  type WiringManifest,
+  type WiringManifestResult,
+} from "./pgas-new/wiring-manifest.js";
