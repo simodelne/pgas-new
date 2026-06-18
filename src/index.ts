@@ -34,3 +34,12 @@ export {
   type WiringManifest,
   type WiringManifestResult,
 } from "./pgas-new/wiring-manifest.js";
+
+export {
+  createExistingRepoArtifactPlan,
+  createStandaloneArtifactPlan,
+  type ArtifactKind,
+  type ArtifactPlan,
+  type PlannedArtifact,
+  type ProgramIdentity,
+} from "./pgas-new/artifact-plan.js";
