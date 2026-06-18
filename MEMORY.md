@@ -9,13 +9,16 @@ decisions. It is not a changelog and not a session handoff.
 - Direction: convert the old scaffold plugin into `pgas-new`, a PGAS-specific
   TypeScript/Node foundry for creating governed PGAS programs.
 - Current server target: latest checked published `@simodelne/pgas-server` is
-  `2.8.3`.
+  `2.10.0`.
 - Generated runtime code must use public server imports only:
   `plugin.js`, `create-server.js`, `client.js`, `channels/index.js`, and
   `routes/index.js`. `testing.js` is test-only.
 - Existing-repo attachment requires fixed `.pgas/wiring.yml`. Without a valid
   manifest, `pgas-new` must not write to that repo and may create a curator
   request.
+- Existing-repo rendering is explicit through `render-attach`; it writes only
+  planned per-program artifacts, refuses missing/invalid manifests, and refuses
+  to overwrite existing planned files.
 - Static implementation and static verification are complete on this branch:
   `npm test` passed on 2026-06-18 after focused re-review. Live graduation is
   still pending and must be user-selected before PR graduation.

@@ -1,9 +1,16 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createStandaloneArtifactPlan, type ArtifactPlan, type ProgramIdentity } from './artifact-plan.js';
+import {
+  createExistingRepoArtifactPlan,
+  createStandaloneArtifactPlan,
+  type ArtifactPlan,
+  type PlannedArtifact,
+  type ProgramIdentity,
+} from './artifact-plan.js';
 import { renderControlPlaneControlsYaml } from './control-plane.js';
 import { PGAS_SERVER_VERSION } from './version.js';
+import type { WiringManifest } from './wiring-manifest.js';
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new');
 
@@ -11,6 +18,15 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   outDir: string;
   githubOwner?: string;
   githubRepo?: string;
+}
+
+export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting';
+
+export interface RenderExistingRepoOptions extends ProgramIdentity {
+  repoRoot: string;
+  manifest: WiringManifest;
+  template?: ProgramTemplate;
+  mandate?: string;
 }
 
 export interface RenderResult {
@@ -47,26 +63,48 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'audit/PGAS-NEW-GRADUATION.md': spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
+const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
+  spec: spec('consumer/policy/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  handler: spec('consumer/policy/handlers.ts.tmpl', []),
+  tool: spec('consumer/policy/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('consumer/policy/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
+  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
+};
+
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
   const plan = createStandaloneArtifactPlan({ slug: options.slug, name: options.name });
-  const tokens = tokensFor(options);
-  const written: string[] = [];
+  return renderPlan({
+    plan,
+    rootDir: options.outDir,
+    templateForArtifact: (artifact) => templateForStandalonePath(artifact.path, options.slug),
+    tokens: tokensFor(options, plan),
+  });
+}
 
-  for (const artifact of plan.artifacts) {
-    const templatePath = templateForPath(artifact.path, options.slug);
-    if (!templatePath) {
-      throw new Error(`no template for artifact path: ${artifact.path}`);
-    }
+export function renderExistingRepoAttachment(options: RenderExistingRepoOptions): RenderResult {
+  const plan = createExistingRepoArtifactPlan({ slug: options.slug, name: options.name }, options.manifest);
+  const template = options.template ?? 'pgas-new-foundry';
 
-    const source = readFileSync(join(TEMPLATE_ROOT, templatePath.file), 'utf8');
-    const rendered = renderTemplate(source, selectTokens(tokens, templatePath.tokens));
-    const outPath = join(options.outDir, artifact.path);
-    mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, rendered);
-    written.push(artifact.path);
+  assertNoExistingArtifacts(options.repoRoot, plan);
+
+  return renderPlan({
+    plan,
+    rootDir: options.repoRoot,
+    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, template),
+    tokens: tokensFor(options, plan),
+  });
+}
+
+function assertNoExistingArtifacts(rootDir: string, plan: ArtifactPlan): void {
+  const collisions = plan.artifacts
+    .map((artifact) => artifact.path)
+    .filter((path) => existsSync(join(rootDir, path)));
+
+  if (collisions.length > 0) {
+    throw new Error(`refusing to overwrite existing attach artifacts:\n${collisions.join('\n')}`);
   }
-
-  return { plan, written };
 }
 
 export function renderTemplate(
@@ -99,7 +137,70 @@ export function renderTemplate(
   return rendered;
 }
 
-function templateForPath(path: string, slug: string): TemplateSpec | undefined {
+function renderPlan(options: {
+  plan: ArtifactPlan;
+  rootDir: string;
+  templateForArtifact: (artifact: PlannedArtifact) => TemplateSpec | undefined;
+  tokens: Record<string, string>;
+}): RenderResult {
+  const written: string[] = [];
+
+  for (const artifact of options.plan.artifacts) {
+    const templatePath = options.templateForArtifact(artifact);
+    if (!templatePath) {
+      throw new Error(`no template for artifact path: ${artifact.path}`);
+    }
+
+    const source = readFileSync(join(TEMPLATE_ROOT, templatePath.file), 'utf8');
+    const rendered = renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
+    const outPath = join(options.rootDir, artifact.path);
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, rendered);
+    written.push(artifact.path);
+  }
+
+  return { plan: options.plan, written };
+}
+
+function templateForExistingArtifact(
+  artifact: PlannedArtifact,
+  slug: string,
+  template: ProgramTemplate,
+): TemplateSpec | undefined {
+  if (template === 'policy-drafting') {
+    return EXISTING_POLICY_TEMPLATE_BY_KIND[artifact.kind];
+  }
+
+  return templateForFoundryArtifact(artifact, slug);
+}
+
+function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
+  if (artifact.kind === 'spec') {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/specs.yml'];
+  }
+  if (artifact.kind === 'registration') {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/registration.ts'];
+  }
+  if (artifact.kind === 'handler') {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
+  }
+  if (artifact.kind === 'tool') {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/tools.ts'];
+  }
+  if (artifact.kind === 'dossier') {
+    return STANDALONE_TEMPLATE_BY_PATH['.pgas/pgas-new/{{SLUG}}/dossier.yml'];
+  }
+  if (artifact.kind === 'metadata') {
+    return spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']);
+  }
+  if (artifact.kind === 'audit') {
+    return STANDALONE_TEMPLATE_BY_PATH['audit/PGAS-NEW-GRADUATION.md'];
+  }
+
+  return templateForStandalonePath(artifact.path, slug);
+}
+
+function templateForStandalonePath(path: string, slug: string): TemplateSpec | undefined {
   if (path === `.pgas/pgas-new/${slug}/dossier.yml`) {
     return STANDALONE_TEMPLATE_BY_PATH['.pgas/pgas-new/{{SLUG}}/dossier.yml'];
   }
@@ -130,16 +231,22 @@ function selectTokens(tokens: Record<string, string>, names: readonly string[]):
   return Object.fromEntries(names.map((name) => [name, tokens[name] ?? '']));
 }
 
-function tokensFor(options: RenderStandaloneOptions): Record<string, string> {
+function tokensFor(options: ProgramIdentity & { githubOwner?: string; githubRepo?: string; mandate?: string }, plan: ArtifactPlan): Record<string, string> {
   return {
+    ARTIFACT_PATHS_JSON: JSON.stringify(plan.artifacts.map((artifact) => artifact.path), null, 2),
     GITHUB_OWNER: options.githubOwner ?? 'simodelne',
     GITHUB_REPO: options.githubRepo ?? options.slug,
+    MANDATE: options.mandate ?? defaultMandate(options.name),
     NAME: options.name,
     PASCAL_NAME: toPascalCase(options.slug),
     PGAS_SERVER_VERSION,
     SLUG: options.slug,
     CONTROL_PLANE_CONTROLS_YAML: renderControlPlaneControlsYaml(options.slug),
   };
+}
+
+function defaultMandate(name: string): string {
+  return `${name} program generated by pgas-new. Replace this mandate with the approved intake dossier before live graduation.`;
 }
 
 function toPascalCase(value: string): string {

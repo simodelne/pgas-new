@@ -50,7 +50,7 @@ describe('pgas-new CLI', () => {
     const result = await runCli(['version']);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('@simodelne/pgas-server@2.8.3');
+    expect(result.stdout).toContain('@simodelne/pgas-server@2.10.0');
   });
 
   it('maps session commands to generated control-plane controls', async () => {
@@ -124,6 +124,62 @@ describe('pgas-new CLI', () => {
       expect(readDirSafe(join(repo, 'programs'))).toEqual([]);
     } finally {
       rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('renders existing repo attachment artifacts only on explicit render command', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'pgas-new-cli-render-attach-'));
+    try {
+      mkdirSync(join(repo, '.pgas'), { recursive: true });
+      writeFileSync(join(repo, '.pgas/wiring.yml'), VALID_MANIFEST);
+
+      const result = await runCli([
+        'render-attach',
+        '--repo',
+        repo,
+        '--slug',
+        'draft-policy',
+        '--name',
+        'Draft Policy',
+        '--template',
+        'policy-drafting',
+        '--mandate',
+        'risk-based policy drafting with outline approval before section-by-section drafting and Word plus HTML output stubs',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('written');
+      expect(result.stdout).toContain('programs/draft-policy/specs.yml');
+      expect(readFileSync(join(repo, 'programs/draft-policy/specs.yml'), 'utf8')).toContain('risk-based policy drafting');
+      expect(readFileSync(join(repo, '.pgas/pgas-new/draft-policy/artifacts.json'), 'utf8')).toContain(
+        'programs/draft-policy/specs.yml',
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses render-attach when the manifest is missing or planned files already exist', async () => {
+    const missingRepo = mkdtempSync(join(tmpdir(), 'pgas-new-cli-render-attach-missing-'));
+    const collisionRepo = mkdtempSync(join(tmpdir(), 'pgas-new-cli-render-attach-collision-'));
+    try {
+      const missing = await runCli(['render-attach', '--repo', missingRepo, '--slug', 'review', '--name', 'Review']);
+      expect(missing).toMatchObject({ exitCode: 1, stderr: expect.stringContaining('missing .pgas/wiring.yml') });
+      expect(readDirSafe(missingRepo)).toEqual([]);
+
+      mkdirSync(join(collisionRepo, '.pgas'), { recursive: true });
+      mkdirSync(join(collisionRepo, 'programs/review'), { recursive: true });
+      writeFileSync(join(collisionRepo, '.pgas/wiring.yml'), VALID_MANIFEST);
+      writeFileSync(join(collisionRepo, 'programs/review/specs.yml'), 'existing');
+
+      const collision = await runCli(['render-attach', '--repo', collisionRepo, '--slug', 'review', '--name', 'Review']);
+      expect(collision.exitCode).toBe(1);
+      expect(collision.stderr).toContain('refusing to overwrite existing attach artifacts');
+      expect(readFileSync(join(collisionRepo, 'programs/review/specs.yml'), 'utf8')).toBe('existing');
+      expect(readDirSafe(join(collisionRepo, '.pgas/pgas-new'))).toEqual([]);
+    } finally {
+      rmSync(missingRepo, { recursive: true, force: true });
+      rmSync(collisionRepo, { recursive: true, force: true });
     }
   });
 

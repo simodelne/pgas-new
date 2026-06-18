@@ -121,6 +121,9 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
 
 export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifest: WiringManifest): ArtifactPlan {
   const safeProgram = validateProgramIdentity(program);
+  if (manifest.repo.kind !== 'existing_repo') {
+    throw new Error('repo.kind must be existing_repo for attach planning');
+  }
   const slug = safeProgram.slug;
   assertSafeManifestDir('paths.programs_dir', manifest.paths.programs_dir);
   assertSafeManifestDir('paths.pgas_new_dir', manifest.paths.pgas_new_dir);

@@ -6,7 +6,7 @@ Status: initial TypeScript/Node implementation on branch `feat/pgas-new-foundry`
 
 ## PGAS Contract
 
-Generated consumers target `@simodelne/pgas-server@2.8.3` and use only these public imports:
+Generated consumers target `@simodelne/pgas-server@2.10.0` and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
@@ -53,7 +53,7 @@ Every mode includes session controls: `session_new`, `session_abort_current`, `s
 
 Existing-repo attachment is bound to `.pgas/wiring.yml`. Without that fixed-path manifest, `pgas-new` refuses writes and produces a curator request. A valid manifest declares package manager, PGAS package/imports, artifact directories, registration strategy, verification commands, and curator GitHub owner/repo.
 
-If a repo has no manifest, the correct output is a request for the repo curator to publish one. If a manifest exists but required facilities are missing, `pgas-new` stays in planning/request mode until the curator supplies or changes the repo wiring.
+If a repo has no manifest, the correct output is a request for the repo curator to publish one. If a manifest exists but required facilities are missing, `pgas-new` stays in planning/request mode until the curator supplies or changes the repo wiring. `render-attach` writes only the planned per-program artifacts, refuses missing/invalid manifests, and refuses to overwrite existing planned files; registration integration remains a curator-owned patch point.
 
 ## Artifact Ownership
 

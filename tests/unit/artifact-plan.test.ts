@@ -91,6 +91,15 @@ describe('artifact planner', () => {
     );
   });
 
+  it('requires an existing-repo wiring manifest for attach planning', () => {
+    expect(() =>
+      createExistingRepoArtifactPlan(
+        { slug: 'review', name: 'Review' },
+        { ...MANIFEST, repo: { ...MANIFEST.repo, kind: 'standalone_repo' } },
+      ),
+    ).toThrow(/repo.kind must be existing_repo/);
+  });
+
   it('marks every artifact with ownership, mode, purpose, and verification metadata', () => {
     const plan = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' });
 

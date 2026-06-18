@@ -5,7 +5,41 @@ import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
 import { PGAS_NEW_CONTROL_PLANE_CONTROLS } from '../../src/pgas-new/control-plane.js';
-import { renderStandaloneScaffold, renderTemplate } from '../../src/pgas-new/template-renderer.js';
+import {
+  renderExistingRepoAttachment,
+  renderStandaloneScaffold,
+  renderTemplate,
+} from '../../src/pgas-new/template-renderer.js';
+import type { WiringManifest } from '../../src/pgas-new/wiring-manifest.js';
+
+const VALID_MANIFEST: WiringManifest = {
+  schema_version: 1,
+  repo: { kind: 'existing_repo' as const, package_manager: 'npm' as const },
+  pgas: {
+    server_package: '@simodelne/pgas-server',
+    allowed_imports: [
+      '@simodelne/pgas-server/plugin.js',
+      '@simodelne/pgas-server/create-server.js',
+      '@simodelne/pgas-server/client.js',
+      '@simodelne/pgas-server/channels/index.js',
+      '@simodelne/pgas-server/routes/index.js',
+    ],
+  },
+  paths: {
+    programs_dir: 'programs',
+    audit_dir: 'audit',
+    pgas_new_dir: '.pgas/pgas-new',
+  },
+  registration: { strategy: 'curator_request' },
+  verification: {
+    commands: {
+      install: 'npm install --no-audit --no-fund',
+      typecheck: 'npm run build',
+      test: 'npm test',
+    },
+  },
+  curator: { github_owner: 'simodelne', github_repo: 'simoneos' },
+};
 
 describe('template renderer', () => {
   it('fails on missing and unused tokens', () => {
@@ -52,7 +86,7 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^2.8.3"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^2.10.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(registration).toContain("from '@simodelne/pgas-server/plugin.js'");
       expect(registration).toContain('type ProgramEntry');
@@ -131,6 +165,102 @@ describe('template renderer', () => {
       expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders policy-drafting artifacts into manifest paths for existing repo attachments', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-policy-'));
+    try {
+      const result = renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'draft-policy',
+        name: 'Draft Policy',
+        template: 'policy-drafting',
+        mandate:
+          'risk-based policy drafting; intake policy objectives/type/org/risk appetite/resources/audience/jurisdiction; outline approval before section-by-section drafting; Word + HTML rendering; editing/revision like SimoneOS contract draft',
+      });
+
+      expect(result.written).toEqual([
+        'programs/draft-policy/specs.yml',
+        'programs/draft-policy/registration.ts',
+        'programs/draft-policy/handlers.ts',
+        'programs/draft-policy/tools.ts',
+        '.pgas/pgas-new/draft-policy/dossier.yml',
+        '.pgas/pgas-new/draft-policy/artifacts.json',
+        'audit/PGAS-NEW-draft-policy.md',
+      ]);
+
+      const spec = readFileSync(join(repoRoot, 'programs/draft-policy/specs.yml'), 'utf8');
+      const parsed = load(spec) as {
+        channels: Record<string, { structured_decision?: boolean }>;
+        control_plane: { controls: Record<string, unknown>; version: number };
+        guidance: Record<string, string[]>;
+        ingestion: Record<string, string[]>;
+        modes: Record<string, {
+          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
+        }>;
+        projection: Record<string, { include: string[] }>;
+        schema: Record<string, string>;
+      };
+      const tools = readFileSync(join(repoRoot, 'programs/draft-policy/tools.ts'), 'utf8');
+      const artifacts = readFileSync(join(repoRoot, '.pgas/pgas-new/draft-policy/artifacts.json'), 'utf8');
+
+      expect(spec).toContain('risk-based policy drafting');
+      expect(spec).toContain('policy_objectives');
+      expect(spec).toContain('risk_appetite');
+      expect(spec).toContain('approve_outline');
+      expect(spec).toContain('draft_section');
+      expect(spec).toContain('render_policy_outputs');
+      expect(spec).toContain('outputs.html');
+      expect(spec).toContain('outputs.word');
+      expect(parsed.control_plane.version).toBe(1);
+      expect(Object.keys(parsed.control_plane.controls)).toEqual(
+        expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]),
+      );
+      expect(parsed.channels.user_confirmation.structured_decision).toBe(true);
+      expect(parsed.ingestion.user_confirmation).toEqual([
+        'inputs.user_decision.decision',
+        'inputs.user_decision.instruction',
+        'inputs.user_decision.note_mode',
+        'inputs.user_decision.timestamp',
+      ]);
+      expect(parsed.projection.intake.include).toEqual(expect.arrayContaining(['inputs.user_text']));
+      expect(parsed.projection.outline.include).toEqual(
+        expect.arrayContaining(['inputs.user_text', 'inputs.user_decision', 'inputs.user_decision.decision', 'inputs.user_decision.instruction']),
+      );
+      expect(parsed.projection.drafting.include).toEqual(expect.arrayContaining(['inputs.user_text']));
+      expect(parsed.projection.revision.include).toEqual(expect.arrayContaining(['inputs.user_text']));
+      expect(parsed.guidance.intake).toEqual(expect.arrayContaining([expect.stringContaining('collect_structured_data')]));
+      expect(parsed.guidance.outline).toEqual(expect.arrayContaining([expect.stringContaining('never call record_user_note')]));
+      expect(parsed.schema['intake.fields']).toBe('object');
+      expect(parsed.schema['inputs.user_decision.decision']).toBe('string');
+      expect(parsed.schema['inputs.user_decision.instruction']).toBe('string');
+      expect(parsed.modes.outline.preconditions?.approve_outline).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
+          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'outline.sections' }),
+        ]),
+      );
+      expect(parsed.modes.drafting.preconditions?.render_policy_outputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'draft.sections' }),
+        ]),
+      );
+      expect(parsed.modes.revision.preconditions?.render_policy_outputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'draft.sections' }),
+        ]),
+      );
+      expect(parsed.schema['outline.sections']).toBe('object');
+      expect(parsed.schema['outputs.html']).toBe('object');
+      expect(parsed.schema['outputs.word']).toBe('object');
+      expect(tools).toContain('revise_section');
+      expect(artifacts).toContain('programs/draft-policy/specs.yml');
+      expect(artifacts).not.toContain('{{');
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
     }
   });
 

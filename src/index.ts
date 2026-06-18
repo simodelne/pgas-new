@@ -57,6 +57,16 @@ export {
 } from "./pgas-new/existing-repo.js";
 
 export {
+  renderExistingRepoAttachment,
+  renderStandaloneScaffold,
+  renderTemplate,
+  type ProgramTemplate,
+  type RenderExistingRepoOptions,
+  type RenderResult,
+  type RenderStandaloneOptions,
+} from "./pgas-new/template-renderer.js";
+
+export {
   runLiveProviderVerification,
   runPostRebaseVerification,
   runStaticVerification,

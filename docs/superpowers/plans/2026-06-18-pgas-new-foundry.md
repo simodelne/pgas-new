@@ -7,7 +7,7 @@
 Replace the outdated `claude-pgas-plugin` v1 scaffolding surface with an initial `pgas-new` TypeScript/Node PGAS program foundry aligned to the approved Obsidian note:
 
 - Target only TypeScript/Node PGAS consumers initially.
-- Generate PGAS v2 programs using current public `@simodelne/pgas-server@2.8.3` surfaces.
+- Generate PGAS v2 programs using current public `@simodelne/pgas-server@2.10.0` surfaces.
 - Generate standalone repos and existing-repo attachments, but write existing-repo artifacts only when fixed-path `.pgas/wiring.yml` exists and validates.
 - Keep frontend, auth, persistence, and external services as explicit stubs/attachment points.
 - Treat generated coding artifacts as first-class planned objects, not incidental file writes.
@@ -17,7 +17,7 @@ Replace the outdated `claude-pgas-plugin` v1 scaffolding surface with an initial
 ## Baseline
 
 - Branch: `feat/pgas-new-foundry`.
-- Published package check: `npm view @simodelne/pgas-server version --registry=https://npm.pkg.github.com` returns `2.8.3`.
+- Published package check: `npm view @simodelne/pgas-server version --registry=https://npm.pkg.github.com` returns `2.10.0`.
 - Existing `npm test` after installing declared deps fails in `tests/server-typecheck.test.sh` because v1 templates import removed `@simodelne/pgas-server/api`.
 - Existing `.remember/` is unrelated and must remain untouched.
 
@@ -68,13 +68,13 @@ Implementation:
   - `pgas-new`: `tsx src/cli.ts`
 - Export constants:
   - `PGAS_SERVER_PACKAGE = "@simodelne/pgas-server"`
-  - `PGAS_SERVER_VERSION = "2.8.3"`
+  - `PGAS_SERVER_VERSION = "2.10.0"`
   - `PGAS_SERVER_IMPORTS = [...]`
   - `BANNED_IMPORT_PATTERNS = [...]`
 
 TDD:
 
-1. Add `tests/unit/version.test.ts` expecting the version constant to be `2.8.3`, the public imports list to contain all allowed subpaths, and banned patterns to catch v1/private imports.
+1. Add `tests/unit/version.test.ts` expecting the version constant to be `2.10.0`, the public imports list to contain all allowed subpaths, and banned patterns to catch v1/private imports.
 2. Run `npm run test:unit`; observe failure.
 3. Add `src/pgas-new/version.ts`; rerun `npm run test:unit`.
 
@@ -232,7 +232,7 @@ Files:
 Implementation:
 
 - Render templates using explicit token replacement, failing on missing or unused tokens.
-- Generated standalone `package.json` pins `@simodelne/pgas-server` to `^2.8.3`.
+- Generated standalone `package.json` pins `@simodelne/pgas-server` to `^2.10.0`.
 - Generated `server.ts` uses `createPgasServer` from `create-server.js`.
 - Generated `registration.ts` uses `ProgramEntry`, `createProgramAdapters`, `createToolRegistry`, `loadSpecWithPatterns`, and `enableNotebook` from `plugin.js`.
 - Generated REPL uses `controlCliAdapter` from `channels/index.js`.
@@ -340,9 +340,10 @@ Implementation:
   - `pgas-new render-standalone --slug <slug> --name <name> --out <dir>`
   - `pgas-new validate-manifest --repo <dir>`
   - `pgas-new plan-attach --repo <dir> --slug <slug> --name <name>`
+  - `pgas-new render-attach --repo <dir> --slug <slug> --name <name>`
   - `pgas-new curator-request --repo <dir> --slug <slug> --name <name>`
 - Session commands dispatch through the generated PGAS `control_plane` vocabulary (`ask`, `new`, `abort`, `history`, `status`, `help`) rather than a bespoke parser.
-- CLI writes only on explicit `render-standalone`; existing-repo attach remains plan/request only until a valid manifest and write confirmation are represented by the PGAS state machine.
+- CLI writes only on explicit `render-standalone` or `render-attach`; existing-repo attach requires a valid fixed-path manifest and refuses overwrites.
 
 TDD:
 

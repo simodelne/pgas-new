@@ -3,7 +3,11 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from './pgas-new/artifact-plan.js';
 import { prepareExistingRepoAttachment } from './pgas-new/existing-repo.js';
-import { renderStandaloneScaffold } from './pgas-new/template-renderer.js';
+import {
+  renderExistingRepoAttachment,
+  renderStandaloneScaffold,
+  type ProgramTemplate,
+} from './pgas-new/template-renderer.js';
 import { loadWiringManifest } from './pgas-new/wiring-manifest.js';
 import { PGAS_SERVER_PACKAGE, PGAS_SERVER_VERSION } from './pgas-new/version.js';
 import { isPgasNewSessionControl } from './pgas-new/control-plane.js';
@@ -43,6 +47,8 @@ export async function runCli(argv: string[]): Promise<CliResult> {
         return validateManifest(parsed);
       case 'plan-attach':
         return planAttach(parsed);
+      case 'render-attach':
+        return renderAttach(parsed);
       case 'curator-request':
         return curatorRequest(parsed);
       default:
@@ -101,6 +107,23 @@ function planAttach(options: ParsedOptions): CliResult {
 
   const plan = createExistingRepoArtifactPlan(program, manifest.manifest);
   return ok(formatPlan(plan.artifacts.map((artifact) => artifact.path)));
+}
+
+function renderAttach(options: ParsedOptions): CliResult {
+  const repo = required(options, 'repo');
+  const program = programOptions(options);
+  const manifest = loadWiringManifest(repo);
+  if (!manifest.ok || !manifest.manifest) {
+    return fail(manifest.errors.join('\n'), 1);
+  }
+
+  const result = renderExistingRepoAttachment({
+    repoRoot: repo,
+    manifest: manifest.manifest,
+    ...program,
+  });
+
+  return ok(`written\n${formatPlan(result.written)}`);
 }
 
 function curatorRequest(options: ParsedOptions): CliResult {
@@ -176,11 +199,29 @@ function parseArgs(argv: string[]): ParsedOptions {
   return parsed;
 }
 
-function programOptions(options: ParsedOptions): { slug: string; name: string } {
+function programOptions(options: ParsedOptions): {
+  slug: string;
+  name: string;
+  template?: ProgramTemplate;
+  mandate?: string;
+} {
   return {
     slug: required(options, 'slug'),
     name: required(options, 'name'),
+    template: templateOption(options),
+    mandate: optional(options, 'mandate'),
   };
+}
+
+function templateOption(options: ParsedOptions): ProgramTemplate | undefined {
+  const value = optional(options, 'template');
+  if (!value) {
+    return undefined;
+  }
+  if (value === 'pgas-new-foundry' || value === 'policy-drafting') {
+    return value;
+  }
+  throw new Error('invalid --template: expected pgas-new-foundry or policy-drafting');
 }
 
 function required(options: ParsedOptions, key: string): string {
@@ -209,6 +250,7 @@ function helpText(): string {
     '  render-standalone --slug <slug> --name <name> --out <dir>',
     '  validate-manifest --repo <repo>',
     '  plan-attach --repo <repo> --slug <slug> --name <name>',
+    '  render-attach --repo <repo> --slug <slug> --name <name> [--template policy-drafting] [--mandate <text>]',
     '  curator-request --repo <repo> --slug <slug> --name <name> [--github-owner <owner> --github-repo <repo>]',
     '  session new|abort|status|history|resume|help',
   ].join('\n');
