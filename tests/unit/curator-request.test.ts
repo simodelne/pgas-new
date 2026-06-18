@@ -38,6 +38,8 @@ describe('curator requests', () => {
 
     expect(request).toContain('simodelne/simoneos');
     expect(request).toContain('spec: programs/review/specs.yml');
+    expect(request).toContain('owner=pgas-new');
+    expect(request).toContain('mode=branch_write');
     expect(request).toContain('verification=spec-load');
     expect(request).toContain('audit/PGAS-NEW-review.md');
     expect(request).toContain('registration strategy: curator_request');

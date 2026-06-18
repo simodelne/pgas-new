@@ -65,6 +65,7 @@ describe('existing repo attachment preparation', () => {
 
       expect(result.ok).toBe(false);
       expect(result.writes_performed).toBe(false);
+      expect(readdirSync(repo).sort()).toEqual(['.pgas']);
       expect(readdirSync(join(repo, '.pgas'))).toEqual(['wiring.yml']);
       expect(result.curator_request).toContain('simodelne/simoneos');
       expect(result.curator_request).toContain('pgas.server_package must be @simodelne/pgas-server');
@@ -80,7 +81,12 @@ describe('existing repo attachment preparation', () => {
       mkdirSync(join(repo, '.pgas'), { recursive: true });
       writeFileSync(join(repo, '.pgas/wiring.yml'), VALID_MANIFEST);
 
-      const result = prepareExistingRepoAttachment(repo, { slug: 'review', name: 'Review' });
+      const result = prepareExistingRepoAttachment(repo, {
+        slug: 'review',
+        name: 'Review',
+        githubOwner: 'simodelne',
+        githubRepo: 'simoneos',
+      });
 
       expect(result.ok).toBe(true);
       expect(result.writes_performed).toBe(false);

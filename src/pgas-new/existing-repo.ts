@@ -21,8 +21,8 @@ export type ExistingRepoAttachmentResult =
     };
 
 export interface ExistingRepoAttachmentOptions extends ProgramIdentity {
-  githubOwner?: string;
-  githubRepo?: string;
+  githubOwner: string;
+  githubRepo: string;
 }
 
 export function prepareExistingRepoAttachment(
@@ -37,8 +37,8 @@ export function prepareExistingRepoAttachment(
       ok: false,
       writes_performed: false,
       curator_request: renderMissingWiringRequest({
-        githubOwner: program.githubOwner ?? 'unknown-owner',
-        githubRepo: program.githubRepo ?? 'unknown-repo',
+        githubOwner: program.githubOwner,
+        githubRepo: program.githubRepo,
         reason,
         action: 'Publish or correct the binding wiring manifest at .pgas/wiring.yml.',
       }),

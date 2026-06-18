@@ -26,7 +26,7 @@ export function renderMissingWiringRequest(options: MissingWiringRequestOptions)
 export function renderRegistrationRequest(options: { manifest: WiringManifest; plan: ArtifactPlan }): string {
   const artifactList = options.plan.artifacts
     .map((artifact) => {
-      return `- ${artifact.kind}: ${artifact.path} | purpose=${artifact.purpose} | verification=${artifact.verification.join(',')}`;
+      return `- ${artifact.kind}: ${artifact.path} | owner=${artifact.owner} | mode=${artifact.mode_introduced} | purpose=${artifact.purpose} | verification=${artifact.verification.join(',')}`;
     })
     .join('\n');
   return renderTemplate(readTemplate('registration-request.md.tmpl'), {
