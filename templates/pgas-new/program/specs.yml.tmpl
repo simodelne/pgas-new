@@ -28,11 +28,16 @@ modes:
       - target: repo_targeting
         guard: { kind: FieldTruthy, path: intake.mandate }
   repo_targeting:
-    vocabulary: [select_repo_target, load_wiring_manifest, create_curator_request]
+    vocabulary: [select_repo_target, authorize_standalone_target, load_wiring_manifest, create_curator_request]
     channels: [widget_output]
+    preconditions:
+      authorize_standalone_target:
+        - { kind: FieldEquals, path: repo.target_kind, value: standalone_repo }
+      load_wiring_manifest:
+        - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
     transitions:
       - target: architecture_design
-        guard: { kind: FieldTruthy, path: repo.target_kind }
+        guard: { kind: FieldTruthy, path: repo.write_authorized }
       - target: curator_request
         guard: { kind: FieldTruthy, path: repo.blocked }
   architecture_design:
@@ -44,12 +49,18 @@ modes:
   scaffold_plan:
     vocabulary: [plan_artifacts, approve_artifact_plan]
     channels: [widget_output]
+    preconditions:
+      approve_artifact_plan:
+        - { kind: FieldTruthy, path: repo.write_authorized }
     transitions:
       - target: branch_write
-        guard: { kind: FieldTruthy, path: artifact_plan.approved }
+        guard: { kind: FieldTruthy, path: artifact_plan.write_authorized }
   branch_write:
     vocabulary: [write_scaffold_artifacts, git_status]
     channels: [widget_output]
+    preconditions:
+      write_scaffold_artifacts:
+        - { kind: FieldTruthy, path: artifact_plan.write_authorized }
     transitions:
       - target: static_verify
         guard: { kind: FieldTruthy, path: artifacts.written }
@@ -82,7 +93,8 @@ modes:
         guard: { kind: FieldTruthy, path: repo.curator_request_lodged }
 
 proceed_to:
-  select_repo_target: architecture_design
+  authorize_standalone_target: architecture_design
+  load_wiring_manifest: architecture_design
   design_architecture: scaffold_plan
   approve_artifact_plan: branch_write
   write_scaffold_artifacts: static_verify
@@ -95,13 +107,13 @@ projection:
     include: [intake.mandate, notebook.entries, notebook.pins]
     exclude: []
   repo_targeting:
-    include: [repo.target_kind, repo.wiring_manifest.status, repo.required_facilities_missing]
+    include: [repo.target_kind, repo.wiring_manifest.status, repo.write_authorized, repo.required_facilities_missing]
     exclude: []
   architecture_design:
     include: [program.slug, program.runtime, program.architecture_ready]
     exclude: []
   scaffold_plan:
-    include: [artifact_plan.status, artifact_plan.approved]
+    include: [artifact_plan.status, artifact_plan.approved, artifact_plan.write_authorized]
     exclude: []
   branch_write:
     include: [artifacts.written, artifacts.generated_paths]
@@ -147,7 +159,19 @@ action_map:
     description: "Select standalone or existing-repo target."
     mutations: [{ op: MSet, path: repo.target_kind, from_arg: target_kind }]
     channel: widget_output
-  load_wiring_manifest: { description: "Load .pgas/wiring.yml.", mutations: [], channel: widget_output }
+  authorize_standalone_target:
+    description: "Authorize standalone repo writes after target selection."
+    mutations:
+      - { op: MSet, path: repo.write_authorized, value: true }
+      - { op: MSet, path: repo.wiring_manifest.status, value: not_required }
+    channel: widget_output
+  load_wiring_manifest:
+    description: "Load and validate fixed .pgas/wiring.yml for existing-repo writes."
+    mutations:
+      - { op: MSet, path: repo.wiring_manifest.status, value: valid }
+      - { op: MSet, path: repo.wiring_manifest.path, value: .pgas/wiring.yml }
+      - { op: MSet, path: repo.write_authorized, value: true }
+    channel: widget_output
   create_curator_request:
     description: "Prepare a repo curator request."
     mutations: [{ op: MSet, path: repo.curator_request_lodged, value: true }]
@@ -157,7 +181,12 @@ action_map:
     mutations: [{ op: MSet, path: program.architecture_ready, value: true }]
     channel: widget_output
   plan_artifacts: { description: "Plan artifacts.", mutations: [{ op: MSet, path: artifact_plan.status, value: draft }], channel: widget_output }
-  approve_artifact_plan: { description: "Approve artifact plan.", mutations: [{ op: MSet, path: artifact_plan.approved, value: true }], channel: widget_output }
+  approve_artifact_plan:
+    description: "Approve artifact plan after write authorization."
+    mutations:
+      - { op: MSet, path: artifact_plan.approved, value: true }
+      - { op: MSet, path: artifact_plan.write_authorized, value: true }
+    channel: widget_output
   write_scaffold_artifacts: { description: "Write planned artifacts.", mutations: [{ op: MSet, path: artifacts.written, value: true }], channel: widget_output }
   git_status: { description: "Read git status.", mutations: [], channel: widget_output }
   npm_install: { description: "Install dependencies.", mutations: [], channel: widget_output }
@@ -175,14 +204,17 @@ schema:
   notebook.pins: array
   repo.target_kind: string
   repo.blocked: boolean
+  repo.write_authorized: boolean
   repo.curator_request_lodged: boolean
   repo.wiring_manifest.status: string
+  repo.wiring_manifest.path: string
   repo.required_facilities_missing: array
   program.runtime: string
   program.slug: string
   program.architecture_ready: boolean
   artifact_plan.status: string
   artifact_plan.approved: boolean
+  artifact_plan.write_authorized: boolean
   artifacts.written: boolean
   artifacts.generated_paths: array
   graduation.static_verification: string
@@ -215,79 +247,4 @@ control_plane:
     bind:
       query: "$text"
   controls:
-    ask:
-      title: Ask
-      aliases: ["/ask"]
-      args:
-        query:
-          type: string
-          required: true
-          capture: rest
-      dispatch:
-        - op: create_session
-          as: session
-          program: "{{SLUG}}"
-          domain_context:
-            query: "$args.query"
-        - op: trigger
-          session: "$session.id"
-          channel: user_text
-          payload: "$args.query"
-          mode: async
-    abort:
-      title: Abort run
-      aliases: ["/abort", "/stop"]
-      availability:
-        when: "active_session.running"
-      dispatch:
-        - op: abort_session
-          session: "$active_session.id"
-      presentation:
-        priority: destructive
-        confirm: true
-    new:
-      title: New session
-      aliases: ["/new", "/reset", "/restart"]
-      dispatch:
-        - op: create_session
-          as: session
-          program: "{{SLUG}}"
-      presentation:
-        priority: secondary
-    history:
-      title: Recent sessions
-      aliases: ["/history", "/recent"]
-      dispatch:
-        - op: list_sessions
-          as: sessions
-      presentation:
-        priority: secondary
-    status:
-      title: Status
-      aliases: ["/status"]
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: render_session
-          session: "$active_session.id"
-          view: status
-      presentation:
-        priority: contextual
-    resume:
-      title: Resume
-      aliases: ["/resume"]
-      availability:
-        when: "active_session"
-      dispatch:
-        - op: send_runtime_control
-          session: "$active_session.id"
-          control: resume
-      presentation:
-        priority: contextual
-    help:
-      title: Help
-      aliases: ["/help"]
-      dispatch:
-        - op: render_help
-      presentation:
-        priority: secondary
+{{CONTROL_PLANE_CONTROLS_YAML}}

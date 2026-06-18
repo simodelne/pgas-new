@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runCli } from '../../src/cli.js';
+import { PGAS_NEW_SESSION_CONTROLS } from '../../src/pgas-new/control-plane.js';
 
 const VALID_MANIFEST = `
 schema_version: 1
@@ -36,12 +37,11 @@ describe('pgas-new CLI', () => {
   });
 
   it('maps session commands to generated control-plane controls', async () => {
-    await expect(runCli(['session', 'new'])).resolves.toMatchObject({ stdout: expect.stringContaining('control:new') });
-    await expect(runCli(['session', 'abort'])).resolves.toMatchObject({ stdout: expect.stringContaining('control:abort') });
-    await expect(runCli(['session', 'status'])).resolves.toMatchObject({ stdout: expect.stringContaining('control:status') });
-    await expect(runCli(['session', 'history'])).resolves.toMatchObject({ stdout: expect.stringContaining('control:history') });
-    await expect(runCli(['session', 'resume'])).resolves.toMatchObject({ stdout: expect.stringContaining('control:resume') });
-    await expect(runCli(['session', 'help'])).resolves.toMatchObject({ stdout: expect.stringContaining('control:help') });
+    for (const control of PGAS_NEW_SESSION_CONTROLS) {
+      await expect(runCli(['session', control])).resolves.toMatchObject({
+        stdout: expect.stringContaining(`control:${control}`),
+      });
+    }
   });
 
   it('plans standalone artifacts without writing files', async () => {
@@ -106,6 +106,28 @@ describe('pgas-new CLI', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('simodelne/simoneos');
       expect(result.stdout).toContain('No local writes were performed');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps dots in GitHub repo names when deriving curator target from origin', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'pgas-new-cli-curator-dot-'));
+    try {
+      mkdirSync(join(repo, '.git'), { recursive: true });
+      writeFileSync(join(repo, '.git/config'), '[remote "origin"]\n  url = https://github.com/simodelne/pgas.new.git\n');
+      const result = await runCli([
+        'curator-request',
+        '--repo',
+        repo,
+        '--slug',
+        'review',
+        '--name',
+        'Review',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('simodelne/pgas.new');
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

@@ -1,8 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
+import { PGAS_NEW_CONTROL_PLANE_CONTROLS } from '../../src/pgas-new/control-plane.js';
 import { renderStandaloneScaffold, renderTemplate } from '../../src/pgas-new/template-renderer.js';
 
 describe('template renderer', () => {
@@ -120,6 +122,39 @@ describe('template renderer', () => {
       expect(spec).toContain('session_abort_current');
       expect(tests.join('\n')).toContain('real provider round trip through the external API');
       expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders generated write-safety gates for existing repo attachments', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-gates-'));
+    try {
+      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
+      const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
+      const parsed = load(spec) as {
+        modes: Record<string, {
+          preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown }>>;
+          transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
+        }>;
+        schema: Record<string, string>;
+        control_plane: { controls: Record<string, unknown> };
+      };
+
+      expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
+      expect(parsed.schema['repo.write_authorized']).toBe('boolean');
+      expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+      expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'repo.write_authorized' }]),
+      );
+      expect(parsed.modes.branch_write.preconditions?.write_scaffold_artifacts).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' }]),
+      );
+      expect(parsed.modes.scaffold_plan.transitions).toEqual(
+        expect.arrayContaining([
+          { target: 'branch_write', guard: { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' } },
+        ]),
+      );
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }

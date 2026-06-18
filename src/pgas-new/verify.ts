@@ -72,9 +72,9 @@ export async function runLiveProviderVerification(
 
   return [
     {
+      ...result,
       command_id: 'liveProviderRoundTrip',
       cwd: options.cwd,
-      ...result,
     },
   ];
 }

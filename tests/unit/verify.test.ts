@@ -66,6 +66,32 @@ describe('verification runner', () => {
     expect(evidence[0].status).toBe('pass');
   });
 
+  it('does not allow live verifier output to override evidence identity', async () => {
+    const evidence = await runLiveProviderVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_LIVE_PROVIDER: 'openai',
+        PGAS_API_BASE: 'http://127.0.0.1:3000',
+        PGAS_API_TOKEN: 'token',
+      },
+      verifier: {
+        async verify() {
+          return {
+            command_id: 'npmTest',
+            cwd: '/other',
+            duration_ms: 5,
+            exit_code: 0,
+            status: 'pass',
+            stdout_excerpt: 'live provider round trip ok',
+          } as never;
+        },
+      },
+    });
+
+    expect(evidence[0].command_id).toBe('liveProviderRoundTrip');
+    expect(evidence[0].cwd).toBe('/repo');
+  });
+
   it('reruns the full static ladder after rebasing latest', async () => {
     const runner = createMockCommandRunner();
     const evidence = await runPostRebaseVerification({ cwd: '/repo', runner, branch: 'main' });

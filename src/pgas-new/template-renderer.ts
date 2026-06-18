@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStandaloneArtifactPlan, type ArtifactPlan, type ProgramIdentity } from './artifact-plan.js';
+import { renderControlPlaneControlsYaml } from './control-plane.js';
 import { PGAS_SERVER_VERSION } from './version.js';
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new');
@@ -34,7 +35,7 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'tsconfig.json': spec('standalone/tsconfig.json.tmpl', []),
   'src/server.ts': spec('standalone/src/server.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'src/repl/index.ts': spec('standalone/src/repl/index.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
-  'src/programs/{{SLUG}}/specs.yml': spec('program/specs.yml.tmpl', ['NAME', 'SLUG']),
+  'src/programs/{{SLUG}}/specs.yml': spec('program/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'NAME', 'SLUG']),
   'src/programs/{{SLUG}}/registration.ts': spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
   'src/programs/{{SLUG}}/handlers.ts': spec('program/handlers.ts.tmpl', []),
   'src/programs/{{SLUG}}/tools.ts': spec('program/tools.ts.tmpl', ['PASCAL_NAME']),
@@ -137,6 +138,7 @@ function tokensFor(options: RenderStandaloneOptions): Record<string, string> {
     PASCAL_NAME: toPascalCase(options.slug),
     PGAS_SERVER_VERSION,
     SLUG: options.slug,
+    CONTROL_PLANE_CONTROLS_YAML: renderControlPlaneControlsYaml(options.slug),
   };
 }
 

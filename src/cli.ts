@@ -6,6 +6,7 @@ import { prepareExistingRepoAttachment } from './pgas-new/existing-repo.js';
 import { renderStandaloneScaffold } from './pgas-new/template-renderer.js';
 import { loadWiringManifest } from './pgas-new/wiring-manifest.js';
 import { PGAS_SERVER_PACKAGE, PGAS_SERVER_VERSION } from './pgas-new/version.js';
+import { isPgasNewSessionControl } from './pgas-new/control-plane.js';
 
 export interface CliResult {
   exitCode: number;
@@ -17,15 +18,6 @@ interface ParsedOptions {
   _: string[];
   [key: string]: string | string[];
 }
-
-const SESSION_CONTROL_BY_COMMAND: Record<string, string> = {
-  new: 'new',
-  abort: 'abort',
-  status: 'status',
-  history: 'history',
-  resume: 'resume',
-  help: 'help',
-};
 
 export async function runCli(argv: string[]): Promise<CliResult> {
   try {
@@ -56,11 +48,11 @@ export async function runCli(argv: string[]): Promise<CliResult> {
 }
 
 function sessionCommand(command: string | undefined): CliResult {
-  if (!command || !(command in SESSION_CONTROL_BY_COMMAND)) {
+  if (!isPgasNewSessionControl(command)) {
     return fail('unknown session command', 2);
   }
 
-  return ok(`control:${SESSION_CONTROL_BY_COMMAND[command]}`);
+  return ok(`control:${command}`);
 }
 
 function planStandalone(options: ParsedOptions): CliResult {
@@ -148,7 +140,7 @@ function resolveTargetRepo(
 function readOriginRemote(repo: string): { githubOwner: string; githubRepo: string } | undefined {
   try {
     const config = readFileSync(join(repo, '.git/config'), 'utf8');
-    const match = config.match(/url\s*=\s*(?:git@github\.com:|https:\/\/github\.com\/)([^/\s]+)\/([^.\s]+)(?:\.git)?/);
+    const match = config.match(/url\s*=\s*(?:git@github\.com:|https:\/\/github\.com\/)([^/\s]+)\/([^\s]+?)(?:\.git)?(?:\s|$)/);
     if (!match) {
       return undefined;
     }
