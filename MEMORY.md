@@ -1,4 +1,4 @@
-# MEMORY - claude-pgas-plugin
+# MEMORY - pgas-new
 
 Read after `CLAUDE.md`. This file records current branch state and durable
 decisions. It is not a changelog and not a session handoff.
