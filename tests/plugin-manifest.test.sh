@@ -22,7 +22,7 @@ else
 fi
 
 echo "[2/5] plugin.json + package.json version pinned to 2.0.0"
-EXPECTED_VERSION="2.0.0"
+EXPECTED_VERSION="2.1.0"
 MANIFEST_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version ?? '')" 2>/dev/null)
 PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version ?? '')" 2>/dev/null)
 if [[ "$MANIFEST_VERSION" == "$EXPECTED_VERSION" ]]; then
