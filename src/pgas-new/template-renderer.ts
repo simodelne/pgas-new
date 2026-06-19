@@ -20,7 +20,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   githubRepo?: string;
 }
 
-export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting';
+export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting' | 'web-scraper';
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
   repoRoot: string;
@@ -41,7 +41,7 @@ interface TemplateSpec {
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   '.pgas/wiring.yml': spec('repo/.pgas/wiring.yml.tmpl', ['GITHUB_OWNER', 'GITHUB_REPO']),
-  '.pgas/pgas-new/{{SLUG}}/dossier.yml': spec('standalone/.pgas/pgas-new/dossier.yml.tmpl', ['NAME', 'SLUG']),
+  '.pgas/pgas-new/{{SLUG}}/dossier.yml': spec('standalone/.pgas/pgas-new/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   '.pgas/pgas-new/{{SLUG}}/artifacts.json': spec('standalone/.pgas/pgas-new/artifacts.json.tmpl', [
     'NAME',
     'PGAS_SERVER_VERSION',
@@ -73,8 +73,21 @@ const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], 
   audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
+const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
+  spec: spec('consumer/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  handler: spec('consumer/web-scraper/handlers.ts.tmpl', []),
+  tool: spec('consumer/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('consumer/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
+  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
+};
+
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
   const plan = createStandaloneArtifactPlan({ slug: options.slug, name: options.name });
+
+  assertNoExistingArtifacts(options.outDir, plan);
+
   return renderPlan({
     plan,
     rootDir: options.outDir,
@@ -170,6 +183,9 @@ function templateForExistingArtifact(
   if (template === 'policy-drafting') {
     return EXISTING_POLICY_TEMPLATE_BY_KIND[artifact.kind];
   }
+  if (template === 'web-scraper') {
+    return EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND[artifact.kind];
+  }
 
   return templateForFoundryArtifact(artifact, slug);
 }
@@ -228,7 +244,15 @@ function spec(file: string, tokens: readonly string[]): TemplateSpec {
 }
 
 function selectTokens(tokens: Record<string, string>, names: readonly string[]): Record<string, string> {
-  return Object.fromEntries(names.map((name) => [name, tokens[name] ?? '']));
+  return Object.fromEntries(
+    names.map((name) => {
+      const value = tokens[name];
+      if (value === undefined) {
+        throw new Error(`template token not in pool: ${name}`);
+      }
+      return [name, value];
+    }),
+  );
 }
 
 function tokensFor(options: ProgramIdentity & { githubOwner?: string; githubRepo?: string; mandate?: string }, plan: ArtifactPlan): Record<string, string> {

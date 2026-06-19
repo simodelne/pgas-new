@@ -81,13 +81,28 @@ describe('artifact planner', () => {
   });
 
   it('rejects unsafe manifest paths before planning writes', () => {
-    const unsafeManifest: WiringManifest = {
+    const unsafeProgramsDir: WiringManifest = {
       ...MANIFEST,
       paths: { ...MANIFEST.paths, programs_dir: '../programs' },
     };
-
-    expect(() => createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, unsafeManifest)).toThrow(
+    expect(() => createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, unsafeProgramsDir)).toThrow(
       /paths\.programs_dir must be a safe repo-relative path/,
+    );
+
+    const unsafePgasNewDir: WiringManifest = {
+      ...MANIFEST,
+      paths: { ...MANIFEST.paths, pgas_new_dir: '/etc/pgas' },
+    };
+    expect(() => createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, unsafePgasNewDir)).toThrow(
+      /paths\.pgas_new_dir must be a safe repo-relative path/,
+    );
+
+    const unsafeAuditDir: WiringManifest = {
+      ...MANIFEST,
+      paths: { ...MANIFEST.paths, audit_dir: '../../audit' },
+    };
+    expect(() => createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, unsafeAuditDir)).toThrow(
+      /paths\.audit_dir must be a safe repo-relative path/,
     );
   });
 

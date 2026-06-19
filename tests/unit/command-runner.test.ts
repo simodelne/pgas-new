@@ -111,6 +111,24 @@ describe('node command runner', () => {
     expect(calls).toEqual([]);
   });
 
+  it('records explicit stderr markers when child stdio streams are null', async () => {
+    const spawn: SpawnImpl = () => {
+      const emitter = new EventEmitter();
+      const child = emitter as ReturnType<SpawnImpl>;
+      child.stdout = null;
+      child.stderr = null;
+      setImmediate(() => emitter.emit('close', 0));
+      return child;
+    };
+    const runner = createNodeCommandRunner(spawn);
+
+    const result = await runner.npmInstall({ cwd: '/tmp/repo' });
+
+    expect(result.exit_code).toBe(0);
+    expect(result.stderr_excerpt).toContain('child stdout not piped');
+    expect(result.stderr_excerpt).toContain('child stderr not piped');
+  });
+
   it('validates branch names conservatively', () => {
     expect(isSafeGitBranchName('main')).toBe(true);
     expect(isSafeGitBranchName('release/2026-06-18')).toBe(true);

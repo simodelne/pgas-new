@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
@@ -47,6 +47,24 @@ describe('template renderer', () => {
     expect(() => renderTemplate('hello', { NAME: 'pgas-new' })).toThrow(/unused template token: NAME/);
     expect(() => renderTemplate('hello {{Slug}}', {})).toThrow(/unrendered template token remains/);
     expect(renderTemplate('hello {{NAME}}', { NAME: 'pgas-new' })).toBe('hello pgas-new');
+  });
+
+  it('refuses to overwrite existing planned artifacts in outDir', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-overwrite-'));
+    try {
+      // Pre-create a file at one of the planned output paths.
+      const collisionPath = join(outDir, 'package.json');
+      const sentinel = '{"existing":"user-content"}';
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(collisionPath, sentinel);
+
+      expect(() => renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' })).toThrow(
+        /refusing to overwrite/,
+      );
+      expect(readFileSync(collisionPath, 'utf8')).toBe(sentinel);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
   });
 
   it('renders the standalone scaffold with every planned artifact', () => {
@@ -259,6 +277,149 @@ describe('template renderer', () => {
       expect(tools).toContain('revise_section');
       expect(artifacts).toContain('programs/draft-policy/specs.yml');
       expect(artifacts).not.toContain('{{');
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('renders web-scraper artifacts with hard network guardrails encoded in the spec, tools, and handlers', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-web-scraper-'));
+    try {
+      const result = renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'web-scraper',
+        name: 'Web Scraper',
+        template: 'web-scraper',
+        mandate: 'Ethical legal corpus scraper with HARD network guardrails',
+      });
+
+      expect(result.written).toEqual([
+        'programs/web-scraper/specs.yml',
+        'programs/web-scraper/registration.ts',
+        'programs/web-scraper/handlers.ts',
+        'programs/web-scraper/tools.ts',
+        '.pgas/pgas-new/web-scraper/dossier.yml',
+        '.pgas/pgas-new/web-scraper/artifacts.json',
+        'audit/PGAS-NEW-web-scraper.md',
+      ]);
+
+      const spec = readFileSync(join(repoRoot, 'programs/web-scraper/specs.yml'), 'utf8');
+      const tools = readFileSync(join(repoRoot, 'programs/web-scraper/tools.ts'), 'utf8');
+      const handlers = readFileSync(join(repoRoot, 'programs/web-scraper/handlers.ts'), 'utf8');
+      const dossier = readFileSync(join(repoRoot, '.pgas/pgas-new/web-scraper/dossier.yml'), 'utf8');
+      const parsed = load(spec) as {
+        modes: Record<string, {
+          vocabulary?: string[];
+          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown }>>;
+          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
+        }>;
+        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+        proceed_to: Record<string, string>;
+        schema: Record<string, string>;
+        terminal: string[];
+      };
+
+      // 9 modes (8 active + blocked terminal pair) — matches the handoff.
+      expect(Object.keys(parsed.modes)).toEqual([
+        'intake',
+        'intelligence',
+        'egress_verification',
+        'web_analysis',
+        'strategy_review',
+        'scraping',
+        'asset_verification',
+        'complete',
+        'blocked',
+      ]);
+      expect(parsed.terminal).toEqual(['complete', 'blocked']);
+
+      // No analysis call without confirmed egress.
+      const analysisTools = ['check_robots_and_terms', 'analyze_html_sample', 'playwright_snapshot', 'vision_analyze_snapshot'];
+      for (const tool of analysisTools) {
+        expect(parsed.modes.web_analysis.preconditions?.[tool]).toEqual(
+          expect.arrayContaining([expect.objectContaining({ kind: 'FieldTruthy', path: 'egress.confirmed' })]),
+        );
+      }
+
+      // No scraping without confirmed egress AND user-approved strategy AND last asset verified.
+      expect(parsed.modes.scraping.preconditions?.fetch_one_asset).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'egress.confirmed' }),
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'strategy.user_approved' }),
+          expect.objectContaining({ kind: 'FieldEquals', path: 'scraping.last_asset_verified', value: true }),
+        ]),
+      );
+
+      // Strategy approval requires the user_confirmation trigger.
+      expect(parsed.modes.strategy_review.preconditions?.approve_scraping_strategy).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
+          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'strategy.proposal_json' }),
+        ]),
+      );
+
+      // Asset_verification transitions: back to scraping when verified, complete when budget exhausted, blocked on user_decision required.
+      expect(parsed.modes.asset_verification.transitions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            target: 'scraping',
+            guard: expect.objectContaining({ kind: 'FieldEquals', path: 'scraping.last_asset_verified', value: true }),
+          }),
+          expect.objectContaining({
+            target: 'complete',
+            guard: expect.objectContaining({ kind: 'FieldTruthy', path: 'scraping.budget_exhausted' }),
+          }),
+          expect.objectContaining({
+            target: 'blocked',
+            guard: expect.objectContaining({ kind: 'FieldTruthy', path: 'verification.requires_user_decision' }),
+          }),
+        ]),
+      );
+
+      // Durable ledger schema declared.
+      expect(parsed.schema['ledger.path']).toBe('string');
+      expect(parsed.schema['ledger.entries_count']).toBe('number');
+      expect(parsed.schema['scraping.last_asset_verified']).toBe('boolean');
+      expect(parsed.schema['scraping.budget_exhausted']).toBe('boolean');
+      expect(parsed.schema['strategy.user_approved']).toBe('boolean');
+      expect(parsed.schema['egress.confirmed']).toBe('boolean');
+
+      // Mandate landed (literal block scalar — newlines/colons in user mandates are safe).
+      expect(spec).toContain('Ethical legal corpus scraper with HARD network guardrails');
+      expect(dossier).toContain('Ethical legal corpus scraper with HARD network guardrails');
+      expect(dossier).toContain('declared_purpose');
+      expect(dossier).toContain('Stop rather than evade blocks');
+
+      // fetch_one_asset MUST land its asset id and force the verification step (last_asset_verified=false on fetch).
+      expect(parsed.action_map.fetch_one_asset.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'scraping.last_asset_id', from_arg: 'asset_id' }),
+          expect.objectContaining({ path: 'scraping.last_asset_verified', value: false }),
+        ]),
+      );
+
+      // tools.ts encodes the rejection logic for URL arrays, wildcards, xargs, parallel, etc.
+      expect(tools).toContain('FORBIDDEN_PAYLOAD_KEYS');
+      expect(tools).toContain('xargs');
+      expect(tools).toContain('parallel');
+      expect(tools).toContain('payload may not declare plural field');
+      expect(tools).toContain('url must not contain wildcards');
+      expect(tools).toContain('url must be a single string, not an array');
+
+      // handlers.ts has the array-rejection plumb on every networked tool.
+      expect(handlers).toContain('rejectArrays');
+      expect(handlers).toContain('attachment_points');
+      expect(handlers).toContain('fetch_one_asset');
+      expect(handlers).toContain('robots_fetcher');
+
+      // proceed_to wiring covers the canonical ladder.
+      expect(parsed.proceed_to.record_intake).toBe('intelligence');
+      expect(parsed.proceed_to.confirm_egress_ip).toBe('web_analysis');
+      expect(parsed.proceed_to.approve_scraping_strategy).toBe('scraping');
+      expect(parsed.proceed_to.fetch_one_asset).toBe('asset_verification');
+      expect(parsed.proceed_to.complete_run).toBe('complete');
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

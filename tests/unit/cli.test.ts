@@ -232,7 +232,10 @@ describe('pgas-new CLI', () => {
 function readDirSafe(path: string): string[] {
   try {
     return readdirSync(path);
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
   }
 }

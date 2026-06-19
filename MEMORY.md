@@ -1,13 +1,17 @@
-# MEMORY - claude-pgas-plugin
+# MEMORY - pgas-new
 
 Read after `CLAUDE.md`. This file records current branch state and durable
 decisions. It is not a changelog and not a session handoff.
 
-## Current State - 2026-06-18
+## Current State - 2026-06-19
 
-- Active branch: `feat/pgas-new-foundry`.
-- Direction: convert the old scaffold plugin into `pgas-new`, a PGAS-specific
-  TypeScript/Node foundry for creating governed PGAS programs.
+- Active branch: `chore/pgas-new-rename-audit-grad2`.
+- GitHub remote was renamed `simodelne/claude-pgas-plugin` ->
+  `simodelne/pgas-new`; local origin updated.
+- Package name renamed from `claude-pgas-plugin` to `pgas-new`. v2.0.0 stays
+  as the released version; the rename is metadata-only.
+- Direction unchanged: a PGAS-specific TypeScript/Node foundry for creating
+  governed PGAS programs.
 - Current server target: latest checked published `@simodelne/pgas-server` is
   `2.10.0`.
 - Generated runtime code must use public server imports only:
@@ -26,6 +30,46 @@ decisions. It is not a changelog and not a session handoff.
   checkout.
 
 ## Decisions
+
+### 2026-06-19 - Graduation 2 in flight on this branch (web-scraper template + live LLM round)
+
+`pgas-new` now ships a `web-scraper` program template — a safety-critical,
+network-aware PGAS consumer with 9 modes (intake → intelligence →
+egress_verification → web_analysis → strategy_review → scraping →
+asset_verification → complete | blocked) and hard guardrails at the
+spec/gate, tool, and handler layers (no target-site call before
+`egress.confirmed`, no scraping before `strategy.user_approved`, exactly
+one asset per `fetch_one_asset` with `last_asset_verified` gate between
+fetches, `assertSinglularPayload` rejecting URL arrays / wildcards /
+`xargs` / `parallel` / shell loops, durable ledger declared as state).
+
+Live round through local Qwen/vLLM (`qwen36-27b @ 127.0.0.1:8000`) drove
+`record_intake` successfully on session `web-scraper-1781864452931` with
+all 8 intake mutations applied and `proposedMode: intelligence` — proof
+the foundry-generated program loads and runs end-to-end through
+`@simodelne/pgas-server@2.10.0` with a real provider round trip.
+
+Curator requests filed:
+- `simodelne/pgas#454` — track `pgas-new` as a consumer foundry.
+- `simodelne/pgas-rag#506` — publish `.pgas/wiring.yml` so pgas-new can
+  attach the web-scraper into pgas-rag (the foundry currently refuses
+  attach with `missing .pgas/wiring.yml`, which is the intended refusal
+  contract working as designed).
+
+### 2026-06-19 - Audit pass closed silent-failure modes
+
+Foundry audit added overwrite refusal to `render-standalone` (parity with
+`render-attach`), loud-failure on missing template token in the global pool,
+fail-not-skip on live-provider env-present-verifier-missing, explicit stderr
+marker when child stdio streams are null, and ENOENT-only catch in the
+manifest-refusal test helper. Also added `curator_request -> repo_targeting`
+to the gate engine (spec template already declared it). `BASE_ACTIONS_BY_MODE`
+became a total `Record` so future mode additions fail to compile rather than
+silently produce zero legal actions. Dossier templates now use a YAML literal
+block scalar for `mandate`, and the foundry-template attach path no longer
+silently drops `--mandate`. `.gitignore` now excludes stray `.js` next to
+TypeScript sources (Node-ESM resolution would otherwise prefer the stale
+compiled output and mask source changes).
 
 ### 2026-06-18 - v1 plugin surfaces removed from the foundry branch
 

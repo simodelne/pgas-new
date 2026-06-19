@@ -61,14 +61,21 @@ export async function runLiveProviderVerification(
     ];
   }
 
-  const result = options.verifier
-    ? await options.verifier.verify({ cwd: options.cwd, env: options.env })
-    : {
+  if (!options.verifier) {
+    return [
+      {
+        command_id: 'liveProviderRoundTrip',
+        cwd: options.cwd,
         duration_ms: 0,
         exit_code: null,
-        status: 'skip' as const,
-        stdout_excerpt: 'live provider verifier not configured',
-      };
+        status: 'fail',
+        stderr_excerpt:
+          'live provider env present (PGAS_LIVE_PROVIDER + PGAS_API_BASE + PGAS_API_TOKEN) but verifier not configured — graduation cannot proceed',
+      },
+    ];
+  }
+
+  const result = await options.verifier.verify({ cwd: options.cwd, env: options.env });
 
   return [
     {

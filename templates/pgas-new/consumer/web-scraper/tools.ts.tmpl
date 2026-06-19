@@ -1,0 +1,91 @@
+import type { ToolImpl, ToolRegistry } from '@simodelne/pgas-server/plugin.js';
+
+const semanticTools = [
+  'record_user_note',
+  'request_user_action',
+  'record_intake',
+  'web_search_sources',
+  'confirm_egress_ip',
+  'check_robots_and_terms',
+  'analyze_html_sample',
+  'playwright_snapshot',
+  'vision_analyze_snapshot',
+  'propose_scraping_strategy',
+  'approve_scraping_strategy',
+  'fetch_one_asset',
+  'skip_duplicate',
+  'verify_asset',
+  'append_scrape_ledger',
+  'complete_run',
+] as const;
+
+const FORBIDDEN_PAYLOAD_KEYS = ['urls', 'url_list', 'targets', 'queue', 'paths', 'pages'] as const;
+const FORBIDDEN_VALUE_PATTERNS = [
+  /\bxargs\b/i,
+  /\bparallel\b/i,
+  /\bbackground\b/i,
+  /\&\s*$/,
+  /\bwhile\s+true\b/i,
+  /\bfor\s+\w+\s+in\b/i,
+];
+
+function assertSinglularPayload(toolName: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new Error(`${toolName}: payload must be a single object`);
+  }
+  for (const key of FORBIDDEN_PAYLOAD_KEYS) {
+    if (key in (payload as Record<string, unknown>)) {
+      throw new Error(`${toolName}: payload may not declare plural field '${key}' — exactly one item per call`);
+    }
+  }
+  const url = (payload as { url?: unknown }).url;
+  if (Array.isArray(url)) {
+    throw new Error(`${toolName}: url must be a single string, not an array`);
+  }
+  if (typeof url === 'string' && (url.includes('\n') || url.includes('|') || url.includes(';'))) {
+    throw new Error(`${toolName}: url must not contain newlines, pipes, or shell separators`);
+  }
+  if (typeof url === 'string' && url.includes('*')) {
+    throw new Error(`${toolName}: url must not contain wildcards — fetch exactly one asset`);
+  }
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    for (const pattern of FORBIDDEN_VALUE_PATTERNS) {
+      if (pattern.test(value)) {
+        throw new Error(`${toolName}: payload.${key} matched forbidden pattern ${pattern}`);
+      }
+    }
+  }
+}
+
+const fetchOneAssetTool: ToolImpl = {
+  kind: 'local',
+  fn: async (args) => {
+    assertSinglularPayload('fetch_one_asset', args);
+    return { ok: true, kind: 'single_asset_request', args };
+  },
+};
+
+const networkAnalysisTool = (name: string): ToolImpl => ({
+  kind: 'local',
+  fn: async (args) => {
+    assertSinglularPayload(name, args);
+    return { ok: true, kind: `${name}_request`, args };
+  },
+});
+
+const noopTool: ToolImpl = {
+  kind: 'local',
+  fn: async (args) => ({ ok: true, args }),
+};
+
+export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
+  registry.register('fetch_one_asset', fetchOneAssetTool);
+  for (const name of ['check_robots_and_terms', 'analyze_html_sample', 'playwright_snapshot'] as const) {
+    registry.register(name, networkAnalysisTool(name));
+  }
+  for (const name of semanticTools) {
+    if (name === 'fetch_one_asset' || name === 'check_robots_and_terms' || name === 'analyze_html_sample' || name === 'playwright_snapshot') continue;
+    registry.register(name, noopTool);
+  }
+}

@@ -66,6 +66,26 @@ describe('verification runner', () => {
     expect(evidence[0].status).toBe('pass');
   });
 
+  it('fails live-provider verification when env is populated but no verifier is configured', async () => {
+    const evidence = await runLiveProviderVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_LIVE_PROVIDER: 'openai',
+        PGAS_API_BASE: 'http://127.0.0.1:3000',
+        PGAS_API_TOKEN: 'token',
+      },
+    });
+
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      command_id: 'liveProviderRoundTrip',
+      cwd: '/repo',
+      exit_code: null,
+      status: 'fail',
+    });
+    expect(evidence[0].stderr_excerpt).toMatch(/verifier not configured/);
+  });
+
   it('does not allow live verifier output to override evidence identity', async () => {
     const evidence = await runLiveProviderVerification({
       cwd: '/repo',

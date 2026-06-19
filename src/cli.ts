@@ -218,10 +218,10 @@ function templateOption(options: ParsedOptions): ProgramTemplate | undefined {
   if (!value) {
     return undefined;
   }
-  if (value === 'pgas-new-foundry' || value === 'policy-drafting') {
+  if (value === 'pgas-new-foundry' || value === 'policy-drafting' || value === 'web-scraper') {
     return value;
   }
-  throw new Error('invalid --template: expected pgas-new-foundry or policy-drafting');
+  throw new Error('invalid --template: expected pgas-new-foundry, policy-drafting, or web-scraper');
 }
 
 function required(options: ParsedOptions, key: string): string {
@@ -250,7 +250,7 @@ function helpText(): string {
     '  render-standalone --slug <slug> --name <name> --out <dir>',
     '  validate-manifest --repo <repo>',
     '  plan-attach --repo <repo> --slug <slug> --name <name>',
-    '  render-attach --repo <repo> --slug <slug> --name <name> [--template policy-drafting] [--mandate <text>]',
+    '  render-attach --repo <repo> --slug <slug> --name <name> [--template policy-drafting|web-scraper] [--mandate <text>]',
     '  curator-request --repo <repo> --slug <slug> --name <name> [--github-owner <owner> --github-repo <repo>]',
     '  session new|abort|status|history|resume|help',
   ].join('\n');

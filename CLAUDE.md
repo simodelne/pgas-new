@@ -1,4 +1,4 @@
-# claude-pgas-plugin
+# pgas-new
 
 > READ FIRST. This is the load-bearing governance doc for this repo. Every
 > Claude session here must obey it. Then read `MEMORY.md` for current state and
