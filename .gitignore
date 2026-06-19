@@ -24,6 +24,12 @@ build/
 .env
 .env.local
 
+# Stray compiled output next to TypeScript sources (typecheck script uses --noEmit;
+# any .js next to a .ts is a leftover from a stray `tsc` run and will shadow the .ts
+# in Node-ESM resolution via the .js import extension).
+src/**/*.js
+tests/**/*.js
+
 # Claude Code session artifacts
 .claude/sessions/
 .claude/

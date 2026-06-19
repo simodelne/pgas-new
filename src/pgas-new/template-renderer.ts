@@ -41,7 +41,7 @@ interface TemplateSpec {
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   '.pgas/wiring.yml': spec('repo/.pgas/wiring.yml.tmpl', ['GITHUB_OWNER', 'GITHUB_REPO']),
-  '.pgas/pgas-new/{{SLUG}}/dossier.yml': spec('standalone/.pgas/pgas-new/dossier.yml.tmpl', ['NAME', 'SLUG']),
+  '.pgas/pgas-new/{{SLUG}}/dossier.yml': spec('standalone/.pgas/pgas-new/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   '.pgas/pgas-new/{{SLUG}}/artifacts.json': spec('standalone/.pgas/pgas-new/artifacts.json.tmpl', [
     'NAME',
     'PGAS_SERVER_VERSION',
@@ -75,6 +75,9 @@ const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], 
 
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
   const plan = createStandaloneArtifactPlan({ slug: options.slug, name: options.name });
+
+  assertNoExistingArtifacts(options.outDir, plan);
+
   return renderPlan({
     plan,
     rootDir: options.outDir,
@@ -228,7 +231,15 @@ function spec(file: string, tokens: readonly string[]): TemplateSpec {
 }
 
 function selectTokens(tokens: Record<string, string>, names: readonly string[]): Record<string, string> {
-  return Object.fromEntries(names.map((name) => [name, tokens[name] ?? '']));
+  return Object.fromEntries(
+    names.map((name) => {
+      const value = tokens[name];
+      if (value === undefined) {
+        throw new Error(`template token not in pool: ${name}`);
+      }
+      return [name, value];
+    }),
+  );
 }
 
 function tokensFor(options: ProgramIdentity & { githubOwner?: string; githubRepo?: string; mandate?: string }, plan: ArtifactPlan): Record<string, string> {

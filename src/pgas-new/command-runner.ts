@@ -148,12 +148,20 @@ function runProcess(
     let stderr = '';
     let settled = false;
 
-    child.stdout?.on('data', (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    child.stderr?.on('data', (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
+    if (child.stdout) {
+      child.stdout.on('data', (chunk: Buffer | string) => {
+        stdout += chunk.toString();
+      });
+    } else {
+      stderr += '[command-runner] child stdout not piped — output not captured\n';
+    }
+    if (child.stderr) {
+      child.stderr.on('data', (chunk: Buffer | string) => {
+        stderr += chunk.toString();
+      });
+    } else {
+      stderr += '[command-runner] child stderr not piped — output not captured\n';
+    }
     child.on('error', (error) => {
       if (settled) {
         return;

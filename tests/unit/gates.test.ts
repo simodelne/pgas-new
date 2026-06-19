@@ -345,4 +345,29 @@ describe('pgas-new gates', () => {
       /pr_requires_post_rebase_verification/,
     );
   });
+
+  it('returns to repo_targeting from curator_request only once the curator request is lodged', () => {
+    const blocked = {
+      ...createInitialState(),
+      session: { ...createInitialState().session, current_mode: 'curator_request' },
+      repo: {
+        target_kind: 'existing_repo',
+        blocked: true,
+        write_authorized: false,
+        wiring_manifest: { status: 'absent' },
+        required_facilities_missing: ['wiring_manifest'],
+      },
+    } satisfies PgasNewState;
+
+    expect(canTransition(blocked, 'curator_request', 'repo_targeting')).toEqual({
+      allowed: false,
+      reason: 'repo_targeting_return_requires_lodged_curator_request',
+    });
+
+    const lodged = {
+      ...blocked,
+      repo: { ...blocked.repo, curator_request_lodged: true },
+    } satisfies PgasNewState;
+    expect(canTransition(lodged, 'curator_request', 'repo_targeting')).toEqual({ allowed: true });
+  });
 });

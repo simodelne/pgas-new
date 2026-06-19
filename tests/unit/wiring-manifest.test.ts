@@ -142,6 +142,14 @@ curator:
     );
   });
 
+  it('rejects null, scalar, and array YAML payloads as non-object manifests', () => {
+    for (const source of ['null', '~', 'just-a-string', '- one\n- two']) {
+      const result = parseWiringManifest(source);
+      expect(result.ok).toBe(false);
+      expect(result.errors).toContain('manifest must be a YAML object');
+    }
+  });
+
   it('ships a valid manifest template', () => {
     const template = readFileSync('templates/pgas-new/repo/.pgas/wiring.yml.tmpl', 'utf8');
     const rendered = template

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
@@ -47,6 +47,24 @@ describe('template renderer', () => {
     expect(() => renderTemplate('hello', { NAME: 'pgas-new' })).toThrow(/unused template token: NAME/);
     expect(() => renderTemplate('hello {{Slug}}', {})).toThrow(/unrendered template token remains/);
     expect(renderTemplate('hello {{NAME}}', { NAME: 'pgas-new' })).toBe('hello pgas-new');
+  });
+
+  it('refuses to overwrite existing planned artifacts in outDir', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-overwrite-'));
+    try {
+      // Pre-create a file at one of the planned output paths.
+      const collisionPath = join(outDir, 'package.json');
+      const sentinel = '{"existing":"user-content"}';
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(collisionPath, sentinel);
+
+      expect(() => renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' })).toThrow(
+        /refusing to overwrite/,
+      );
+      expect(readFileSync(collisionPath, 'utf8')).toBe(sentinel);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
   });
 
   it('renders the standalone scaffold with every planned artifact', () => {

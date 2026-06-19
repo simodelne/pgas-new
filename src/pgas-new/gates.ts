@@ -11,7 +11,7 @@ export interface GateResult {
   reason?: string;
 }
 
-type ActionSet = Partial<Record<PgasNewMode, readonly PgasNewAction[]>>;
+type ActionSet = Record<PgasNewMode, readonly PgasNewAction[]>;
 
 const SESSION_CONTROL_ACTIONS = [
   'session_new',
@@ -118,6 +118,10 @@ export function canTransition(
         : deny('rebase_verify_requires_live_verification_passed');
     case 'rebase_verify->pr_graduation':
       return canEnterPrGraduation(state);
+    case 'curator_request->repo_targeting':
+      return state.repo.curator_request_lodged
+        ? allow()
+        : deny('repo_targeting_return_requires_lodged_curator_request');
     default:
       return deny('transition_not_declared');
   }
@@ -274,7 +278,7 @@ function isResearchAllowed(state: PgasNewState): boolean {
 }
 
 function baseActionsForMode(mode: PgasNewMode): readonly PgasNewAction[] {
-  return BASE_ACTIONS_BY_MODE[mode] ?? [];
+  return BASE_ACTIONS_BY_MODE[mode];
 }
 
 function allow(): GateResult {
