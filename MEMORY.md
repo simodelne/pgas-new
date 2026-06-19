@@ -5,7 +5,9 @@ decisions. It is not a changelog and not a session handoff.
 
 ## Current State - 2026-06-19
 
-- Active branch: `chore/pgas-new-rename-audit-grad2`.
+- Active branch: `feat/pgas-new-standalone-template-social-media-agent`
+  (graduation 3 — standalone-repo proof through a fresh custom program template).
+  Prior graduation branches: `chore/pgas-new-rename-audit-grad2` (graduation 2).
 - GitHub remote was renamed `simodelne/claude-pgas-plugin` ->
   `simodelne/pgas-new`; local origin updated.
 - Package name renamed from `claude-pgas-plugin` to `pgas-new`. v2.0.0 stays
@@ -30,6 +32,45 @@ decisions. It is not a changelog and not a session handoff.
   checkout.
 
 ## Decisions
+
+### 2026-06-19 - Graduation 3 in flight (standalone repo via --template social-media-agent)
+
+`pgas-new` now generates standalone PGAS-program repositories with a non-foundry
+program template chosen at CLI time. Previously `render-standalone` only emitted
+the foundry's self-program; this branch adds:
+
+- `social-media-agent` consumer template under
+  `templates/pgas-new/consumer/social-media-agent/` — 10-mode declarative state
+  machine (intake → mock_adapter_check → session_bootstrap → monitor_feed →
+  draft_review → human_approval → post_publish → post_verification → complete |
+  blocked) with hard safety gates encoded in spec preconditions, tool guardrails
+  (no real-platform domains, no credential field names, exactly one draft per
+  publish call), handler `assertMockAdapter`, and dossier
+  `forbidden_capabilities`.
+- `render-standalone --template policy-drafting|web-scraper|social-media-agent`
+  routes program-shaped artifacts (spec/handler/tool/dossier) through
+  `STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE`; non-program scaffold
+  (server/REPL/tests/audit/manifest) stays foundry-default.
+- `RenderStandaloneOptions` accepts `template?` and `mandate?`.
+- `templates/pgas-new/tests/live-provider.test.ts.tmpl` now passes an explicit
+  `LIVE_PROVIDER_TIMEOUT_MS` (default 180 s, overridable via
+  `PGAS_LIVE_PROVIDER_TIMEOUT_MS`). The previous 5 s default flaked every real
+  round trip.
+
+Live round through local Qwen/vLLM (`qwen36-27b @ 100.100.74.6:8000`) drove
+`record_intake` successfully on a fresh standalone repo at
+`/tmp/pgas-new-grad-3-sma`, session `social-media-agent-1781884509712`. All 8
+intake mutations (including `safety.no_real_credentials=true`) applied and the
+mode advanced `intake → mock_adapter_check` exactly as the spec declares.
+Vitest `live-provider.test.ts` ran green: 2/2 pass, 6.34 s. Full evidence in
+`docs/PGAS-NEW-GRADUATION-3-STANDALONE.md`. tmux session
+`pgas-new-grad-3-standalone`; transcript snapshots in
+`/tmp/pgas-new-grad-3-logs/`.
+
+Open follow-up: REPL `controlCliAdapter` rejects the default `dev-token` baked
+into the rendered `src/repl/index.ts.tmpl`. The HTTP API surface is unaffected
+and the scaffolded `npm run dev` server runs fine. Pre-existing scaffold
+limitation, not new on this branch.
 
 ### 2026-06-19 - Graduation 2 in flight on this branch (web-scraper template + live LLM round)
 

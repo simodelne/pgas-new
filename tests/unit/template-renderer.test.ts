@@ -181,6 +181,8 @@ describe('template renderer', () => {
       expect(spec).toContain('run_rebase_static_verification');
       expect(tests.join('\n')).toContain('real provider round trip through the external API');
       expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
+      expect(tests.join('\n')).toContain('LIVE_PROVIDER_TIMEOUT_MS');
+      expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER_TIMEOUT_MS');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
@@ -420,6 +422,146 @@ describe('template renderer', () => {
       expect(parsed.proceed_to.approve_scraping_strategy).toBe('scraping');
       expect(parsed.proceed_to.fetch_one_asset).toBe('asset_verification');
       expect(parsed.proceed_to.complete_run).toBe('complete');
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('renders the social-media-agent program in a standalone scaffold via --template', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-sma-'));
+    try {
+      const result = renderStandaloneScaffold({
+        outDir,
+        slug: 'social-media-agent',
+        name: 'Social Media Agent',
+        template: 'social-media-agent',
+        mandate:
+          'Manage a demo social media account via mocked web navigation only; never log into a real account; never post to a real account; explicit human approval before every publish.',
+      });
+
+      expect(result.written).toEqual(
+        createStandaloneArtifactPlan({ slug: 'social-media-agent', name: 'Social Media Agent' }).artifacts.map(
+          (artifact) => artifact.path,
+        ),
+      );
+
+      const spec = readFileSync(join(outDir, 'src/programs/social-media-agent/specs.yml'), 'utf8');
+      const tools = readFileSync(join(outDir, 'src/programs/social-media-agent/tools.ts'), 'utf8');
+      const handlers = readFileSync(join(outDir, 'src/programs/social-media-agent/handlers.ts'), 'utf8');
+      const dossier = readFileSync(join(outDir, '.pgas/pgas-new/social-media-agent/dossier.yml'), 'utf8');
+      const parsed = load(spec) as {
+        modes: Record<string, {
+          vocabulary?: string[];
+          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
+          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
+        }>;
+        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+        terminal: string[];
+        schema: Record<string, string>;
+      };
+
+      expect(Object.keys(parsed.modes)).toEqual([
+        'intake',
+        'mock_adapter_check',
+        'session_bootstrap',
+        'monitor_feed',
+        'draft_review',
+        'human_approval',
+        'post_publish',
+        'post_verification',
+        'complete',
+        'blocked',
+      ]);
+      expect(parsed.terminal).toEqual(['complete', 'blocked']);
+
+      expect(parsed.modes.mock_adapter_check.preconditions?.confirm_mock_adapter).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldEquals', path: 'safety.no_real_credentials', value: true }),
+        ]),
+      );
+      expect(parsed.modes.session_bootstrap.preconditions?.bootstrap_mock_session).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldEquals', path: 'browser.adapter_kind', value: 'mock' }),
+        ]),
+      );
+      expect(parsed.modes.human_approval.preconditions?.approve_draft).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
+          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
+        ]),
+      );
+      expect(parsed.modes.post_publish.preconditions?.publish_one_draft).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'approval.user_approved' }),
+          expect.objectContaining({ kind: 'FieldEquals', path: 'browser.adapter_kind', value: 'mock' }),
+          expect.objectContaining({ kind: 'FieldEquals', path: 'post.last_post_verified', value: true }),
+        ]),
+      );
+
+      expect(parsed.action_map.publish_one_draft.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'post.last_post_id', from_arg: 'post_id' }),
+          expect.objectContaining({ path: 'post.last_post_verified', value: false }),
+        ]),
+      );
+
+      expect(parsed.schema['safety.no_real_credentials']).toBe('boolean');
+      expect(parsed.schema['browser.adapter_kind']).toBe('string');
+      expect(parsed.schema['approval.user_approved']).toBe('boolean');
+      expect(parsed.schema['post.last_post_verified']).toBe('boolean');
+
+      expect(tools).toContain('REAL_PLATFORM_DOMAINS');
+      expect(tools).toContain('twitter.com');
+      expect(tools).toContain('mock/demo URLs only');
+      expect(tools).toContain('publish exactly one draft');
+      expect(tools).toContain('no real credentials accepted');
+      expect(tools).toContain('FORBIDDEN_PAYLOAD_KEYS');
+
+      expect(handlers).toContain('rejectArrays');
+      expect(handlers).toContain('assertMockAdapter');
+      expect(handlers).toContain('attachment_points');
+      expect(handlers).toContain('mock_browser_adapter');
+      expect(handlers).toContain('mock_publisher');
+
+      expect(dossier).toContain('Manage a demo social media account via mocked web navigation only');
+      expect(dossier).toContain('No real social media credentials');
+      expect(dossier).toContain('mock_browser_adapter');
+      expect(dossier).toContain('forbidden_capabilities');
+      expect(dossier).toContain('navigate_real_platform');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders social-media-agent artifacts via render-attach with mock-only guardrails', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-sma-'));
+    try {
+      const result = renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'social-media-agent',
+        name: 'Social Media Agent',
+        template: 'social-media-agent',
+        mandate: 'Demo-only social media account agent operating through a mocked browser adapter with explicit human approval gates before every publish.',
+      });
+
+      expect(result.written).toEqual([
+        'programs/social-media-agent/specs.yml',
+        'programs/social-media-agent/registration.ts',
+        'programs/social-media-agent/handlers.ts',
+        'programs/social-media-agent/tools.ts',
+        '.pgas/pgas-new/social-media-agent/dossier.yml',
+        '.pgas/pgas-new/social-media-agent/artifacts.json',
+        'audit/PGAS-NEW-social-media-agent.md',
+      ]);
+
+      const spec = readFileSync(join(repoRoot, 'programs/social-media-agent/specs.yml'), 'utf8');
+      const dossier = readFileSync(join(repoRoot, '.pgas/pgas-new/social-media-agent/dossier.yml'), 'utf8');
+      expect(spec).toContain('mock_adapter_check');
+      expect(spec).toContain('approve_draft');
+      expect(spec).toContain('publish_one_draft');
+      expect(dossier).toContain('Demo-only social media account agent');
+      expect(dossier).toContain('forbidden_capabilities');
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

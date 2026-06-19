@@ -1,0 +1,70 @@
+program:
+  slug: "{{SLUG}}"
+  name: "{{NAME}}"
+  runtime: typescript-node
+  template: social-media-agent
+mandate: |-
+  {{MANDATE}}
+ethics:
+  declared_purpose: "Manage a social media account via web navigation through a mocked browser adapter with explicit human approval gates before any post or send."
+  hard_rules:
+    - "No real social media credentials are accepted, stored, or transmitted."
+    - "No login to any real account. Demo / stub login pages only."
+    - "No post to any real account. Mocked publisher only."
+    - "browser.adapter_kind must equal 'mock' before any session, feed, draft, or publish action."
+    - "Every draft requires explicit user_confirmation approval before publish."
+    - "Exactly one draft per publish_one_draft call. No fan-out."
+    - "post.last_post_verified must be true before the next publish — the gate enforces this."
+    - "Halt on any signal of captcha, 2FA, login wall, real-account contact, rate-limit violation, or platform policy refusal."
+  refusal_triggers:
+    - real_credentials_supplied
+    - real_platform_url
+    - missing_user_approval
+    - captcha
+    - mfa_required
+    - login_wall
+    - rate_limited
+    - platform_policy_violation
+intake:
+  required_fields:
+    - account_handle
+    - platform_class
+    - persona
+    - topic_scope
+    - posting_cadence_per_day
+    - no_real_credentials
+    - demo_page_url
+browser_capabilities:
+  declared_capabilities:
+    - navigate_mock_url
+    - read_mock_dom
+    - mock_login
+    - capture_mock_feed_snapshot
+    - publish_one_mock_draft
+    - verify_mock_post
+  forbidden_capabilities:
+    - navigate_real_platform
+    - submit_real_credentials
+    - publish_real_post
+    - read_real_user_profile
+durable_ledger:
+  description: "Append-only ledger of every mocked post; survives across sessions."
+  required_fields:
+    - draft_id
+    - mock_post_id
+    - mock_target_url
+    - published_at
+    - http_status
+    - dom_presence
+    - verification_status
+    - approval_evidence
+attachment_points:
+  mock_browser_adapter: "wire repo-owned MOCK browser adapter (Playwright-against-local-demo-page is fine; never real platform)"
+  mock_login_driver: "wire repo-owned mock-page login driver"
+  mock_feed_observer: "wire repo-owned mock feed observer"
+  mock_publisher: "wire repo-owned mock publisher (one draft per call)"
+  mock_post_verifier: "wire repo-owned mock post verifier"
+  post_ledger: "wire repo-owned append-only durable post ledger writer"
+graduation:
+  static_verification: pending
+  live_provider_round_trip: pending
