@@ -3,11 +3,15 @@
 Read after `CLAUDE.md`. This file records current branch state and durable
 decisions. It is not a changelog and not a session handoff.
 
-## Current State - 2026-06-18
+## Current State - 2026-06-19
 
-- Active branch: `feat/pgas-new-foundry`.
-- Direction: convert the old scaffold plugin into `pgas-new`, a PGAS-specific
-  TypeScript/Node foundry for creating governed PGAS programs.
+- Active branch: `chore/pgas-new-rename-audit-grad2`.
+- GitHub remote was renamed `simodelne/claude-pgas-plugin` ->
+  `simodelne/pgas-new`; local origin updated.
+- Package name renamed from `claude-pgas-plugin` to `pgas-new`. v2.0.0 stays
+  as the released version; the rename is metadata-only.
+- Direction unchanged: a PGAS-specific TypeScript/Node foundry for creating
+  governed PGAS programs.
 - Current server target: latest checked published `@simodelne/pgas-server` is
   `2.10.0`.
 - Generated runtime code must use public server imports only:
@@ -26,6 +30,21 @@ decisions. It is not a changelog and not a session handoff.
   checkout.
 
 ## Decisions
+
+### 2026-06-19 - Audit pass closed silent-failure modes
+
+Foundry audit added overwrite refusal to `render-standalone` (parity with
+`render-attach`), loud-failure on missing template token in the global pool,
+fail-not-skip on live-provider env-present-verifier-missing, explicit stderr
+marker when child stdio streams are null, and ENOENT-only catch in the
+manifest-refusal test helper. Also added `curator_request -> repo_targeting`
+to the gate engine (spec template already declared it). `BASE_ACTIONS_BY_MODE`
+became a total `Record` so future mode additions fail to compile rather than
+silently produce zero legal actions. Dossier templates now use a YAML literal
+block scalar for `mandate`, and the foundry-template attach path no longer
+silently drops `--mandate`. `.gitignore` now excludes stray `.js` next to
+TypeScript sources (Node-ESM resolution would otherwise prefer the stale
+compiled output and mask source changes).
 
 ### 2026-06-18 - v1 plugin surfaces removed from the foundry branch
 
