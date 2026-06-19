@@ -31,6 +31,31 @@ decisions. It is not a changelog and not a session handoff.
 
 ## Decisions
 
+### 2026-06-19 - Graduation 2 in flight on this branch (web-scraper template + live LLM round)
+
+`pgas-new` now ships a `web-scraper` program template — a safety-critical,
+network-aware PGAS consumer with 9 modes (intake → intelligence →
+egress_verification → web_analysis → strategy_review → scraping →
+asset_verification → complete | blocked) and hard guardrails at the
+spec/gate, tool, and handler layers (no target-site call before
+`egress.confirmed`, no scraping before `strategy.user_approved`, exactly
+one asset per `fetch_one_asset` with `last_asset_verified` gate between
+fetches, `assertSinglularPayload` rejecting URL arrays / wildcards /
+`xargs` / `parallel` / shell loops, durable ledger declared as state).
+
+Live round through local Qwen/vLLM (`qwen36-27b @ 127.0.0.1:8000`) drove
+`record_intake` successfully on session `web-scraper-1781864452931` with
+all 8 intake mutations applied and `proposedMode: intelligence` — proof
+the foundry-generated program loads and runs end-to-end through
+`@simodelne/pgas-server@2.10.0` with a real provider round trip.
+
+Curator requests filed:
+- `simodelne/pgas#454` — track `pgas-new` as a consumer foundry.
+- `simodelne/pgas-rag#506` — publish `.pgas/wiring.yml` so pgas-new can
+  attach the web-scraper into pgas-rag (the foundry currently refuses
+  attach with `missing .pgas/wiring.yml`, which is the intended refusal
+  contract working as designed).
+
 ### 2026-06-19 - Audit pass closed silent-failure modes
 
 Foundry audit added overwrite refusal to `render-standalone` (parity with
