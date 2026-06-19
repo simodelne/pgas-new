@@ -533,6 +533,34 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders REPL with a dev-mode AuthProvider that lets controlCliAdapter accept the default CLI token', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-dev-auth-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'social-media-agent',
+        name: 'Social Media Agent',
+        template: 'social-media-agent',
+      });
+      const repl = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
+
+      expect(repl).toContain(
+        "import type { AuthIdentity, AuthProvider } from '@simodelne/pgas-server/plugin.js'",
+      );
+      expect(repl).toContain('devReplAuthProvider');
+      expect(repl).toContain('PGAS_DEV_MODE');
+      expect(repl).toContain('PGAS_CLI_TOKEN');
+      expect(repl).toContain("DEFAULT_CLI_TOKEN = 'dev-token'");
+      expect(repl).toMatch(/devMode\s*\?\s*\{\s*auth:\s*devReplAuthProvider\(\)\s*\}\s*:\s*\{\s*\}/);
+      expect(repl).toContain('controlCliAdapter');
+      expect(repl).toContain('PGAS_CLI_TOKEN must be set when PGAS_DEV_MODE=0');
+      expect(repl).toContain('verifyToken');
+      expect(repl).toContain("userId: DEV_USER_ID, role: 'admin'");
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders social-media-agent artifacts via render-attach with mock-only guardrails', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-sma-'));
     try {

@@ -202,28 +202,58 @@ NPM_TOKEN="$(gh auth token)" npx vitest run tests/live-provider.test.ts
 # RERUN_EXIT=0
 ```
 
-### 7. REPL lifecycle
+### 7. REPL lifecycle (initial — broken)
 
 ```bash
 echo "" | timeout 8 npm run repl
 # server.constructed printed, then controlCliAdapter token verification failed.
 ```
 
-The REPL adapter's token verification path (`controlCliAdapter`) refuses the
-default `dev-token` value baked into `src/repl/index.ts.tmpl`. This is a
-pre-existing scaffold limitation, not new on this branch — the REPL boots its
-server cleanly (server.constructed log line is emitted), but the CLI channel
-exits before accepting input. The HTTP API path is fully functional (see step
-5). Filed as the only graduation-3 follow-up.
+Root cause: `controlCliAdapter` calls `ctx.verify(token)` → `auth.verifyToken(token)`.
+The HTTP dev-mode middleware bypasses `verifyToken` entirely (any bearer is
+accepted), but the CLI channel has no parallel bypass — the default
+`JwtAuthProvider` rejects the literal string `dev-token` because it is not a
+signed JWT.
+
+### 7b. REPL lifecycle (after the fix)
+
+The fix injects a tiny dev-only `AuthProvider` into the REPL bootstrap
+(`src/repl/index.ts`) that accepts any non-empty token and resolves to the
+same `dev-user-00000000` principal the HTTP dev middleware uses. The
+production `npm run dev` path (`src/server.ts`) is untouched. In non-dev mode
+(`PGAS_DEV_MODE=0`) the REPL refuses to start without an explicit
+`PGAS_CLI_TOKEN`.
+
+```bash
+echo "" | timeout 8 npm run repl
+# server.constructed → server.starting → readline attaches → EOF → clean shutdown.
+# REPL_RC=0
+
+printf "/help\n" | timeout 8 npm run repl
+# server.constructed → server.starting → /help dispatched:
+#   /ask — Ask
+#   /abort — Abort run
+#   /new — New session
+#   /history — Recent sessions
+#   /status — Status
+#   /resume — Resume
+#   /help — Help
+# REPL_RC=0
+```
+
+Verified against a freshly rendered scaffold at
+`/tmp/pgas-new-grad-3-sma-repl-fix` on 2026-06-19. HTTP API surface unaffected
+(verified by `GET /programs` and `POST /sessions` on the same rendered
+`npm run dev` server, both returning expected JSON).
 
 ## Known follow-up
 
-- REPL `controlCliAdapter` rejects the default `dev-token` baked into the
-  rendered `src/repl/index.ts.tmpl`. The HTTP API surface is unaffected and the
-  scaffolded server runs fine via `npm run dev`. A small future change is to
-  either mint the CLI token through `controlCliAdapter`'s expected signer or
-  document a `PGAS_CLI_TOKEN=$(node -e '...')` recipe in the scaffold's README.
-  This is independent of standalone graduation and existed before this branch.
+None on the standalone graduation contract. The REPL token-verification
+follow-up identified in the initial graduation has been closed by the
+dev-mode `AuthProvider` shim in `templates/pgas-new/standalone/src/repl/index.ts.tmpl`
+and asserted by a new unit test in `tests/unit/template-renderer.test.ts`
+("renders REPL with a dev-mode AuthProvider that lets controlCliAdapter accept
+the default CLI token").
 
 ## What this proves
 
