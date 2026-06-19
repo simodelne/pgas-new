@@ -20,7 +20,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   githubRepo?: string;
 }
 
-export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting';
+export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting' | 'web-scraper';
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
   repoRoot: string;
@@ -69,6 +69,16 @@ const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], 
   handler: spec('consumer/policy/handlers.ts.tmpl', []),
   tool: spec('consumer/policy/tools.ts.tmpl', ['PASCAL_NAME']),
   dossier: spec('consumer/policy/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
+  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
+};
+
+const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
+  spec: spec('consumer/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  handler: spec('consumer/web-scraper/handlers.ts.tmpl', []),
+  tool: spec('consumer/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('consumer/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
   audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
@@ -172,6 +182,9 @@ function templateForExistingArtifact(
 ): TemplateSpec | undefined {
   if (template === 'policy-drafting') {
     return EXISTING_POLICY_TEMPLATE_BY_KIND[artifact.kind];
+  }
+  if (template === 'web-scraper') {
+    return EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND[artifact.kind];
   }
 
   return templateForFoundryArtifact(artifact, slug);

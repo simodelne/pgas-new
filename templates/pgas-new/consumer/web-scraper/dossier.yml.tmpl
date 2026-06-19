@@ -1,0 +1,56 @@
+program:
+  slug: "{{SLUG}}"
+  name: "{{NAME}}"
+  runtime: typescript-node
+  template: web-scraper
+mandate: |-
+  {{MANDATE}}
+ethics:
+  declared_purpose: "Ethical legal corpus scraping under hard policy compliance."
+  hard_rules:
+    - "Respect robots.txt, terms, crawl-delay, captcha, and rate limits."
+    - "Stop rather than evade blocks."
+    - "Preserve declared privacy/anonymity but never use anonymity to bypass site policy."
+    - "Exactly one asset per fetch_one_asset call — no URL arrays, no loops, no fan-out."
+  refusal_triggers:
+    - captcha
+    - login_required
+    - paywall
+    - bot_prohibition
+    - robots_disallow
+    - terms_violation
+    - legal_uncertainty
+intake:
+  required_fields:
+    - objective
+    - jurisdiction
+    - target_legal_domain
+    - allowed_source_classes
+    - user_constraints
+    - privacy_requirements
+    - max_network_budget
+durable_ledger:
+  description: "Append-only ledger of every fetched asset; survives across sessions."
+  required_fields:
+    - source_url
+    - content_hash
+    - artifact_path
+    - fetched_at
+    - http_status
+    - mime_type
+    - size_bytes
+    - source_domain
+    - verification_status
+    - skip_reason
+attachment_points:
+  egress_probe: "wire repo-owned egress IP probe"
+  robots_fetcher: "wire repo-owned robots.txt + terms fetcher"
+  html_fetcher: "wire repo-owned single-URL HTML fetcher"
+  playwright_runner: "wire repo-owned single-URL Playwright snapshot"
+  vision_tool: "wire repo-owned vision analyzer"
+  asset_fetcher: "wire repo-owned single-asset fetcher"
+  asset_verifier: "wire repo-owned asset verifier (status/MIME/size/hash/parse)"
+  durable_ledger: "wire repo-owned append-only durable ledger writer"
+graduation:
+  static_verification: pending
+  live_provider_round_trip: pending

@@ -1,0 +1,116 @@
+import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+
+function rejectArrays(name: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) return;
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (Array.isArray(value) && (key === 'url' || key === 'urls' || key === 'targets')) {
+      throw new Error(`${name}: ${key} must be a single string, not an array`);
+    }
+  }
+}
+
+export const handlers: Record<string, ToolHandler> = {
+  async record_intake(payload) {
+    return { kind: 'web_scraper_intake_recorded', payload };
+  },
+
+  async web_search_sources(payload) {
+    rejectArrays('web_search_sources', payload);
+    return { kind: 'web_scraper_intelligence_query_recorded', payload };
+  },
+
+  async confirm_egress_ip(payload) {
+    return { kind: 'web_scraper_egress_confirmed', payload };
+  },
+
+  async check_robots_and_terms(payload) {
+    rejectArrays('check_robots_and_terms', payload);
+    return {
+      kind: 'web_scraper_analysis_request',
+      payload,
+      attachment_points: {
+        robots_fetcher: 'wire repo-owned robots.txt + terms fetcher here',
+      },
+    };
+  },
+
+  async analyze_html_sample(payload) {
+    rejectArrays('analyze_html_sample', payload);
+    return {
+      kind: 'web_scraper_analysis_request',
+      payload,
+      attachment_points: {
+        html_fetcher: 'wire repo-owned single-URL HTML fetcher here',
+      },
+    };
+  },
+
+  async playwright_snapshot(payload) {
+    rejectArrays('playwright_snapshot', payload);
+    return {
+      kind: 'web_scraper_analysis_request',
+      payload,
+      attachment_points: {
+        playwright_runner: 'wire repo-owned single-URL Playwright snapshot here',
+      },
+    };
+  },
+
+  async vision_analyze_snapshot(payload) {
+    return {
+      kind: 'web_scraper_vision_request',
+      payload,
+      attachment_points: {
+        vision_tool: 'wire repo-owned vision analyzer here',
+      },
+    };
+  },
+
+  async propose_scraping_strategy(payload) {
+    return { kind: 'web_scraper_strategy_proposed', payload };
+  },
+
+  async approve_scraping_strategy(payload) {
+    return { kind: 'web_scraper_strategy_approved', payload };
+  },
+
+  async fetch_one_asset(payload) {
+    rejectArrays('fetch_one_asset', payload);
+    return {
+      kind: 'web_scraper_fetch_one_request',
+      payload,
+      attachment_points: {
+        fetcher: 'wire repo-owned single-asset fetcher here (one URL, no loops, no parallelism)',
+      },
+    };
+  },
+
+  async skip_duplicate(payload) {
+    return { kind: 'web_scraper_duplicate_skipped', payload };
+  },
+
+  async verify_asset(payload) {
+    return {
+      kind: 'web_scraper_verify_request',
+      payload,
+      attachment_points: {
+        verifier: 'wire repo-owned asset verifier here (status/MIME/size/hash/parse)',
+        ledger: 'wire repo-owned durable ledger here at strategy.dedupe_ledger_path',
+      },
+    };
+  },
+
+  async append_scrape_ledger(payload) {
+    return {
+      kind: 'web_scraper_ledger_append_request',
+      payload,
+      attachment_points: {
+        ledger: 'wire repo-owned append-only durable ledger writer here',
+      },
+    };
+  },
+
+  async complete_run(payload) {
+    return { kind: 'web_scraper_run_complete', payload };
+  },
+};
