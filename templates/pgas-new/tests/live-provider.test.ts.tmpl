@@ -3,6 +3,9 @@ import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.
 
 const hasLiveProvider = Boolean(process.env.PGAS_LIVE_PROVIDER && process.env.PGAS_API_BASE && process.env.PGAS_API_TOKEN);
 const liveIt = hasLiveProvider ? it : it.skip;
+// Real LLM round trips routinely take 10-60s. The default 5s vitest timeout would
+// flake every run, so the live gate uses an explicit upper bound.
+const LIVE_PROVIDER_TIMEOUT_MS = Number(process.env.PGAS_LIVE_PROVIDER_TIMEOUT_MS ?? '180000');
 
 describe('{{SLUG}} live-provider graduation', () => {
   liveIt('requires a real provider round trip through the external API', async () => {
@@ -30,7 +33,7 @@ describe('{{SLUG}} live-provider graduation', () => {
     expect(envelope.sessionId).toBe(session.sessionId);
     expect(rounds.rounds.length).toBeGreaterThan(0);
     expect(process.env.PGAS_LIVE_PROVIDER).toBeTruthy();
-  });
+  }, LIVE_PROVIDER_TIMEOUT_MS);
 
   it('documents the live-provider graduation gate when env is absent', () => {
     if (!hasLiveProvider) {

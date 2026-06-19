@@ -1,0 +1,112 @@
+import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+
+function rejectArrays(name: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) return;
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (Array.isArray(value) && (key === 'draft_id' || key === 'draft_ids' || key === 'targets' || key === 'post_id' || key === 'post_ids')) {
+      throw new Error(`${name}: ${key} must be a single string, not an array`);
+    }
+  }
+}
+
+function assertMockAdapter(name: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) return;
+  const adapterKind = (payload as { adapter_kind?: unknown }).adapter_kind;
+  if (adapterKind !== undefined && adapterKind !== 'mock') {
+    throw new Error(`${name}: adapter_kind must be 'mock' — no real browser adapters wired in this template`);
+  }
+}
+
+export const handlers: Record<string, ToolHandler> = {
+  async record_intake(payload) {
+    return { kind: 'social_media_agent_intake_recorded', payload };
+  },
+
+  async confirm_mock_adapter(payload) {
+    assertMockAdapter('confirm_mock_adapter', payload);
+    return {
+      kind: 'social_media_agent_mock_confirmed',
+      payload,
+      attachment_points: {
+        mock_browser_adapter: 'wire repo-owned MOCK browser adapter here — must declare adapter_kind=mock',
+      },
+    };
+  },
+
+  async bootstrap_mock_session(payload) {
+    return {
+      kind: 'social_media_agent_mock_session_started',
+      payload,
+      attachment_points: {
+        mock_login_driver: 'wire repo-owned mock-page login driver here (demo URL only, never real credentials)',
+      },
+    };
+  },
+
+  async capture_feed_snapshot(payload) {
+    return {
+      kind: 'social_media_agent_feed_snapshot',
+      payload,
+      attachment_points: {
+        mock_feed_observer: 'wire repo-owned mock feed observer here',
+      },
+    };
+  },
+
+  async draft_post(payload) {
+    rejectArrays('draft_post', payload);
+    return { kind: 'social_media_agent_draft_recorded', payload };
+  },
+
+  async propose_publish(payload) {
+    return { kind: 'social_media_agent_publish_proposed', payload };
+  },
+
+  async approve_draft(payload) {
+    return { kind: 'social_media_agent_draft_approved', payload };
+  },
+
+  async reject_draft(payload) {
+    return { kind: 'social_media_agent_draft_rejected', payload };
+  },
+
+  async revise_draft(payload) {
+    return { kind: 'social_media_agent_draft_revision_requested', payload };
+  },
+
+  async publish_one_draft(payload) {
+    rejectArrays('publish_one_draft', payload);
+    return {
+      kind: 'social_media_agent_publish_one_request',
+      payload,
+      attachment_points: {
+        mock_publisher: 'wire repo-owned mock publisher here (exactly one draft per call, never real platform)',
+      },
+    };
+  },
+
+  async verify_post(payload) {
+    return {
+      kind: 'social_media_agent_verify_request',
+      payload,
+      attachment_points: {
+        mock_post_verifier: 'wire repo-owned mock post verifier here (status / DOM presence / id match)',
+        post_ledger: 'wire repo-owned durable post ledger here at ledger.path',
+      },
+    };
+  },
+
+  async append_post_ledger(payload) {
+    return {
+      kind: 'social_media_agent_ledger_append_request',
+      payload,
+      attachment_points: {
+        post_ledger: 'wire repo-owned append-only durable post ledger writer here',
+      },
+    };
+  },
+
+  async complete_run(payload) {
+    return { kind: 'social_media_agent_run_complete', payload };
+  },
+};

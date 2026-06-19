@@ -14,13 +14,15 @@ import type { WiringManifest } from './wiring-manifest.js';
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new');
 
+export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting' | 'web-scraper' | 'social-media-agent';
+
 export interface RenderStandaloneOptions extends ProgramIdentity {
   outDir: string;
   githubOwner?: string;
   githubRepo?: string;
+  template?: ProgramTemplate;
+  mandate?: string;
 }
-
-export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting' | 'web-scraper';
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
   repoRoot: string;
@@ -83,15 +85,50 @@ const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kin
   audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
+const EXISTING_SOCIAL_MEDIA_AGENT_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
+  spec: spec('consumer/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  handler: spec('consumer/social-media-agent/handlers.ts.tmpl', []),
+  tool: spec('consumer/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('consumer/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
+  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
+};
+
+const STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE: Record<
+  Exclude<ProgramTemplate, 'pgas-new-foundry'>,
+  Partial<Record<PlannedArtifact['kind'], TemplateSpec>>
+> = {
+  'policy-drafting': {
+    spec: spec('consumer/policy/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+    handler: spec('consumer/policy/handlers.ts.tmpl', []),
+    tool: spec('consumer/policy/tools.ts.tmpl', ['PASCAL_NAME']),
+    dossier: spec('consumer/policy/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  },
+  'web-scraper': {
+    spec: spec('consumer/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+    handler: spec('consumer/web-scraper/handlers.ts.tmpl', []),
+    tool: spec('consumer/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
+    dossier: spec('consumer/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  },
+  'social-media-agent': {
+    spec: spec('consumer/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+    handler: spec('consumer/social-media-agent/handlers.ts.tmpl', []),
+    tool: spec('consumer/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
+    dossier: spec('consumer/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  },
+};
+
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
   const plan = createStandaloneArtifactPlan({ slug: options.slug, name: options.name });
+  const template = options.template ?? 'pgas-new-foundry';
 
   assertNoExistingArtifacts(options.outDir, plan);
 
   return renderPlan({
     plan,
     rootDir: options.outDir,
-    templateForArtifact: (artifact) => templateForStandalonePath(artifact.path, options.slug),
+    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, template),
     tokens: tokensFor(options, plan),
   });
 }
@@ -186,6 +223,9 @@ function templateForExistingArtifact(
   if (template === 'web-scraper') {
     return EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND[artifact.kind];
   }
+  if (template === 'social-media-agent') {
+    return EXISTING_SOCIAL_MEDIA_AGENT_TEMPLATE_BY_KIND[artifact.kind];
+  }
 
   return templateForFoundryArtifact(artifact, slug);
 }
@@ -211,6 +251,21 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
   }
   if (artifact.kind === 'audit') {
     return STANDALONE_TEMPLATE_BY_PATH['audit/PGAS-NEW-GRADUATION.md'];
+  }
+
+  return templateForStandalonePath(artifact.path, slug);
+}
+
+function templateForStandaloneArtifact(
+  artifact: PlannedArtifact,
+  slug: string,
+  template: ProgramTemplate,
+): TemplateSpec | undefined {
+  if (template !== 'pgas-new-foundry') {
+    const override = STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE[template][artifact.kind];
+    if (override) {
+      return override;
+    }
   }
 
   return templateForStandalonePath(artifact.path, slug);

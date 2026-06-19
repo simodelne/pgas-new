@@ -1,12 +1,57 @@
 import { controlCliAdapter } from '@simodelne/pgas-server/channels/index.js';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import type { AuthIdentity, AuthProvider } from '@simodelne/pgas-server/plugin.js';
 import { create{{PASCAL_NAME}}ProgramEntry } from '../programs/{{SLUG}}/registration.js';
 
-const token = process.env.PGAS_CLI_TOKEN ?? 'dev-token';
+// PGAS dev-mode REPL bootstrap.
+//
+// The HTTP path uses pgas-server's dev-mode middleware, which bypasses
+// `AuthProvider.verifyToken` entirely. The CLI channel (`controlCliAdapter`)
+// does NOT have a parallel bypass — it always calls `auth.verifyToken(token)`.
+// The default `JwtAuthProvider` rejects literal strings like `dev-token`, so
+// running `npm run repl` against the default auth wiring crashes with
+// `controlCliAdapter: token verification failed`.
+//
+// In dev mode we inject a tiny REPL-local AuthProvider that accepts any
+// non-empty token and resolves to the same `dev-user-00000000` principal the
+// HTTP dev middleware uses. In non-dev mode the user must supply
+// `PGAS_CLI_TOKEN` explicitly (no default).
+const DEV_USER_ID = 'dev-user-00000000';
+const DEFAULT_CLI_TOKEN = 'dev-token';
+
+const devMode = process.env.PGAS_DEV_MODE !== '0';
+const token = process.env.PGAS_CLI_TOKEN ?? DEFAULT_CLI_TOKEN;
+
+if (!devMode && token === DEFAULT_CLI_TOKEN) {
+  throw new Error(
+    'PGAS_CLI_TOKEN must be set when PGAS_DEV_MODE=0. Mint a token via ' +
+      'POST /auth/register on the running server, then re-run with ' +
+      'PGAS_CLI_TOKEN=<minted-token>.',
+  );
+}
+
+function devReplAuthProvider(): AuthProvider {
+  return {
+    async hashPassword(): Promise<string> {
+      throw new Error('dev REPL AuthProvider does not implement hashPassword');
+    },
+    async verifyPassword(): Promise<boolean> {
+      throw new Error('dev REPL AuthProvider does not implement verifyPassword');
+    },
+    async createToken(userId: string, role?: string): Promise<string> {
+      return [userId, role ?? 'admin'].join('|');
+    },
+    async verifyToken(candidate: string): Promise<AuthIdentity | null> {
+      if (typeof candidate !== 'string' || candidate.length === 0) return null;
+      return { userId: DEV_USER_ID, role: 'admin' };
+    },
+  };
+}
 
 const server = await createPgasServer({
   programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
-  devMode: true,
+  devMode,
+  ...(devMode ? { auth: devReplAuthProvider() } : {}),
   channels: [
     controlCliAdapter({
       token,

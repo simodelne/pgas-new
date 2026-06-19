@@ -1,0 +1,135 @@
+import type { ToolImpl, ToolRegistry } from '@simodelne/pgas-server/plugin.js';
+
+const semanticTools = [
+  'record_user_note',
+  'request_user_action',
+  'record_intake',
+  'confirm_mock_adapter',
+  'bootstrap_mock_session',
+  'capture_feed_snapshot',
+  'draft_post',
+  'propose_publish',
+  'approve_draft',
+  'reject_draft',
+  'revise_draft',
+  'publish_one_draft',
+  'verify_post',
+  'append_post_ledger',
+  'complete_run',
+] as const;
+
+const FORBIDDEN_PAYLOAD_KEYS = ['draft_ids', 'post_ids', 'targets', 'queue', 'batch', 'urls'] as const;
+const FORBIDDEN_VALUE_PATTERNS = [
+  /\bxargs\b/i,
+  /\bparallel\b/i,
+  /\bbackground\b/i,
+  /\&\s*$/,
+  /\bwhile\s+true\b/i,
+  /\bfor\s+\w+\s+in\b/i,
+];
+
+const REAL_PLATFORM_DOMAINS = [
+  'twitter.com',
+  'x.com',
+  'facebook.com',
+  'instagram.com',
+  'tiktok.com',
+  'linkedin.com',
+  'threads.net',
+  'bsky.app',
+  'reddit.com',
+  'youtube.com',
+];
+
+function assertSinglularPayload(toolName: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new Error(`${toolName}: payload must be a single object`);
+  }
+  for (const key of FORBIDDEN_PAYLOAD_KEYS) {
+    if (key in (payload as Record<string, unknown>)) {
+      throw new Error(`${toolName}: payload may not declare plural field '${key}' — exactly one draft per call`);
+    }
+  }
+  for (const idKey of ['draft_id', 'post_id', 'target_draft_id'] as const) {
+    const value = (payload as Record<string, unknown>)[idKey];
+    if (Array.isArray(value)) {
+      throw new Error(`${toolName}: ${idKey} must be a single string, not an array`);
+    }
+    if (typeof value === 'string' && (value.includes('\n') || value.includes('|') || value.includes(';'))) {
+      throw new Error(`${toolName}: ${idKey} must not contain newlines, pipes, or shell separators`);
+    }
+    if (typeof value === 'string' && value.includes('*')) {
+      throw new Error(`${toolName}: ${idKey} must not contain wildcards — publish exactly one draft`);
+    }
+  }
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    for (const pattern of FORBIDDEN_VALUE_PATTERNS) {
+      if (pattern.test(value)) {
+        throw new Error(`${toolName}: payload.${key} matched forbidden pattern ${pattern}`);
+      }
+    }
+  }
+}
+
+function assertMockOnlyUrl(toolName: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) return;
+  const candidates: unknown[] = [];
+  for (const key of ['target_mock_url', 'demo_page_url', 'page_url', 'url'] as const) {
+    candidates.push((payload as Record<string, unknown>)[key]);
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const lower = candidate.toLowerCase();
+    for (const domain of REAL_PLATFORM_DOMAINS) {
+      if (lower.includes(domain)) {
+        throw new Error(`${toolName}: real-platform domain '${domain}' is forbidden — mock/demo URLs only`);
+      }
+    }
+  }
+}
+
+function assertNoRealCredentials(toolName: string, payload: unknown): void {
+  if (typeof payload !== 'object' || payload === null) return;
+  for (const key of ['password', 'real_password', 'oauth_token', 'access_token', 'refresh_token', 'session_cookie'] as const) {
+    if (key in (payload as Record<string, unknown>)) {
+      throw new Error(`${toolName}: payload may not declare credential field '${key}' — no real credentials accepted`);
+    }
+  }
+}
+
+const publishOneDraftTool: ToolImpl = {
+  kind: 'local',
+  fn: async (args) => {
+    assertSinglularPayload('publish_one_draft', args);
+    assertMockOnlyUrl('publish_one_draft', args);
+    assertNoRealCredentials('publish_one_draft', args);
+    return { ok: true, kind: 'mock_publish_request', args };
+  },
+};
+
+const mockBrowserTool = (name: string): ToolImpl => ({
+  kind: 'local',
+  fn: async (args) => {
+    assertSinglularPayload(name, args);
+    assertMockOnlyUrl(name, args);
+    assertNoRealCredentials(name, args);
+    return { ok: true, kind: `${name}_request`, args };
+  },
+});
+
+const noopTool: ToolImpl = {
+  kind: 'local',
+  fn: async (args) => ({ ok: true, args }),
+};
+
+export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
+  registry.register('publish_one_draft', publishOneDraftTool);
+  for (const name of ['confirm_mock_adapter', 'bootstrap_mock_session', 'capture_feed_snapshot'] as const) {
+    registry.register(name, mockBrowserTool(name));
+  }
+  for (const name of semanticTools) {
+    if (name === 'publish_one_draft' || name === 'confirm_mock_adapter' || name === 'bootstrap_mock_session' || name === 'capture_feed_snapshot') continue;
+    registry.register(name, noopTool);
+  }
+}
