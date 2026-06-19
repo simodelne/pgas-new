@@ -356,6 +356,7 @@ describe('template renderer', () => {
         expect.arrayContaining([
           expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
           expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
+          expect.objectContaining({ kind: 'FieldTruthy', path: 'strategy.proposal_json' }),
         ]),
       );
 

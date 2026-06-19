@@ -90,7 +90,7 @@ modes:
       approve_scraping_strategy:
         - { kind: TriggerType, triggerSet: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
-        - { kind: FieldTruthy, path: strategy.proposal }
+        - { kind: FieldTruthy, path: strategy.proposal_json }
     transitions:
       - target: scraping
         guard: { kind: FieldTruthy, path: strategy.user_approved }
@@ -145,22 +145,22 @@ proceed_to:
 
 projection:
   intake:
-    include: [inputs.user_text, intake.objective, intake.jurisdiction, intake.target_legal_domain, intake.allowed_source_classes, intake.user_constraints, intake.privacy_requirements, intake.max_network_budget, intake.complete, notebook.entries, notebook.pins]
+    include: [inputs.user_text, intake.objective, intake.jurisdiction, intake.target_legal_domain, intake.allowed_source_classes_json, intake.user_constraints, intake.privacy_requirements, intake.max_network_budget, intake.complete, notebook.entries, notebook.pins]
     exclude: []
   intelligence:
-    include: [inputs.user_text, intake.objective, intake.jurisdiction, intake.target_legal_domain, intake.allowed_source_classes, intelligence.candidate_sources, intelligence.queries_count, intelligence.complete, notebook.entries]
+    include: [inputs.user_text, intake.objective, intake.jurisdiction, intake.target_legal_domain, intake.allowed_source_classes_json, intelligence.candidate_sources, intelligence.queries_count, intelligence.complete, notebook.entries]
     exclude: []
   egress_verification:
     include: [egress.ip, egress.region, egress.proxy_status, egress.verified_at, egress.confirmed, intake.privacy_requirements, notebook.entries]
     exclude: []
   web_analysis:
-    include: [intelligence.candidate_sources, analysis.candidates_analyzed, analysis.calls_used_total, analysis.calls_per_candidate, analysis.halt_reason, analysis.complete, egress.confirmed, notebook.entries]
+    include: [intelligence.candidate_sources, analysis.candidates_analyzed, analysis.calls_used_total, analysis.calls_per_candidate_json, analysis.halt_reason, analysis.complete, egress.confirmed, notebook.entries]
     exclude: []
   strategy_review:
-    include: [inputs.user_text, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, analysis.candidates_analyzed, strategy.proposal, strategy.user_approved, strategy.call_budget, strategy.min_delay_ms, strategy.allowed_url_patterns, strategy.disallowed_url_patterns, strategy.dedupe_ledger_path, notebook.entries]
+    include: [inputs.user_text, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, analysis.candidates_analyzed, strategy.proposal_json, strategy.user_approved, strategy.call_budget, strategy.min_delay_ms, strategy.allowed_url_patterns_json, strategy.disallowed_url_patterns_json, strategy.dedupe_ledger_path, notebook.entries]
     exclude: []
   scraping:
-    include: [strategy.user_approved, strategy.call_budget, strategy.min_delay_ms, strategy.allowed_url_patterns, strategy.disallowed_url_patterns, strategy.dedupe_ledger_path, scraping.assets_fetched_count, scraping.last_asset_id, scraping.last_fetch_at, scraping.last_asset_verified, scraping.budget_exhausted, ledger.entries_count]
+    include: [strategy.user_approved, strategy.call_budget, strategy.min_delay_ms, strategy.allowed_url_patterns_json, strategy.disallowed_url_patterns_json, strategy.dedupe_ledger_path, scraping.assets_fetched_count, scraping.last_asset_id, scraping.last_fetch_at, scraping.last_asset_verified, scraping.budget_exhausted, ledger.entries_count]
     exclude: []
   asset_verification:
     include: [scraping.last_asset_id, scraping.last_fetch_at, scraping.last_asset_verified, verification.last_status, verification.failure_reason, verification.requires_user_decision, ledger.path, ledger.entries_count, ledger.last_appended_at, scraping.budget_exhausted]
@@ -206,7 +206,7 @@ action_map:
       - { op: MSet, path: intake.objective, from_arg: objective }
       - { op: MSet, path: intake.jurisdiction, from_arg: jurisdiction }
       - { op: MSet, path: intake.target_legal_domain, from_arg: target_legal_domain }
-      - { op: MSet, path: intake.allowed_source_classes, from_arg: allowed_source_classes }
+      - { op: MSet, path: intake.allowed_source_classes_json, from_arg: allowed_source_classes_json }
       - { op: MSet, path: intake.user_constraints, from_arg: user_constraints }
       - { op: MSet, path: intake.privacy_requirements, from_arg: privacy_requirements }
       - { op: MSet, path: intake.max_network_budget, from_arg: max_network_budget }
@@ -232,19 +232,19 @@ action_map:
     description: "Fetch robots.txt / terms / sitemap for one candidate site. Counts against the analysis budget for that candidate."
     mutations:
       - { op: MSet, path: analysis.calls_used_total, from_arg: calls_used_total }
-      - { op: MSet, path: analysis.calls_per_candidate, from_arg: calls_per_candidate }
+      - { op: MSet, path: analysis.calls_per_candidate_json, from_arg: calls_per_candidate_json }
     channel: widget_output
   analyze_html_sample:
     description: "Fetch and analyze a single HTML sample from one candidate site within the analysis budget."
     mutations:
       - { op: MSet, path: analysis.calls_used_total, from_arg: calls_used_total }
-      - { op: MSet, path: analysis.calls_per_candidate, from_arg: calls_per_candidate }
+      - { op: MSet, path: analysis.calls_per_candidate_json, from_arg: calls_per_candidate_json }
     channel: widget_output
   playwright_snapshot:
     description: "Take one Playwright snapshot/screenshot of a single page within the analysis budget."
     mutations:
       - { op: MSet, path: analysis.calls_used_total, from_arg: calls_used_total }
-      - { op: MSet, path: analysis.calls_per_candidate, from_arg: calls_per_candidate }
+      - { op: MSet, path: analysis.calls_per_candidate_json, from_arg: calls_per_candidate_json }
     channel: widget_output
   vision_analyze_snapshot:
     description: "Analyze a captured Playwright snapshot via the vision tool."
@@ -256,11 +256,11 @@ action_map:
   propose_scraping_strategy:
     description: "Propose a concrete scraping strategy for explicit user approval. Includes target sites, allowed/disallowed URL patterns, call budget, min delay, dedupe ledger path."
     mutations:
-      - { op: MSet, path: strategy.proposal, from_arg: proposal }
+      - { op: MSet, path: strategy.proposal_json, from_arg: proposal_json }
       - { op: MSet, path: strategy.call_budget, from_arg: call_budget }
       - { op: MSet, path: strategy.min_delay_ms, from_arg: min_delay_ms }
-      - { op: MSet, path: strategy.allowed_url_patterns, from_arg: allowed_url_patterns }
-      - { op: MSet, path: strategy.disallowed_url_patterns, from_arg: disallowed_url_patterns }
+      - { op: MSet, path: strategy.allowed_url_patterns_json, from_arg: allowed_url_patterns_json }
+      - { op: MSet, path: strategy.disallowed_url_patterns_json, from_arg: disallowed_url_patterns_json }
       - { op: MSet, path: strategy.dedupe_ledger_path, from_arg: dedupe_ledger_path }
       - { op: MSet, path: strategy.user_approved, value: false }
     channel: widget_output
@@ -315,7 +315,7 @@ schema:
   intake.objective: string
   intake.jurisdiction: string
   intake.target_legal_domain: string
-  intake.allowed_source_classes: array
+  intake.allowed_source_classes_json: string
   intake.user_constraints: string
   intake.privacy_requirements: string
   intake.max_network_budget: number
@@ -330,15 +330,15 @@ schema:
   egress.confirmed: boolean
   analysis.candidates_analyzed: number
   analysis.calls_used_total: number
-  analysis.calls_per_candidate: object
+  analysis.calls_per_candidate_json: string
   analysis.halt_reason: string
   analysis.complete: boolean
-  strategy.proposal: object
+  strategy.proposal_json: string
   strategy.user_approved: boolean
   strategy.call_budget: number
   strategy.min_delay_ms: number
-  strategy.allowed_url_patterns: array
-  strategy.disallowed_url_patterns: array
+  strategy.allowed_url_patterns_json: string
+  strategy.disallowed_url_patterns_json: string
   strategy.dedupe_ledger_path: string
   scraping.assets_fetched_count: number
   scraping.last_asset_id: string
