@@ -6,13 +6,9 @@ on:
   pull_request:
 
 jobs:
-  smoke-tests:
-    runs-on: ubuntu-latest
+  test:
+    runs-on: [self-hosted, gpu-pod]
     permissions:
-      # Required for server-typecheck.test.sh to `npm install` packages
-      # from GitHub Packages (the @simodelne scope is private). CI passes
-      # secrets.GITHUB_TOKEN to the test via NPM_TOKEN; the token needs
-      # `packages: read` to authenticate against npm.pkg.github.com.
       contents: read
       packages: read
     steps:
@@ -22,64 +18,13 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install dev deps (js-yaml for template-render.test.sh)
+      - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Plugin manifest smoke test
-        run: bash tests/plugin-manifest.test.sh
-
-      - name: Template render smoke test
-        run: bash tests/template-render.test.sh
-
-      - name: Auth-scaffold smoke test (Brief 2)
-        run: bash tests/auth-scaffold.test.sh
-
-      - name: Frontend-scaffold smoke test (Brief 3)
-        run: bash tests/frontend-scaffold.test.sh
-        env:
-          # Set to '1' to skip the npm install + vite build leg.
-          # CI runners have network egress so we exercise the full path
-          # by default.
-          SKIP_NPM: '0'
-
-      - name: Server-typecheck smoke test (pgas#256 — engine import gate)
-        run: bash tests/server-typecheck.test.sh
-        env:
-          # The scaffolded consumer pulls @simodelne/pgas-* from GitHub
-          # Packages. Those packages are published by the SIBLING repo
-          # simodelne/pgas, so this repo's default `secrets.GITHUB_TOKEN`
-          # is repo-scoped and gets 403 reading them — the gate then SKIPs
-          # (see issue #5). An org-scoped PAT (`read:packages` on simodelne)
-          # provisioned as the `PLUGIN_NPM_TOKEN` repo secret lets the gate
-          # actually run. The `|| secrets.GITHUB_TOKEN` fallback preserves
-          # today's behavior (attempt → 403 → graceful SKIP) until the PAT
-          # is provisioned, so CI never hard-fails on a missing secret.
-          # See docs/PLUGIN-DEVELOPMENT.md → "CI secrets".
-          NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: Spec-load smoke test (program spec loads in the real engine)
-        run: bash tests/spec-load.test.sh
-        env:
-          # Same token contract as server-typecheck above: org-scoped
-          # PLUGIN_NPM_TOKEN runs the gate; the GITHUB_TOKEN fallback
-          # 403s on the sibling repo's packages → graceful SKIP.
-          NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: Program-smoke test (scaffolded program RUNS on the real engine)
-        run: bash tests/program-smoke.test.sh
-        env:
-          # Same token contract as the two gates above: org-scoped
-          # PLUGIN_NPM_TOKEN runs the gate; the GITHUB_TOKEN fallback
-          # 403s on the sibling repo's packages → graceful SKIP. This is
-          # the RUN-level gate: it scaffolds a program, installs the REAL
-          # engine, and drives a session in-process (no live LLM, via the
-          # engine's sanctioned setAuthorDriver seam) to confirm the
-          # program registers, boots, and runs to its terminal mode.
-          NPM_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Run pgas-new foundry gates
+        run: npm test
 
   cheap-gates:
-    # Mirror pgas's cheap-gates pattern: a no-op job that branch protection
-    # can require cleanly without coupling to the main smoke-tests job.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gpu-pod]
     steps:
       - run: echo "cheap-gates ok"

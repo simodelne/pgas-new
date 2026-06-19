@@ -1,0 +1,18 @@
+import { controlCliAdapter } from '@simodelne/pgas-server/channels/index.js';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { create{{PASCAL_NAME}}ProgramEntry } from '../programs/{{SLUG}}/registration.js';
+
+const token = process.env.PGAS_CLI_TOKEN ?? 'dev-token';
+
+const server = await createPgasServer({
+  programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
+  devMode: true,
+  channels: [
+    controlCliAdapter({
+      token,
+      program: '{{SLUG}}',
+    }),
+  ],
+});
+
+await server.start();

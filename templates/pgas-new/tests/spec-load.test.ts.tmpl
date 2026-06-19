@@ -1,0 +1,10 @@
+import { describe, expect, it } from 'vitest';
+import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
+
+describe('{{SLUG}} spec load', () => {
+  it('loads the generated PGAS program entry', () => {
+    const entry = create{{PASCAL_NAME}}ProgramEntry();
+    expect(entry.spec.name).toBe('{{SLUG}}');
+    expect(entry.spec.control_plane).toBeDefined();
+  });
+});

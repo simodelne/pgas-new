@@ -1,0 +1,24 @@
+import type { ToolImpl, ToolRegistry } from '@simodelne/pgas-server/plugin.js';
+
+const semanticTools = [
+  'record_user_note',
+  'request_user_input',
+  'record_intake',
+  'propose_outline',
+  'approve_outline',
+  'draft_section',
+  'request_revision',
+  'revise_section',
+  'render_policy_outputs',
+] as const;
+
+const noopTool: ToolImpl = {
+  kind: 'local',
+  fn: async (args) => ({ ok: true, args }),
+};
+
+export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
+  for (const name of semanticTools) {
+    registry.register(name, noopTool);
+  }
+}

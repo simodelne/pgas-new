@@ -1,0 +1,14 @@
+import { describe, expect, it } from 'vitest';
+import { createTestHarness } from '@simodelne/pgas-server/testing.js';
+import { create{{PASCAL_NAME}}ProgramEntry } from '../src/programs/{{SLUG}}/registration.js';
+
+describe('{{SLUG}} deterministic runtime', () => {
+  it('creates a deterministic PGAS test harness', async () => {
+    const harness = await createTestHarness(create{{PASCAL_NAME}}ProgramEntry(), {
+      programName: '{{SLUG}}',
+      defaultChannel: 'user_text',
+    });
+
+    expect(harness).toBeDefined();
+  });
+});

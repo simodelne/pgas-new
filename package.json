@@ -2,12 +2,23 @@
   "name": "claude-pgas-plugin",
   "version": "1.0.0",
   "private": true,
-  "description": "Claude Code plugin for scaffolding pgas consumers and programs",
+  "type": "module",
+  "description": "PGAS-specific foundry for creating TypeScript/Node PGAS programs",
   "scripts": {
-    "test": "bash tests/plugin-manifest.test.sh && bash tests/template-render.test.sh && bash tests/auth-scaffold.test.sh && bash tests/server-typecheck.test.sh && bash tests/spec-load.test.sh && bash tests/program-smoke.test.sh"
+    "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run --config tests/vitest.config.ts",
+    "test:manifest": "bash tests/plugin-manifest.test.sh",
+    "test:static": "bash tests/pgas-new-static.test.sh",
+    "test": "npm run typecheck && npm run test:manifest && npm run test:unit && npm run test:static",
+    "pgas-new": "tsx src/cli.ts"
   },
   "devDependencies": {
-    "js-yaml": "^4.1.0"
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.9.3",
+    "js-yaml": "^4.1.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
   },
   "engines": {
     "node": ">=20"

@@ -1,0 +1,24 @@
+program:
+  slug: "{{SLUG}}"
+  name: "{{NAME}}"
+  runtime: typescript-node
+  template: policy-drafting
+mandate: "{{MANDATE}}"
+intake:
+  required_fields:
+    - policy_objectives
+    - policy_type
+    - organization_profile
+    - risk_appetite
+    - available_resources
+    - target_audience
+    - jurisdiction
+workflow:
+  outline_approval_required: true
+  drafting_unit: section
+outputs:
+  html: stubbed_attachment_point
+  word: stubbed_attachment_point
+graduation:
+  static_verification: pending
+  live_provider_round_trip: pending

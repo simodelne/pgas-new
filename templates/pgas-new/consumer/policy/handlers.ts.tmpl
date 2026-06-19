@@ -1,0 +1,38 @@
+import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+
+export const handlers: Record<string, ToolHandler> = {
+  async record_intake(payload) {
+    return { kind: 'policy_intake_recorded', payload };
+  },
+
+  async propose_outline(payload) {
+    return { kind: 'policy_outline_proposed', payload };
+  },
+
+  async approve_outline(payload) {
+    return { kind: 'policy_outline_approved', payload };
+  },
+
+  async draft_section(payload) {
+    return { kind: 'policy_section_drafted', payload };
+  },
+
+  async request_revision(payload) {
+    return { kind: 'policy_revision_requested', payload };
+  },
+
+  async revise_section(payload) {
+    return { kind: 'policy_section_revised', payload };
+  },
+
+  async render_policy_outputs(payload) {
+    return {
+      kind: 'policy_outputs_render_requested',
+      payload,
+      attachment_points: {
+        html: 'wire repo-owned HTML renderer here',
+        word: 'wire repo-owned Word renderer here',
+      },
+    };
+  },
+};
