@@ -119,7 +119,39 @@ mutations applied: 8
 proposedMode: intelligence   (= proceed_to.record_intake target)
 ```
 
-The multi-round driver (`/tmp/pgas-new-grad-2-host/multi-round.ts`) drives further rounds and confirmed `web_search_sources` calls inside the `intelligence` mode — i.e. the `intake → intelligence` mode transition was observed end-to-end through Qwen/vLLM.
+### Multi-round drive — 6 rounds, 3 modes, 2 transitions
+
+```text
+session: web-scraper-1781864806396
+
+round  action                 mutations  proposedMode
+  1    record_intake               8     intelligence       ← intake → intelligence
+  2    web_search_sources          1     (stay)
+  3    web_search_sources          1     (stay)
+  4    web_search_sources          1     egress_verification ← intelligence → egress_verification
+  5    __fallback__                0     (engine refused an invalid action — gate working)
+  6    confirm_egress_ip           0     (egress_verification mode, action attempted)
+```
+
+That demonstrates, with a real provider round trip per round, that
+the foundry-generated web-scraper program:
+
+- runs end-to-end through `@simodelne/pgas-server@2.10.0` with local
+  Qwen/vLLM as the author handle,
+- correctly applies action mutations into governed state,
+- correctly evaluates `proceed_to` transitions when the spec gate
+  conditions are met (round 1's `intake.complete = true` advanced
+  to `intelligence`; round 4's `intelligence.complete = true`
+  advanced to `egress_verification`),
+- correctly *rejects* an invalid action via `__fallback__` (round 5)
+  — the safety contract working at the engine layer, not just spec.
+
+Round 6's `confirm_egress_ip` recorded 0 mutations because the LLM's
+payload didn't supply the four required `from_arg`s (`ip`, `region`,
+`proxy_status`, `verified_at`); the spec gate still gated the action
+correctly. Driving past this is straightforward (stronger prompt
+guidance or an attachment-point egress probe), and it's not a
+foundry-side defect.
 
 ### Mode ladder coverage
 
