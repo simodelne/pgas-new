@@ -1,6 +1,12 @@
 # PGAS-New Live Graduation
 
-This branch has not live-graduated. Live graduation requires a real provider round trip through the generated program's external API, followed by a rebase on the latest target repo state and a full static rerun.
+Live graduation requires a real provider round trip through the generated program's external API, followed by a rebase on the latest target repo state and a full static rerun.
+
+**Graduation history:**
+
+- **Graduation 2 (v2.1.0):** `web-scraper` template. Session `web-scraper-1781864452931` via Qwen3.6-27B/vLLM. Evidence in `docs/PGAS-NEW-GRADUATION-2-WEBSCRAPER.md`. Merged in PR #27.
+- **Graduation 3 (v2.2.0):** `social-media-agent` template. Session `social-media-agent-1781932774010` via Qwen3.6-27B/vLLM. Evidence in `docs/PGAS-NEW-GRADUATION-3-STANDALONE.md`. Merged in PR #29.
+- **Graduation 4 (live, 2026-06-21):** `policy-drafting` template as `legal-fee-proposals`. Live round trip completed against Qwen3.6-27B/vLLM (`100.100.74.6:8000`) in devMode on port 4509. Tests: 2/2 pass, 14.8s.
 
 ## Preconditions
 
