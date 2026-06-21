@@ -48,6 +48,7 @@ describe('artifact planner', () => {
       'tsconfig.json',
       'src/server.ts',
       'src/repl/index.ts',
+      'src/repl/renderer.ts',
       'src/programs/pgas-new/specs.yml',
       'src/programs/pgas-new/registration.ts',
       'src/programs/pgas-new/handlers.ts',

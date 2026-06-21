@@ -1,63 +1,70 @@
-import { controlCliAdapter } from '@simodelne/pgas-server/channels/index.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
-import type { AuthIdentity, AuthProvider } from '@simodelne/pgas-server/plugin.js';
-import { create{{PASCAL_NAME}}ProgramEntry } from '../programs/{{SLUG}}/registration.js';
+import { connectNotifications, triggerStream } from '@simodelne/pgas-server/client.js';
+import { intro, outro, text, isCancel } from '@clack/prompts';
+import { renderAction, renderWidget, renderModeChange, renderError, type ReplState } from './renderer.js';
 
-// PGAS dev-mode REPL bootstrap.
-//
-// The HTTP path uses pgas-server's dev-mode middleware, which bypasses
-// `AuthProvider.verifyToken` entirely. The CLI channel (`controlCliAdapter`)
-// does NOT have a parallel bypass — it always calls `auth.verifyToken(token)`.
-// The default `JwtAuthProvider` rejects literal strings like `dev-token`, so
-// running `npm run repl` against the default auth wiring crashes with
-// `controlCliAdapter: token verification failed`.
-//
-// In dev mode we inject a tiny REPL-local AuthProvider that accepts any
-// non-empty token and resolves to the same `dev-user-00000000` principal the
-// HTTP dev middleware uses. In non-dev mode the user must supply
-// `PGAS_CLI_TOKEN` explicitly (no default).
-const DEV_USER_ID = 'dev-user-00000000';
-const DEFAULT_CLI_TOKEN = 'dev-token';
+const PGAS_API_BASE = process.env.PGAS_API_BASE ?? 'http://localhost:3000';
+const PGAS_WS_BASE = process.env.PGAS_WS_BASE ?? 'ws://localhost:3000';
+const PROGRAM = '{{SLUG}}';
 
-const devMode = process.env.PGAS_DEV_MODE !== '0';
-const token = process.env.PGAS_CLI_TOKEN ?? DEFAULT_CLI_TOKEN;
+const state: ReplState = {
+  sessionId: null,
+  mode: null,
+  running: true,
+  awaitingInput: false,
+};
 
-if (!devMode && token === DEFAULT_CLI_TOKEN) {
-  throw new Error(
-    'PGAS_CLI_TOKEN must be set when PGAS_DEV_MODE=0. Mint a token via ' +
-      'POST /auth/register on the running server, then re-run with ' +
-      'PGAS_CLI_TOKEN=<minted-token>.',
-  );
-}
+intro('{{NAME}} REPL');
 
-function devReplAuthProvider(): AuthProvider {
-  return {
-    async hashPassword(): Promise<string> {
-      throw new Error('dev REPL AuthProvider does not implement hashPassword');
-    },
-    async verifyPassword(): Promise<boolean> {
-      throw new Error('dev REPL AuthProvider does not implement verifyPassword');
-    },
-    async createToken(userId: string, role?: string): Promise<string> {
-      return [userId, role ?? 'admin'].join('|');
-    },
-    async verifyToken(candidate: string): Promise<AuthIdentity | null> {
-      if (typeof candidate !== 'string' || candidate.length === 0) return null;
-      return { userId: DEV_USER_ID, role: 'admin' };
-    },
-  };
-}
-
-const server = await createPgasServer({
-  programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
-  devMode,
-  ...(devMode ? { auth: devReplAuthProvider() } : {}),
-  channels: [
-    controlCliAdapter({
-      token,
-      program: '{{SLUG}}',
-    }),
-  ],
+// Connect to WebSocket notification stream for lifecycle events
+const ws = connectNotifications(PGAS_WS_BASE, {
+  onModeChange(newMode: string) {
+    state.mode = newMode;
+    renderModeChange(newMode);
+  },
+  onError(msg: string) {
+    renderError(msg);
+  },
+  onClose() {
+    state.running = false;
+  },
 });
 
-await server.start();
+async function trigger(channel: string, payload: unknown): Promise<void> {
+  const stream = triggerStream(PGAS_API_BASE, {
+    program: PROGRAM,
+    sessionId: state.sessionId ?? undefined,
+    channel,
+    payload,
+  });
+
+  for await (const event of stream) {
+    if (event.type === 'session_start') {
+      state.sessionId = event.sessionId;
+    } else if (event.type === 'action') {
+      renderAction(event.result);
+    } else if (event.type === 'widget') {
+      state.awaitingInput = true;
+      await renderWidget(event.widget, trigger);
+      state.awaitingInput = false;
+    }
+  }
+}
+
+// Main REPL loop
+while (state.running) {
+  const input = await text({
+    message: `${state.mode ?? PROGRAM} >`,
+    placeholder: 'Type a message or /quit to exit',
+  });
+
+  if (isCancel(input) || input === '/quit') {
+    break;
+  }
+
+  if (typeof input === 'string' && input.trim().length > 0) {
+    await trigger('user_text', input.trim());
+  }
+}
+
+ws.close();
+outro('Session ended.');
