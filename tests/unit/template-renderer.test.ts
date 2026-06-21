@@ -560,15 +560,12 @@ describe('template renderer', () => {
 
       // renderer.ts: rendering functions exported
       expect(renderer).toContain('renderAction');
-      expect(renderer).toContain('renderWidget');
       expect(renderer).toContain('renderModeChange');
       expect(renderer).toContain('renderError');
       expect(renderer).toContain('ReplState');
-      expect(renderer).toContain("from '@clack/prompts'");
       expect(renderer).toContain("from 'chalk'");
 
-      // package.json: new deps
-      expect(pkg).toContain('@clack/prompts');
+      // package.json: chalk dep present (@clack/prompts kept for future widget flows)
       expect(pkg).toContain('chalk');
 
       // no unresolved tokens

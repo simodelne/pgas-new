@@ -1,8 +1,8 @@
 import readline from 'node:readline';
-import { intro, log, outro, spinner } from '@clack/prompts';
+import chalk from 'chalk';
 import { connectNotifications, createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
 import type { ReplState } from './renderer.js';
-import { renderAction, renderError, renderModeChange } from './renderer.js';
+import { renderAction, renderError, renderInfo, renderModeChange, renderStep } from './renderer.js';
 
 const API_BASE = process.env.PGAS_API_BASE ?? 'http://localhost:3000';
 const WS_BASE =
@@ -20,15 +20,15 @@ const client = createPgasClient(fetchTransport({ baseUrl: API_BASE, token: TOKEN
 
 const state: ReplState = { sessionId: null, mode: null, running: false };
 
-intro('{{NAME}} — PGAS REPL');
+process.stdout.write(chalk.bold.cyan(`\n  {{NAME}} — PGAS REPL\n\n`));
 
 try {
   await client.programs.list();
 } catch {
-  log.error(`Server not reachable at ${API_BASE}. Start it first: npm run dev`);
+  renderError(`Server not reachable at ${API_BASE}. Start it first: npm run dev`);
   process.exit(1);
 }
-log.step(`Connected  program: ${PROGRAM}`);
+renderStep(`Connected  program: ${chalk.bold(PROGRAM)}`);
 
 const ws = connectNotifications(
   { wsBaseUrl: WS_BASE, token: TOKEN, reconnect: true },
@@ -48,16 +48,12 @@ const ws = connectNotifications(
         case 'session:pending_input': {
           const widget = ev.data.normalizedWidget as { message?: string } | undefined;
           if (!widget) break;
-          // Print the server's prompt without blocking stdin.
-          // The user responds through the readline interface below.
-          // renderWidget (clack select/text) is reserved for user-initiated
-          // confirmation flows where stdin ownership is unambiguous.
-          print(widget.message || 'Input requested — type your response.');
+          renderInfo(widget.message || 'Input requested — type your response.');
           updatePrompt();
           break;
         }
         case 'session_terminal':
-          outro('Complete.');
+          renderStep('Complete.');
           ws.close();
           process.exit(0);
           break;
@@ -66,8 +62,8 @@ const ws = connectNotifications(
           break;
       }
     },
-    onReconnect({ attempt, delayMs }) {
-      print(`⚠ Connection lost — reconnecting (attempt ${String(attempt)})…`);
+    onReconnect({ attempt }) {
+      renderError(`Connection lost — reconnecting (attempt ${String(attempt)})…`);
     },
   },
 );
@@ -77,15 +73,18 @@ await ws.opened;
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 updatePrompt();
 
-rl.on('line', async (line: string) => {
+rl.on('line', (line: string) => {
   const input = line.trim();
-  if (!input || state.running) return;
-  if (input.startsWith('/')) {
-    await handleCommand(input).catch((err) => renderError(String(err)));
-  } else {
-    await handleText(input).catch((err) => renderError(String(err)));
+  if (!input || state.running) {
+    rl.prompt();
+    return;
   }
-  if (!state.running) updatePrompt();
+  const handler = input.startsWith('/') ? handleCommand(input) : handleText(input);
+  handler
+    .catch((err) => renderError(String(err)))
+    .finally(() => {
+      if (!state.running) updatePrompt();
+    });
 });
 
 rl.on('close', () => {
@@ -97,58 +96,53 @@ process.on('SIGINT', async () => {
   if (state.sessionId && state.running) {
     await client.sessions.abort(state.sessionId).catch(() => {});
   }
-  outro('Bye.');
+  process.stdout.write(chalk.dim('\n  Bye.\n'));
   ws.close();
   process.exit(0);
 });
 
 function updatePrompt(): void {
-  const label = state.mode ? ` [${state.mode}]` : '';
-  rl.setPrompt(`›${label} `);
+  const label = state.mode ? chalk.dim(` [${state.mode}]`) : '';
+  rl.setPrompt(chalk.cyan('› ') + label + (label ? ' ' : ''));
   rl.prompt();
-}
-
-function print(msg: string): void {
-  // Use raw stdout to avoid clack cursor-management conflicts with readline.
-  process.stdout.write(`${msg}\n`);
 }
 
 async function handleCommand(input: string): Promise<void> {
   const cmd = input.slice(1).split(' ')[0] ?? '';
   switch (cmd) {
     case 'help':
-      print('/new  /abort  /status  /history  /resume  /help');
+      renderInfo('/new  /abort  /status  /history  /resume  /help');
       break;
     case 'new':
       state.sessionId = null;
       state.mode = null;
-      print('Ready — send a message to start a new session.');
+      renderStep('Ready — send a message to start a new session.');
       break;
     case 'abort':
       if (state.sessionId) {
         await client.sessions.abort(state.sessionId);
-        print('Session aborted.');
+        renderStep('Session aborted.');
         state.sessionId = null;
         state.mode = null;
       } else {
-        print('No active session.');
+        renderInfo('No active session.');
       }
       break;
     case 'status':
-      print(
+      renderInfo(
         state.sessionId
           ? `session: ${state.sessionId}  mode: ${state.mode ?? '?'}`
           : 'No active session.',
       );
       break;
     case 'history':
-      print(`active: ${state.sessionId ?? 'none'}  mode: ${state.mode ?? '?'}`);
+      renderInfo(`active: ${state.sessionId ?? 'none'}  mode: ${state.mode ?? '?'}`);
       break;
     case 'resume':
-      print('Resuming…');
+      renderStep('Resuming…');
       break;
     default:
-      print(`Unknown command: /${cmd}`);
+      renderError(`Unknown command: /${cmd}`);
   }
 }
 
@@ -163,18 +157,38 @@ async function handleText(userText: string): Promise<void> {
   await runTrigger(state.sessionId!, 'user_text', userText);
 }
 
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const STEP_LABELS: Record<string, string> = {
+  ingestion: 'reading context…',
+  projection: 'projecting state…',
+  authorship: 'drafting response…',
+  recognition: 'validating action…',
+  execution: 'applying action…',
+};
+
+function startSpinner(initial: string): { update: (msg: string) => void; stop: () => void } {
+  let label = initial;
+  let i = 0;
+  const draw = (): void => {
+    process.stdout.write('\r\x1b[K' + chalk.cyan(SPINNER_FRAMES[i % SPINNER_FRAMES.length]) + ' ' + chalk.dim(label));
+    i += 1;
+  };
+  draw();
+  const id = setInterval(draw, 100);
+  return {
+    update(msg: string): void {
+      label = msg;
+    },
+    stop(): void {
+      clearInterval(id);
+      process.stdout.write('\r\x1b[K');
+    },
+  };
+}
+
 async function runTrigger(sessionId: string, channel: string, payload: unknown): Promise<void> {
   state.running = true;
-  const s = spinner();
-  s.start('Thinking…');
-
-  const STEP_LABELS: Record<string, string> = {
-    ingestion: 'reading context…',
-    projection: 'projecting state…',
-    authorship: 'drafting response…',
-    recognition: 'validating action…',
-    execution: 'applying action…',
-  };
+  const s = startSpinner('Thinking…');
 
   try {
     const stream = client.sessions.triggerStream(sessionId, {
@@ -184,24 +198,22 @@ async function runTrigger(sessionId: string, channel: string, payload: unknown):
     for await (const event of stream) {
       if (event.event === 'step') {
         const step = String((event.data as Record<string, unknown>).step ?? '');
-        s.message(STEP_LABELS[step] ?? step);
+        s.update(STEP_LABELS[step] ?? step);
       } else if (event.event === 'round_complete') {
         s.stop();
         const result = (event.data as Record<string, unknown>).result ?? event.data;
         renderAction(result as { name: string; payload?: Record<string, unknown> });
-        // Unblock readline immediately — stream may stay open server-side while
-        // the for-await drains. finally{} resets running once the stream closes.
         state.running = false;
         updatePrompt();
       } else if (event.event === 'error') {
-        s.stop('Error.');
+        s.stop();
         renderError(String((event.data as Record<string, unknown>).message ?? event.data));
         state.running = false;
         updatePrompt();
       }
     }
   } catch (err) {
-    s.stop('Error.');
+    s.stop();
     renderError(String(err));
   } finally {
     state.running = false;

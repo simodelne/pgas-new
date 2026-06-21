@@ -1,4 +1,3 @@
-import { log, note, select, text } from '@clack/prompts';
 import chalk from 'chalk';
 
 export interface ReplState {
@@ -13,108 +12,75 @@ export interface ActionResult {
   payload?: Record<string, unknown>;
 }
 
-export interface NormalizedWidget {
-  widget_type: string;
-  message: string;
-  intent: string;
-  fields: Array<{ name: string; label: string; type?: string }>;
-  round_number: number;
+function writeln(line: string): void {
+  process.stdout.write(`${line}\n`);
+}
+
+function box(title: string, lines: string[]): void {
+  const inner = Math.max(title.length + 2, ...lines.map((l) => stripAnsi(l).length)) + 2;
+  const top = '┌─ ' + chalk.bold(title) + ' ' + '─'.repeat(Math.max(0, inner - title.length - 4)) + '┐';
+  writeln(chalk.dim(top));
+  for (const line of lines) {
+    const visible = stripAnsi(line).length;
+    const pad = ' '.repeat(Math.max(0, inner - visible - 2));
+    writeln(chalk.dim('│ ') + line + pad + chalk.dim(' │'));
+  }
+  writeln(chalk.dim('└' + '─'.repeat(inner) + '┘'));
+}
+
+function stripAnsi(s: string): string {
+  // Simple ANSI strip — matches chalk's CSI sequences
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
 export function renderAction(result: ActionResult): void {
   const { name, payload = {} } = result;
+  const title = name.replace(/_/g, ' ');
 
   if (name === '__fallback__') {
-    log.warn('No valid action — try rephrasing or /abort.');
+    writeln(chalk.yellow('⚠  No valid action — try rephrasing or /abort.'));
     return;
   }
 
   // Array payload — e.g. proposed outline sections
   const firstArr = Object.values(payload).find((v) => Array.isArray(v));
   if (Array.isArray(firstArr)) {
-    const lines = (firstArr as Array<Record<string, unknown>>)
-      .map((item, i) => `${String(i + 1).padStart(2)}. ${String(item.title ?? item.name ?? JSON.stringify(item))}`)
-      .join('\n');
-    note(lines, chalk.bold(name.replace(/_/g, ' ')));
+    const lines = (firstArr as Array<Record<string, unknown>>).map(
+      (item, i) =>
+        `${chalk.dim(String(i + 1).padStart(2) + '.')} ${String(item.title ?? item.name ?? JSON.stringify(item))}`,
+    );
+    box(title, lines);
     return;
   }
 
   // Single message string
   if (typeof payload.message === 'string') {
-    log.info(payload.message);
+    writeln(chalk.green('✓ ') + payload.message);
     return;
   }
 
   // Generic key/value table
-  const fields = Object.entries(payload)
-    .filter(([, v]) => v !== null && v !== undefined && v !== '')
-    .map(([k, v]) => `${chalk.dim(k.padEnd(20))} ${String(v).slice(0, 80)}`)
-    .join('\n');
-
-  if (fields) {
-    note(fields, chalk.bold(name.replace(/_/g, ' ')));
-  }
-}
-
-export async function renderWidget(
-  widget: NormalizedWidget,
-  trigger: (channel: string, payload: unknown) => Promise<void>,
-): Promise<void> {
-  const { widget_type, message, intent, fields } = widget;
-
-  const isConfirmation =
-    widget_type === 'confirm' ||
-    intent === 'present_for_approval' ||
-    intent === 'approval' ||
-    intent === 'confirm';
-
-  if (isConfirmation) {
-    const answer = await select<string>({
-      message,
-      options: [
-        { value: 'approve', label: '✓  Approve' },
-        { value: 'reject', label: '✗  Reject with note' },
-        { value: 'skip', label: '·  Skip for now' },
-      ],
-    });
-    if (typeof answer === 'symbol') return;
-    if (answer === 'skip') return;
-
-    let instruction = '';
-    if (answer === 'reject') {
-      const rev = await text({ message: 'Revision note (optional):' });
-      if (typeof rev === 'symbol') return;
-      instruction = String(rev);
-    }
-
-    await trigger('user_confirmation', {
-      decision: answer === 'approve' ? 'approve' : 'reject',
-      instruction,
-      note_mode: 'inline',
-      timestamp: new Date().toISOString(),
-    });
-    return;
-  }
-
-  // Form: prompt each declared field
-  if (fields && fields.length > 0) {
-    const answers: Record<string, string> = {};
-    for (const field of fields) {
-      const val = await text({ message: field.label, placeholder: field.name });
-      if (typeof val === 'symbol') return;
-      answers[field.name] = String(val);
-    }
-    await trigger('user_text', Object.entries(answers).map(([k, v]) => `${k}: ${v}`).join('\n'));
-    return;
-  }
-
-  log.info(message);
+  const entries = Object.entries(payload).filter(([, v]) => v !== null && v !== undefined && v !== '');
+  if (entries.length === 0) return;
+  const keyWidth = Math.max(...entries.map(([k]) => k.length));
+  const lines = entries.map(
+    ([k, v]) => `${chalk.cyan(k.padEnd(keyWidth))}  ${String(v).slice(0, 80)}`,
+  );
+  box(title, lines);
 }
 
 export function renderModeChange(newMode: string): void {
-  log.step(chalk.cyan(`→ ${newMode}`));
+  writeln(chalk.cyan(`→ ${newMode}`));
 }
 
 export function renderError(message: string): void {
-  log.error(chalk.red(message));
+  writeln(chalk.red(`✗ ${message}`));
+}
+
+export function renderInfo(message: string): void {
+  writeln(chalk.blue('ℹ ') + message);
+}
+
+export function renderStep(message: string): void {
+  writeln(chalk.green('● ') + message);
 }
