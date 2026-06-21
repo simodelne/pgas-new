@@ -17,7 +17,8 @@ trap 'rm -rf "$WORK"' EXIT
 echo "[1/6] render standalone scaffold"
 npm run pgas-new -- render-standalone --slug pgas-new --name "PGAS New" --out "$WORK" >/tmp/pgas-new-render.log
 test -f "$WORK/src/programs/pgas-new/specs.yml" && pass "rendered specs.yml" || fail "missing generated specs.yml"
-test -f "$WORK/src/repl/index.ts" && pass "rendered REPL" || fail "missing generated REPL"
+test -f "$WORK/src/repl/index.ts" && pass "rendered REPL index" || fail "missing generated REPL index"
+test -f "$WORK/src/repl/renderer.ts" && pass "rendered REPL renderer" || fail "missing generated REPL renderer"
 test -f "$WORK/tests/live-provider.test.ts" && pass "rendered live provider test" || fail "missing generated live provider test"
 
 echo "[2/6] generated scaffold has no banned imports"

@@ -112,8 +112,8 @@ describe('template renderer', () => {
       expect(registration).toContain('createToolRegistry');
       expect(registration).toContain('loadSpecWithPatterns');
       expect(registration).toContain('enableNotebook');
-      expect(repl).toContain("from '@simodelne/pgas-server/channels/index.js'");
-      expect(repl).toContain('controlCliAdapter');
+      expect(repl).toContain("from '@simodelne/pgas-server/client.js'");
+      expect(repl).toContain('connectNotifications');
       expect(apiTest).toContain("from '@simodelne/pgas-server/client.js'");
       expect(apiTest).toContain('createPgasClient');
       expect(apiTest).toContain('appTransport');
@@ -533,29 +533,47 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders REPL with a dev-mode AuthProvider that lets controlCliAdapter accept the default CLI token', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-dev-auth-'));
+  it('renders streaming REPL client with SSE + WS rendering', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-streaming-repl-'));
     try {
       renderStandaloneScaffold({
         outDir,
-        slug: 'social-media-agent',
-        name: 'Social Media Agent',
-        template: 'social-media-agent',
+        slug: 'my-program',
+        name: 'My Program',
       });
-      const repl = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
 
-      expect(repl).toContain(
-        "import type { AuthIdentity, AuthProvider } from '@simodelne/pgas-server/plugin.js'",
-      );
-      expect(repl).toContain('devReplAuthProvider');
-      expect(repl).toContain('PGAS_DEV_MODE');
-      expect(repl).toContain('PGAS_CLI_TOKEN');
-      expect(repl).toContain("DEFAULT_CLI_TOKEN = 'dev-token'");
-      expect(repl).toMatch(/devMode\s*\?\s*\{\s*auth:\s*devReplAuthProvider\(\)\s*\}\s*:\s*\{\s*\}/);
-      expect(repl).toContain('controlCliAdapter');
-      expect(repl).toContain('PGAS_CLI_TOKEN must be set when PGAS_DEV_MODE=0');
-      expect(repl).toContain('verifyToken');
-      expect(repl).toContain("userId: DEV_USER_ID, role: 'admin'");
+      const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
+      const renderer = readFileSync(join(outDir, 'src/repl/renderer.ts'), 'utf8');
+      const pkg = readFileSync(join(outDir, 'package.json'), 'utf8');
+
+      // index.ts: pure client — no embedded server
+      expect(index).not.toContain('createPgasServer');
+      expect(index).not.toContain('controlCliAdapter');
+      expect(index).not.toContain('devReplAuthProvider');
+      expect(index).toContain("from '@simodelne/pgas-server/client.js'");
+      expect(index).toContain('connectNotifications');
+      expect(index).toContain('triggerStream');
+      expect(index).toContain('PGAS_API_BASE');
+      expect(index).toContain('PGAS_WS_BASE');
+      expect(index).toContain('my-program');  // {{SLUG}} rendered
+      expect(index).toContain('My Program');  // {{NAME}} rendered
+
+      // renderer.ts: rendering functions exported
+      expect(renderer).toContain('renderAction');
+      expect(renderer).toContain('renderWidget');
+      expect(renderer).toContain('renderModeChange');
+      expect(renderer).toContain('renderError');
+      expect(renderer).toContain('ReplState');
+      expect(renderer).toContain("from '@clack/prompts'");
+      expect(renderer).toContain("from 'chalk'");
+
+      // package.json: new deps
+      expect(pkg).toContain('@clack/prompts');
+      expect(pkg).toContain('chalk');
+
+      // no unresolved tokens
+      expect(index).not.toContain('{{');
+      expect(renderer).not.toContain('{{');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
