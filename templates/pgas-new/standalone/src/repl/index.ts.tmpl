@@ -52,7 +52,7 @@ const ws = connectNotifications(
           // The user responds through the readline interface below.
           // renderWidget (clack select/text) is reserved for user-initiated
           // confirmation flows where stdin ownership is unambiguous.
-          log.info(widget.message || 'Input requested — type your response.');
+          print(widget.message || 'Input requested — type your response.');
           updatePrompt();
           break;
         }
@@ -67,7 +67,7 @@ const ws = connectNotifications(
       }
     },
     onReconnect({ attempt, delayMs }) {
-      log.warn(`Connection lost — reconnecting (attempt ${String(attempt)}, delay ${String(delayMs)}ms)…`);
+      print(`⚠ Connection lost — reconnecting (attempt ${String(attempt)})…`);
     },
   },
 );
@@ -108,42 +108,47 @@ function updatePrompt(): void {
   rl.prompt();
 }
 
+function print(msg: string): void {
+  // Use raw stdout to avoid clack cursor-management conflicts with readline.
+  process.stdout.write(`${msg}\n`);
+}
+
 async function handleCommand(input: string): Promise<void> {
   const cmd = input.slice(1).split(' ')[0] ?? '';
   switch (cmd) {
     case 'help':
-      log.info('/new  /abort  /status  /history  /resume  /help');
+      print('/new  /abort  /status  /history  /resume  /help');
       break;
     case 'new':
       state.sessionId = null;
       state.mode = null;
-      log.step('Ready — send a message to start a new session.');
+      print('Ready — send a message to start a new session.');
       break;
     case 'abort':
       if (state.sessionId) {
         await client.sessions.abort(state.sessionId);
-        log.step('Session aborted.');
+        print('Session aborted.');
         state.sessionId = null;
         state.mode = null;
       } else {
-        log.warn('No active session.');
+        print('No active session.');
       }
       break;
     case 'status':
-      log.info(
+      print(
         state.sessionId
           ? `session: ${state.sessionId}  mode: ${state.mode ?? '?'}`
           : 'No active session.',
       );
       break;
     case 'history':
-      log.info(`active: ${state.sessionId ?? 'none'}  mode: ${state.mode ?? '?'}`);
+      print(`active: ${state.sessionId ?? 'none'}  mode: ${state.mode ?? '?'}`);
       break;
     case 'resume':
-      log.step('Resuming…');
+      print('Resuming…');
       break;
     default:
-      log.warn(`Unknown command: /${cmd}`);
+      print(`Unknown command: /${cmd}`);
   }
 }
 
