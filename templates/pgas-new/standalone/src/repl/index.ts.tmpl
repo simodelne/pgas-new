@@ -184,11 +184,15 @@ async function runTrigger(sessionId: string, channel: string, payload: unknown):
         s.stop();
         const result = (event.data as Record<string, unknown>).result ?? event.data;
         renderAction(result as { name: string; payload?: Record<string, unknown> });
-        break; // stream stays open server-side; break to unblock readline
+        // Unblock readline immediately — stream may stay open server-side while
+        // the for-await drains. finally{} resets running once the stream closes.
+        state.running = false;
+        updatePrompt();
       } else if (event.event === 'error') {
         s.stop('Error.');
         renderError(String((event.data as Record<string, unknown>).message ?? event.data));
-        break;
+        state.running = false;
+        updatePrompt();
       }
     }
   } catch (err) {
