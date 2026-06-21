@@ -17,13 +17,38 @@ function assertMockAdapter(name: string, payload: unknown): void {
   }
 }
 
+// M5 (issue #30): handler-side rejection of any payload that names a forbidden
+// capability — defense in depth with the tool-side check in tools.ts.tmpl.
+const FORBIDDEN_CAPABILITY_NAMES = [
+  'navigate_real_platform',
+  'submit_real_credentials',
+  'publish_real_post',
+  'read_real_user_profile',
+];
+function assertNoForbiddenCapability(name: string, payload: unknown): void {
+  for (const cap of FORBIDDEN_CAPABILITY_NAMES) {
+    if (name === cap) throw new Error(`${name}: forbidden capability`);
+  }
+  if (typeof payload !== 'object' || payload === null) return;
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    for (const cap of FORBIDDEN_CAPABILITY_NAMES) {
+      if (value.includes(cap)) {
+        throw new Error(`${name}: payload.${key} names forbidden capability '${cap}'`);
+      }
+    }
+  }
+}
+
 export const handlers: Record<string, ToolHandler> = {
   async record_intake(payload) {
+    assertNoForbiddenCapability('record_intake', payload);
     return { kind: 'social_media_agent_intake_recorded', payload };
   },
 
   async confirm_mock_adapter(payload) {
     assertMockAdapter('confirm_mock_adapter', payload);
+    assertNoForbiddenCapability('confirm_mock_adapter', payload);
     return {
       kind: 'social_media_agent_mock_confirmed',
       payload,
@@ -34,6 +59,8 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async bootstrap_mock_session(payload) {
+    assertMockAdapter('bootstrap_mock_session', payload);
+    assertNoForbiddenCapability('bootstrap_mock_session', payload);
     return {
       kind: 'social_media_agent_mock_session_started',
       payload,
@@ -44,6 +71,8 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async capture_feed_snapshot(payload) {
+    assertMockAdapter('capture_feed_snapshot', payload);
+    assertNoForbiddenCapability('capture_feed_snapshot', payload);
     return {
       kind: 'social_media_agent_feed_snapshot',
       payload,
@@ -55,27 +84,33 @@ export const handlers: Record<string, ToolHandler> = {
 
   async draft_post(payload) {
     rejectArrays('draft_post', payload);
+    assertNoForbiddenCapability('draft_post', payload);
     return { kind: 'social_media_agent_draft_recorded', payload };
   },
 
   async propose_publish(payload) {
+    assertNoForbiddenCapability('propose_publish', payload);
     return { kind: 'social_media_agent_publish_proposed', payload };
   },
 
   async approve_draft(payload) {
+    assertNoForbiddenCapability('approve_draft', payload);
     return { kind: 'social_media_agent_draft_approved', payload };
   },
 
   async reject_draft(payload) {
+    assertNoForbiddenCapability('reject_draft', payload);
     return { kind: 'social_media_agent_draft_rejected', payload };
   },
 
   async revise_draft(payload) {
+    assertNoForbiddenCapability('revise_draft', payload);
     return { kind: 'social_media_agent_draft_revision_requested', payload };
   },
 
   async publish_one_draft(payload) {
     rejectArrays('publish_one_draft', payload);
+    assertNoForbiddenCapability('publish_one_draft', payload);
     return {
       kind: 'social_media_agent_publish_one_request',
       payload,
@@ -86,6 +121,7 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async verify_post(payload) {
+    assertNoForbiddenCapability('verify_post', payload);
     return {
       kind: 'social_media_agent_verify_request',
       payload,
@@ -97,6 +133,7 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async append_post_ledger(payload) {
+    assertNoForbiddenCapability('append_post_ledger', payload);
     return {
       kind: 'social_media_agent_ledger_append_request',
       payload,
@@ -107,6 +144,7 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async complete_run(payload) {
+    assertNoForbiddenCapability('complete_run', payload);
     return { kind: 'social_media_agent_run_complete', payload };
   },
 };

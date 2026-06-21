@@ -48,6 +48,14 @@ modes:
   intake:
     vocabulary: [record_intake, request_user_action, record_user_note]
     channels: [user_text, system_mode_entry, widget_output]
+    preconditions:
+      # H1 (issue #30): the spec, not the LLM's self-asserted arg, decides whether
+      # the safety acknowledgement is real. record_intake requires that the user
+      # has already supplied `inputs.no_real_credentials=true` BEFORE the LLM
+      # attempts to set safety.no_real_credentials. Tool-side assertion adds
+      # defense in depth (see safetyValidatedTool in tools.ts.tmpl).
+      record_intake:
+        - { kind: FieldEquals, path: inputs.no_real_credentials, value: true }
     transitions:
       - target: mock_adapter_check
         guard: { kind: FieldTruthy, path: intake.complete }
@@ -60,6 +68,10 @@ modes:
       confirm_mock_adapter:
         - { kind: FieldTruthy, path: intake.complete }
         - { kind: FieldEquals, path: safety.no_real_credentials, value: true }
+        # H2 (issue #30): the action could previously set mock_confirmed=true
+        # even when the LLM passed adapter_kind != 'mock'. The spec now refuses
+        # the action unless the inbound arg matches.
+        - { kind: FieldEquals, path: inputs.adapter_kind, value: mock }
     transitions:
       - target: session_bootstrap
         guard: { kind: FieldTruthy, path: browser.mock_confirmed }
@@ -174,10 +186,10 @@ proceed_to:
 
 projection:
   intake:
-    include: [inputs.user_text, intake.account_handle, intake.platform_class, intake.persona, intake.topic_scope, intake.posting_cadence_per_day, intake.complete, safety.no_real_credentials, safety.demo_page_url, notebook.entries, notebook.pins]
+    include: [inputs.user_text, inputs.no_real_credentials, inputs.adapter_kind, intake.account_handle, intake.platform_class, intake.persona, intake.topic_scope, intake.posting_cadence_per_day, intake.complete, safety.no_real_credentials, safety.demo_page_url, notebook.entries, notebook.pins]
     exclude: []
   mock_adapter_check:
-    include: [browser.adapter_kind, browser.capabilities_json, browser.mock_confirmed, safety.demo_page_url, notebook.entries]
+    include: [inputs.user_text, inputs.adapter_kind, browser.adapter_kind, browser.capabilities_json, browser.mock_confirmed, safety.demo_page_url, notebook.entries]
     exclude: []
   session_bootstrap:
     include: [browser.adapter_kind, browser.mock_confirmed, session.mock_authenticated, session.mock_session_id, safety.demo_page_url, notebook.entries]
@@ -217,7 +229,13 @@ prompts:
   blocked: "Report the precise block reason and the next user action required. Do not attempt to bypass."
 
 ingestion:
-  user_text: [inputs.user_text]
+  # H1/H2 (issue #30): user_text carries two structured safety-acknowledgement
+  # fields that the spec preconditions guard on. These cannot be set by the LLM
+  # itself — the user must supply them at intake or adapter-confirmation time.
+  user_text:
+    - inputs.user_text
+    - inputs.no_real_credentials
+    - inputs.adapter_kind
   system_mode_entry: [inputs.mode_entry]
   user_confirmation:
     - inputs.user_decision.decision
@@ -248,6 +266,9 @@ action_map:
     channel: widget_output
   confirm_mock_adapter:
     description: "Confirm the browser adapter is in mock mode and read declared capabilities."
+    # H2 (issue #30): mock_confirmed is now gated on the adapter_kind precondition.
+    # The unconditional value: true was bypassable; the precondition above enforces
+    # inputs.adapter_kind == 'mock' before the action is even legal.
     mutations:
       - { op: MSet, path: browser.adapter_kind, from_arg: adapter_kind }
       - { op: MSet, path: browser.capabilities_json, from_arg: capabilities_json }
@@ -287,10 +308,14 @@ action_map:
     channel: widget_output
   approve_draft:
     description: "User-approve a specific draft id. Required before any publish_one_draft call."
+    # H4 (issue #30): the unconditional post.last_post_verified=true mutation
+    # was bypassable — approving a second draft re-flipped the verification gate
+    # to true even when the previous post was never verified. The verification
+    # signal now flows exclusively through bootstrap_mock_session (initial state)
+    # and append_post_ledger (after a real mock verification).
     mutations:
       - { op: MSet, path: approval.user_approved, value: true }
       - { op: MSet, path: approval.target_draft_id, from_arg: target_draft_id }
-      - { op: MSet, path: post.last_post_verified, value: true }
     channel: widget_output
   reject_draft:
     description: "User-reject the current draft. Resets approval and clears the proposal."
@@ -342,6 +367,9 @@ schema:
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
   inputs.user_text: string
+  # H1/H2 (issue #30): user-supplied safety acknowledgements ingested from user_text.
+  inputs.no_real_credentials: boolean
+  inputs.adapter_kind: string
   inputs.user_decision: object
   inputs.user_decision.decision: string
   inputs.user_decision.instruction: string

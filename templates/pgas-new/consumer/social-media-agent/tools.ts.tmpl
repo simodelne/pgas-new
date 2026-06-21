@@ -41,6 +41,16 @@ const REAL_PLATFORM_DOMAINS = [
   'youtube.com',
 ];
 
+// M5 (issue #30): forbidden capabilities from the dossier are now enforced in
+// code, not prose. Any action whose name or arg-value references one of these
+// is rejected at the tool boundary. Keeps the dossier and the runtime in sync.
+const FORBIDDEN_CAPABILITY_NAMES = [
+  'navigate_real_platform',
+  'submit_real_credentials',
+  'publish_real_post',
+  'read_real_user_profile',
+] as const;
+
 function assertSinglularPayload(toolName: string, payload: unknown): void {
   if (typeof payload !== 'object' || payload === null) {
     throw new Error(`${toolName}: payload must be a single object`);
@@ -98,38 +108,50 @@ function assertNoRealCredentials(toolName: string, payload: unknown): void {
   }
 }
 
-const publishOneDraftTool: ToolImpl = {
-  kind: 'local',
-  fn: async (args) => {
-    assertSinglularPayload('publish_one_draft', args);
-    assertMockOnlyUrl('publish_one_draft', args);
-    assertNoRealCredentials('publish_one_draft', args);
-    return { ok: true, kind: 'mock_publish_request', args };
-  },
-};
+// M5 (issue #30): code-level enforcement of dossier.forbidden_capabilities.
+// Rejects an action if its name OR any string-valued arg contains one of the
+// forbidden capability tokens — closes the dossier-vs-runtime drift.
+function assertNoForbiddenCapability(toolName: string, payload: unknown): void {
+  for (const cap of FORBIDDEN_CAPABILITY_NAMES) {
+    if (toolName === cap) {
+      throw new Error(`${toolName}: forbidden capability (declared in dossier.forbidden_capabilities)`);
+    }
+  }
+  if (typeof payload !== 'object' || payload === null) return;
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (typeof value !== 'string') continue;
+    for (const cap of FORBIDDEN_CAPABILITY_NAMES) {
+      if (value.includes(cap)) {
+        throw new Error(`${toolName}: payload.${key} names forbidden capability '${cap}'`);
+      }
+    }
+  }
+}
 
-const mockBrowserTool = (name: string): ToolImpl => ({
-  kind: 'local',
-  fn: async (args) => {
-    assertSinglularPayload(name, args);
-    assertMockOnlyUrl(name, args);
-    assertNoRealCredentials(name, args);
-    return { ok: true, kind: `${name}_request`, args };
-  },
-});
-
-const noopTool: ToolImpl = {
-  kind: 'local',
-  fn: async (args) => ({ ok: true, args }),
-};
+// H3 (issue #30): every tool runs the same safety validator stack — no more
+// noop pass-through that skipped assertions for record_intake, draft_post,
+// propose_publish, approve_draft, reject_draft, revise_draft, verify_post,
+// append_post_ledger, complete_run.
+function safetyValidatedTool(name: string, kind: string): ToolImpl {
+  return {
+    kind: 'local',
+    fn: async (args) => {
+      assertSinglularPayload(name, args);
+      assertMockOnlyUrl(name, args);
+      assertNoRealCredentials(name, args);
+      assertNoForbiddenCapability(name, args);
+      return { ok: true, kind, args };
+    },
+  };
+}
 
 export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
-  registry.register('publish_one_draft', publishOneDraftTool);
+  registry.register('publish_one_draft', safetyValidatedTool('publish_one_draft', 'mock_publish_request'));
   for (const name of ['confirm_mock_adapter', 'bootstrap_mock_session', 'capture_feed_snapshot'] as const) {
-    registry.register(name, mockBrowserTool(name));
+    registry.register(name, safetyValidatedTool(name, `${name}_request`));
   }
   for (const name of semanticTools) {
     if (name === 'publish_one_draft' || name === 'confirm_mock_adapter' || name === 'bootstrap_mock_session' || name === 'capture_feed_snapshot') continue;
-    registry.register(name, noopTool);
+    registry.register(name, safetyValidatedTool(name, `${name}_request`));
   }
 }
