@@ -185,9 +185,11 @@ async function runTrigger(sessionId: string, channel: string, payload: unknown):
         s.stop();
         const result = (event.data as Record<string, unknown>).result ?? event.data;
         renderAction(result as { name: string; payload?: Record<string, unknown> });
+        break; // stream stays open server-side; break to unblock readline
       } else if (event.event === 'error') {
         s.stop('Error.');
         renderError(String((event.data as Record<string, unknown>).message ?? event.data));
+        break;
       }
     }
   } catch (err) {
