@@ -1,67 +1,195 @@
-import { connectNotifications, triggerStream } from '@simodelne/pgas-server/client.js';
-import { intro, outro, text, isCancel } from '@clack/prompts';
-import { renderAction, renderWidget, renderModeChange, renderError, type ReplState } from './renderer.js';
+import readline from 'node:readline';
+import { intro, log, outro, spinner } from '@clack/prompts';
+import { connectNotifications, createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
+import type { NormalizedWidget, ReplState } from './renderer.js';
+import { renderAction, renderError, renderModeChange, renderWidget } from './renderer.js';
 
-const PGAS_API_BASE = process.env.PGAS_API_BASE ?? 'http://localhost:3000';
-const PGAS_WS_BASE = process.env.PGAS_WS_BASE ?? 'ws://localhost:3000';
+const API_BASE = process.env.PGAS_API_BASE ?? 'http://localhost:3000';
+const WS_BASE =
+  process.env.PGAS_WS_BASE ?? API_BASE.replace(/^https/, 'wss').replace(/^http/, 'ws');
+const TOKEN = process.env.PGAS_CLI_TOKEN ?? 'dev-token';
+const DEV_MODE = process.env.PGAS_DEV_MODE !== '0';
 const PROGRAM = '{{SLUG}}';
 
-const state: ReplState = {
-  sessionId: null,
-  mode: null,
-  running: true,
-};
+if (!DEV_MODE && TOKEN === 'dev-token') {
+  process.stderr.write('PGAS_CLI_TOKEN must be set when PGAS_DEV_MODE=0\n');
+  process.exit(1);
+}
 
-intro('{{NAME}} REPL');
+const client = createPgasClient(fetchTransport({ baseUrl: API_BASE, token: TOKEN }));
 
-// Connect to WebSocket notification stream for lifecycle events
-const ws = connectNotifications(PGAS_WS_BASE, {
-  onModeChange(newMode: string) {
-    state.mode = newMode;
-    renderModeChange(newMode);
+const state: ReplState = { sessionId: null, mode: null, running: false };
+
+intro('{{NAME}} — PGAS REPL');
+
+try {
+  await client.programs.list();
+} catch {
+  log.error(`Server not reachable at ${API_BASE}. Start it first: npm run dev`);
+  process.exit(1);
+}
+log.step(`Connected  program: ${PROGRAM}`);
+
+const ws = connectNotifications(
+  { wsBaseUrl: WS_BASE, token: TOKEN, reconnect: true },
+  {
+    onMessage(event) {
+      if (!('type' in event)) return;
+      const ev = event as { type: string; sessionId: string; data: Record<string, unknown> };
+      if (ev.type === 'connected') return;
+
+      switch (ev.type) {
+        case 'mode_change': {
+          state.mode = String(ev.data.mode ?? '');
+          renderModeChange(state.mode);
+          updatePrompt();
+          break;
+        }
+        case 'session:pending_input': {
+          const widget = ev.data.normalizedWidget as NormalizedWidget | undefined;
+          if (!widget) break;
+          renderWidget(widget, (channel, payload) =>
+            runTrigger(ev.sessionId, channel, payload).finally(() => updatePrompt()),
+          ).catch((err) => renderError(String(err)));
+          break;
+        }
+        case 'session_terminal':
+          outro('Complete.');
+          ws.close();
+          process.exit(0);
+          break;
+        case 'error':
+          renderError(String(ev.data.message ?? JSON.stringify(ev.data)));
+          break;
+      }
+    },
+    onReconnect({ attempt, delayMs }) {
+      log.warn(`Connection lost — reconnecting (attempt ${String(attempt)}, delay ${String(delayMs)}ms)…`);
+    },
   },
-  onError(msg: string) {
-    renderError(msg);
-  },
-  onClose() {
-    state.running = false;
-  },
+);
+
+await ws.opened;
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+updatePrompt();
+
+rl.on('line', async (line: string) => {
+  const input = line.trim();
+  if (!input || state.running) return;
+  if (input.startsWith('/')) {
+    await handleCommand(input).catch((err) => renderError(String(err)));
+  } else {
+    await handleText(input).catch((err) => renderError(String(err)));
+  }
+  if (!state.running) updatePrompt();
 });
 
-async function trigger(channel: string, payload: unknown): Promise<void> {
-  const stream = triggerStream(PGAS_API_BASE, {
-    program: PROGRAM,
-    sessionId: state.sessionId ?? undefined,
-    channel,
-    payload,
-  });
+rl.on('close', () => {
+  ws.close();
+  process.exit(0);
+});
 
-  for await (const event of stream) {
-    if (event.type === 'session_start') {
-      state.sessionId = event.sessionId;
-    } else if (event.type === 'action') {
-      renderAction(event.result);
-    } else if (event.type === 'widget') {
-      await renderWidget(event.widget, trigger);
+process.on('SIGINT', async () => {
+  if (state.sessionId && state.running) {
+    await client.sessions.abort(state.sessionId).catch(() => {});
+  }
+  outro('Bye.');
+  ws.close();
+  process.exit(0);
+});
+
+function updatePrompt(): void {
+  const label = state.mode ? ` [${state.mode}]` : '';
+  rl.setPrompt(`›${label} `);
+  rl.prompt();
+}
+
+async function handleCommand(input: string): Promise<void> {
+  const cmd = input.slice(1).split(' ')[0] ?? '';
+  switch (cmd) {
+    case 'help':
+      log.info('/new  /abort  /status  /history  /resume  /help');
+      break;
+    case 'new':
+      state.sessionId = null;
+      state.mode = null;
+      log.step('Ready — send a message to start a new session.');
+      break;
+    case 'abort':
+      if (state.sessionId) {
+        await client.sessions.abort(state.sessionId);
+        log.step('Session aborted.');
+        state.sessionId = null;
+        state.mode = null;
+      } else {
+        log.warn('No active session.');
+      }
+      break;
+    case 'status':
+      log.info(
+        state.sessionId
+          ? `session: ${state.sessionId}  mode: ${state.mode ?? '?'}`
+          : 'No active session.',
+      );
+      break;
+    case 'history':
+      log.info(`active: ${state.sessionId ?? 'none'}  mode: ${state.mode ?? '?'}`);
+      break;
+    case 'resume':
+      log.step('Resuming…');
+      break;
+    default:
+      log.warn(`Unknown command: /${cmd}`);
+  }
+}
+
+async function handleText(userText: string): Promise<void> {
+  if (!state.sessionId) {
+    const created = await client.sessions.create({
+      program: PROGRAM,
+      domain_context: { query: userText },
+    });
+    state.sessionId = created.sessionId;
+  }
+  await runTrigger(state.sessionId!, 'user_text', userText);
+}
+
+async function runTrigger(sessionId: string, channel: string, payload: unknown): Promise<void> {
+  state.running = true;
+  const s = spinner();
+  s.start('Thinking…');
+
+  const STEP_LABELS: Record<string, string> = {
+    ingestion: 'reading context…',
+    projection: 'projecting state…',
+    authorship: 'drafting response…',
+    recognition: 'validating action…',
+    execution: 'applying action…',
+  };
+
+  try {
+    const stream = client.sessions.triggerStream(sessionId, {
+      channel,
+      payload,
+    } as Parameters<typeof client.sessions.triggerStream>[1]);
+    for await (const event of stream) {
+      if (event.event === 'step') {
+        const step = String((event.data as Record<string, unknown>).step ?? '');
+        s.message(STEP_LABELS[step] ?? step);
+      } else if (event.event === 'round_complete') {
+        s.stop();
+        const result = (event.data as Record<string, unknown>).result ?? event.data;
+        renderAction(result as { name: string; payload?: Record<string, unknown> });
+      } else if (event.event === 'error') {
+        s.stop('Error.');
+        renderError(String((event.data as Record<string, unknown>).message ?? event.data));
+      }
     }
+  } catch (err) {
+    s.stop('Error.');
+    renderError(String(err));
+  } finally {
+    state.running = false;
   }
 }
-
-// Main REPL loop
-while (state.running) {
-  const input = await text({
-    message: `${state.mode ?? PROGRAM} >`,
-    placeholder: 'Type a message or /quit to exit',
-  });
-
-  if (isCancel(input) || input === '/quit') {
-    break;
-  }
-
-  if (typeof input === 'string' && input.trim().length > 0) {
-    await trigger('user_text', input.trim());
-  }
-}
-
-ws.close();
-outro('Session ended.');
