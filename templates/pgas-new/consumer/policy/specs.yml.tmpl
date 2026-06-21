@@ -29,18 +29,19 @@ features:
 channels:
   user_text: { direction: In, sync: Async }
   user_confirmation: { direction: In, sync: Async, structured_decision: true }
+  system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
 
 modes:
   intake:
     vocabulary: [record_intake, request_user_input, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: outline
         guard: { kind: FieldTruthy, path: intake.complete }
   outline:
     vocabulary: [propose_outline, approve_outline, request_user_input, record_user_note]
-    channels: [user_text, user_confirmation, widget_output]
+    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       approve_outline:
         - { kind: TriggerType, triggerSet: [user_confirmation] }
@@ -51,7 +52,7 @@ modes:
         guard: { kind: FieldTruthy, path: outline.approved }
   drafting:
     vocabulary: [draft_section, request_revision, render_policy_outputs, request_user_input, record_user_note]
-    channels: [user_text, user_confirmation, widget_output]
+    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       draft_section:
         - { kind: FieldTruthy, path: outline.approved }
@@ -64,7 +65,7 @@ modes:
         guard: { kind: FieldTruthy, path: outputs.ready }
   revision:
     vocabulary: [revise_section, render_policy_outputs, request_user_input, record_user_note]
-    channels: [user_text, user_confirmation, widget_output]
+    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       render_policy_outputs:
         - { kind: FieldTruthy, path: draft.sections }
@@ -75,7 +76,7 @@ modes:
         guard: { kind: FieldTruthy, path: outputs.ready }
   complete:
     vocabulary: [request_user_input]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
 
 proceed_to:
   record_intake: outline
@@ -109,6 +110,7 @@ prompts:
 
 ingestion:
   user_text: [inputs.user_text]
+  system_mode_entry: [inputs.mode_entry]
   user_confirmation:
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
@@ -178,6 +180,10 @@ action_map:
     channel: widget_output
 
 schema:
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
   inputs.user_text: string
   inputs.user_decision: object
   inputs.user_decision.decision: string

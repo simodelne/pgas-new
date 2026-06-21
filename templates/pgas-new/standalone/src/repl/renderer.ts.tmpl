@@ -4,6 +4,10 @@ export interface ReplState {
   sessionId: string | null;
   mode: string | null;
   running: boolean;
+  // True between /abort being typed and the in-flight SSE stream noticing it.
+  // The for-await loop breaks on this; the spinner stops; runTrigger skips its
+  // error rendering for the aborted run so the user sees only "Session aborted."
+  abortRequested: boolean;
 }
 
 export interface ActionResult {

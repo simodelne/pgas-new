@@ -35,18 +35,19 @@ features:
 channels:
   user_text: { direction: In, sync: Async }
   user_confirmation: { direction: In, sync: Async, structured_decision: true }
+  system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
 
 modes:
   intake:
     vocabulary: [record_intake, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: intelligence
         guard: { kind: FieldTruthy, path: intake.complete }
   intelligence:
     vocabulary: [web_search_sources, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       web_search_sources:
         - { kind: FieldTruthy, path: intake.complete }
@@ -55,7 +56,7 @@ modes:
         guard: { kind: FieldTruthy, path: intelligence.complete }
   egress_verification:
     vocabulary: [confirm_egress_ip, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       confirm_egress_ip:
         - { kind: FieldTruthy, path: intelligence.complete }
@@ -66,7 +67,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   web_analysis:
     vocabulary: [check_robots_and_terms, analyze_html_sample, playwright_snapshot, vision_analyze_snapshot, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       check_robots_and_terms:
         - { kind: FieldTruthy, path: egress.confirmed }
@@ -83,7 +84,7 @@ modes:
         guard: { kind: FieldTruthy, path: analysis.halt_reason }
   strategy_review:
     vocabulary: [propose_scraping_strategy, approve_scraping_strategy, request_user_action, record_user_note]
-    channels: [user_text, user_confirmation, widget_output]
+    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       propose_scraping_strategy:
         - { kind: FieldTruthy, path: analysis.complete }
@@ -98,7 +99,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   scraping:
     vocabulary: [fetch_one_asset, skip_duplicate, request_user_action]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       fetch_one_asset:
         - { kind: FieldTruthy, path: egress.confirmed }
@@ -111,7 +112,7 @@ modes:
         guard: { kind: FieldTruthy, path: scraping.last_asset_id }
   asset_verification:
     vocabulary: [verify_asset, append_scrape_ledger, request_user_action]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       verify_asset:
         - { kind: FieldTruthy, path: scraping.last_asset_id }
@@ -126,10 +127,10 @@ modes:
         guard: { kind: FieldTruthy, path: verification.requires_user_decision }
   complete:
     vocabulary: [complete_run, request_user_action]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
   blocked:
     vocabulary: [request_user_action, record_user_note]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
 
 proceed_to:
   record_intake: intelligence
@@ -185,6 +186,7 @@ prompts:
 
 ingestion:
   user_text: [inputs.user_text]
+  system_mode_entry: [inputs.mode_entry]
   user_confirmation:
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
@@ -306,6 +308,10 @@ action_map:
     channel: widget_output
 
 schema:
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
   inputs.user_text: string
   inputs.user_decision: object
   inputs.user_decision.decision: string

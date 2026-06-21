@@ -576,6 +576,99 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders REPL startup with friendly auth and notification-open failures', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-auth-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'my-program',
+        name: 'My Program',
+      });
+
+      const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
+
+      expect(index).toContain('isAuthError');
+      expect(index).toContain('Authentication failed');
+      expect(index).toContain('waitForNotifications');
+      expect(index).not.toContain('await ws.opened;');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders REPL abort as an interruptible control-plane command', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-abort-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'my-program',
+        name: 'My Program',
+      });
+
+      const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
+
+      expect(index).toContain("await client.controls.invoke(PROGRAM, 'abort'");
+      expect(index).toContain("input.startsWith('/') ? handleCommand(input) : handleText(input)");
+      expect(index).not.toContain('if (!input || state.running)');
+      expect(index).toContain('state.abortRequested = true');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders REPL status, history, and resume as server-backed commands', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-session-commands-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'my-program',
+        name: 'My Program',
+      });
+
+      const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
+
+      expect(index).toContain('await client.sessions.get(state.sessionId)');
+      expect(index).toContain('await client.sessions.rounds(state.sessionId)');
+      expect(index).toContain('await client.sessions.resume()');
+      expect(index).toContain('No resumable session exists.');
+      expect(index).not.toContain("renderStep('Resuming…')");
+      expect(index).not.toContain("mode: ${state.mode ?? '?'}");
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('declares the internal system_mode_entry continuation channel in generated specs', () => {
+    for (const template of ['pgas-new-foundry', 'policy-drafting', 'web-scraper', 'social-media-agent'] as const) {
+      const outDir = mkdtempSync(join(tmpdir(), `pgas-new-mode-entry-${template}-`));
+      try {
+        renderStandaloneScaffold({
+          outDir,
+          slug: 'my-program',
+          name: 'My Program',
+          template,
+          mandate: 'Test mandate.',
+        });
+
+        const parsed = load(readFileSync(join(outDir, 'src/programs/my-program/specs.yml'), 'utf8')) as {
+          channels: Record<string, { direction: string; sync: string }>;
+          ingestion: Record<string, string[]>;
+          modes: Record<string, { channels: string[] }>;
+          schema: Record<string, string>;
+        };
+
+        expect(parsed.channels.system_mode_entry).toEqual({ direction: 'In', sync: 'Async' });
+        expect(parsed.ingestion.system_mode_entry).toEqual(['inputs.mode_entry']);
+        expect(parsed.schema['inputs.mode_entry']).toBe('object');
+        for (const mode of Object.values(parsed.modes)) {
+          expect(mode.channels).toContain('system_mode_entry');
+        }
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it('renders social-media-agent artifacts via render-attach with mock-only guardrails', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-sma-'));
     try {

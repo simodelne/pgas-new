@@ -41,12 +41,13 @@ features:
 channels:
   user_text: { direction: In, sync: Async }
   user_confirmation: { direction: In, sync: Async, structured_decision: true }
+  system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
 
 modes:
   intake:
     vocabulary: [record_intake, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: mock_adapter_check
         guard: { kind: FieldTruthy, path: intake.complete }
@@ -54,7 +55,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   mock_adapter_check:
     vocabulary: [confirm_mock_adapter, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       confirm_mock_adapter:
         - { kind: FieldTruthy, path: intake.complete }
@@ -66,7 +67,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   session_bootstrap:
     vocabulary: [bootstrap_mock_session, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       bootstrap_mock_session:
         - { kind: FieldTruthy, path: browser.mock_confirmed }
@@ -78,7 +79,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   monitor_feed:
     vocabulary: [capture_feed_snapshot, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       capture_feed_snapshot:
         - { kind: FieldTruthy, path: session.mock_authenticated }
@@ -90,7 +91,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   draft_review:
     vocabulary: [draft_post, propose_publish, request_user_action, record_user_note]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       draft_post:
         - { kind: FieldTruthy, path: feed.snapshot_captured }
@@ -103,7 +104,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   human_approval:
     vocabulary: [approve_draft, reject_draft, revise_draft, request_user_action, record_user_note]
-    channels: [user_text, user_confirmation, widget_output]
+    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       approve_draft:
         - { kind: TriggerType, triggerSet: [user_confirmation] }
@@ -124,7 +125,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   post_publish:
     vocabulary: [publish_one_draft, request_user_action]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       publish_one_draft:
         - { kind: FieldTruthy, path: approval.user_approved }
@@ -137,7 +138,7 @@ modes:
         guard: { kind: FieldTruthy, path: run.block_reason }
   post_verification:
     vocabulary: [verify_post, append_post_ledger, request_user_action]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       verify_post:
         - { kind: FieldTruthy, path: post.last_post_id }
@@ -152,10 +153,10 @@ modes:
         guard: { kind: FieldTruthy, path: verification.requires_user_decision }
   complete:
     vocabulary: [complete_run, request_user_action]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
   blocked:
     vocabulary: [request_user_action, record_user_note]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
 
 proceed_to:
   record_intake: mock_adapter_check
@@ -217,6 +218,7 @@ prompts:
 
 ingestion:
   user_text: [inputs.user_text]
+  system_mode_entry: [inputs.mode_entry]
   user_confirmation:
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
@@ -335,6 +337,10 @@ action_map:
     channel: widget_output
 
 schema:
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
   inputs.user_text: string
   inputs.user_decision: object
   inputs.user_decision.decision: string

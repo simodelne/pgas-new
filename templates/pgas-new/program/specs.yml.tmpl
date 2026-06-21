@@ -18,12 +18,13 @@ features:
 
 channels:
   user_text: { direction: In, sync: Async }
+  system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
 
 modes:
   intake_intelligence:
     vocabulary: [record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     preconditions:
       web_research:
         - { kind: FieldTruthy, path: intake.research_allowed }
@@ -32,7 +33,7 @@ modes:
         guard: { kind: FieldTruthy, path: intake.mandate }
   repo_targeting:
     vocabulary: [select_repo_target, authorize_standalone_target, load_wiring_manifest, authorize_existing_repo_target, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       authorize_standalone_target:
         - { kind: FieldEquals, path: repo.target_kind, value: standalone_repo }
@@ -49,7 +50,7 @@ modes:
         guard: { kind: FieldTruthy, path: repo.blocked }
   architecture_design:
     vocabulary: [design_architecture, record_user_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       web_research:
         - { kind: FieldTruthy, path: intake.research_allowed }
@@ -58,7 +59,7 @@ modes:
         guard: { kind: FieldTruthy, path: program.architecture_ready }
   scaffold_plan:
     vocabulary: [plan_artifacts, approve_artifact_plan, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       approve_artifact_plan:
         - { kind: FieldTruthy, path: repo.write_authorized }
@@ -67,7 +68,7 @@ modes:
         guard: { kind: FieldEquals, path: artifact_plan.status, value: approved }
   branch_write:
     vocabulary: [write_scaffold_artifacts, git_status, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       write_scaffold_artifacts:
         - { kind: FieldEquals, path: artifact_plan.status, value: approved }
@@ -77,7 +78,7 @@ modes:
         guard: { kind: FieldTruthy, path: artifacts.written }
   static_verify:
     vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification, confirm_live_provider_intent, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       confirm_live_provider_intent:
         - { kind: FieldEquals, path: graduation.static_verification, value: passed }
@@ -86,7 +87,7 @@ modes:
         guard: { kind: FieldTruthy, path: graduation.ready_for_live }
   live_verify:
     vocabulary: [run_api_blackbox_verification, run_live_provider_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       run_api_blackbox_verification:
         - { kind: FieldTruthy, path: graduation.live_provider_intent }
@@ -97,7 +98,7 @@ modes:
         guard: { kind: FieldEquals, path: graduation.live_verification, value: passed }
   rebase_verify:
     vocabulary: [git_status, git_rebase_latest, run_rebase_static_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       run_rebase_static_verification:
         - { kind: FieldEquals, path: graduation.rebase_status, value: passed }
@@ -106,10 +107,10 @@ modes:
         guard: { kind: FieldEquals, path: graduation.rebase_verification, value: passed }
   pr_graduation:
     vocabulary: [open_pull_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
   curator_request:
     vocabulary: [create_curator_request, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
     transitions:
       - target: repo_targeting
         guard: { kind: FieldTruthy, path: repo.curator_request_lodged }
@@ -167,6 +168,7 @@ prompts:
 
 ingestion:
   user_text: [intake.mandate]
+  system_mode_entry: [inputs.mode_entry]
 
 action_map:
   record_user_note: { description: "Record a notebook note.", mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }], channel: widget_output }
@@ -277,6 +279,10 @@ action_map:
   open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
 
 schema:
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
   intake.mandate: string
   intake.research_confirmed: boolean
   intake.user_requested_research: boolean

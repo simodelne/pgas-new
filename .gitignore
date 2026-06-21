@@ -34,3 +34,4 @@ tests/**/*.js
 .claude/sessions/
 .claude/
 .remember/
+.uat/

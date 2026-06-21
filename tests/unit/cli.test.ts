@@ -53,11 +53,13 @@ describe('pgas-new CLI', () => {
     expect(result.stdout).toContain('@simodelne/pgas-server@2.10.0');
   });
 
-  it('maps session commands to generated control-plane controls', async () => {
+  it('maps session commands to generated control-plane controls and points users to the REPL', async () => {
     for (const control of PGAS_NEW_SESSION_CONTROLS) {
-      await expect(runCli(['session', control])).resolves.toMatchObject({
-        stdout: expect.stringContaining(`control:${control}`),
-      });
+      const result = await runCli(['session', control]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(`control: ${control}`);
+      expect(result.stdout).toContain('npm run repl');
+      expect(result.stdout).toContain(`/${control}`);
     }
   });
 

@@ -64,7 +64,20 @@ function sessionCommand(command: string | undefined): CliResult {
     return fail('unknown session command', 2);
   }
 
-  return ok(`control:${command}`);
+  // These commands are projections of the PGAS control-plane vocabulary that
+  // the GENERATED REPL implements end-to-end (with a server connection). The
+  // foundry CLI itself has no session state, so it emits the semantic control
+  // id plus a pointer to where the command actually runs.
+  return ok(
+    [
+      `control: ${command}`,
+      '',
+      'This is the control-plane id. Run the command inside the generated REPL:',
+      `  npm run repl   →   /${command}`,
+      '',
+      'The foundry CLI does not hold session state; the generated scaffold does.',
+    ].join('\n'),
+  );
 }
 
 function planStandalone(options: ParsedOptions): CliResult {
