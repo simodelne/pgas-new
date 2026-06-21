@@ -737,6 +737,77 @@ describe('template renderer', () => {
     }
   });
 
+  it('enforces social-media-agent safety gates H1-H4 + M5 from issue #30', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-sma-safety-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'sma',
+        name: 'SMA',
+        template: 'social-media-agent',
+      });
+
+      const spec = readFileSync(join(outDir, 'src/programs/sma/specs.yml'), 'utf8');
+      const tools = readFileSync(join(outDir, 'src/programs/sma/tools.ts'), 'utf8');
+      const handlers = readFileSync(join(outDir, 'src/programs/sma/handlers.ts'), 'utf8');
+
+      const parsed = load(spec) as {
+        modes: Record<string, {
+          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown }>>;
+        }>;
+        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+        ingestion: Record<string, string[]>;
+        schema: Record<string, string>;
+      };
+
+      // H1: record_intake requires inputs.no_real_credentials=true at the spec layer.
+      expect(parsed.modes.intake.preconditions?.record_intake).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.no_real_credentials', value: true }),
+        ]),
+      );
+      // ingestion + schema declare the new user-supplied field.
+      expect(parsed.ingestion.user_text).toEqual(expect.arrayContaining(['inputs.no_real_credentials']));
+      expect(parsed.schema['inputs.no_real_credentials']).toBe('boolean');
+
+      // H2: confirm_mock_adapter requires inputs.adapter_kind=mock at the spec layer.
+      expect(parsed.modes.mock_adapter_check.preconditions?.confirm_mock_adapter).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.adapter_kind', value: 'mock' }),
+        ]),
+      );
+      expect(parsed.ingestion.user_text).toEqual(expect.arrayContaining(['inputs.adapter_kind']));
+      expect(parsed.schema['inputs.adapter_kind']).toBe('string');
+
+      // H3: tools.ts wraps every action via safetyValidatedTool — no noopTool pass-through.
+      expect(tools).toContain('safetyValidatedTool');
+      expect(tools).not.toContain('const noopTool');
+      // Every semantic tool registers through safetyValidatedTool.
+      expect(tools).toMatch(/registry\.register\(name, safetyValidatedTool\(name/);
+
+      // H4: approve_draft no longer mutates post.last_post_verified.
+      const approveMutations = parsed.action_map.approve_draft.mutations ?? [];
+      const writesVerified = approveMutations.some((m) => m.path === 'post.last_post_verified');
+      expect(writesVerified).toBe(false);
+
+      // M5: forbidden_capabilities from the dossier are enforced in tools + handlers.
+      expect(tools).toContain('FORBIDDEN_CAPABILITY_NAMES');
+      expect(tools).toContain('navigate_real_platform');
+      expect(tools).toContain('submit_real_credentials');
+      expect(tools).toContain('publish_real_post');
+      expect(tools).toContain('read_real_user_profile');
+      expect(tools).toContain('assertNoForbiddenCapability');
+      expect(handlers).toContain('FORBIDDEN_CAPABILITY_NAMES');
+      expect(handlers).toContain('assertNoForbiddenCapability');
+
+      // Defense-in-depth bonus: assertMockAdapter now covers bootstrap + capture too.
+      expect(handlers).toMatch(/bootstrap_mock_session[\s\S]*?assertMockAdapter\('bootstrap_mock_session'/);
+      expect(handlers).toMatch(/capture_feed_snapshot[\s\S]*?assertMockAdapter\('capture_feed_snapshot'/);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders generated write-safety gates for existing repo attachments', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-gates-'));
     try {
