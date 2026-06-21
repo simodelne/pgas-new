@@ -24,6 +24,7 @@ Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`.
 npm run pgas-new -- version
 npm run pgas-new -- plan-standalone --slug pgas-new --name "PGAS New"
 npm run pgas-new -- render-standalone --slug pgas-new --name "PGAS New" --out /tmp/pgas-new
+npm run pgas-new -- render-standalone --slug my-agent --name "My Agent" --out /tmp/my-agent --template social-media-agent --mandate "Post scheduling agent for SimoneOS"
 npm run pgas-new -- validate-manifest --repo /path/to/repo
 npm run pgas-new -- plan-attach --repo /path/to/repo --slug review --name Review
 npm run pgas-new -- render-attach --repo /path/to/repo --slug draft-policy --name "Draft Policy" --template policy-drafting --mandate "risk-based policy drafting ..."

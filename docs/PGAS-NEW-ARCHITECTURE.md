@@ -1,6 +1,6 @@
 # PGAS-New Architecture
 
-Status: initial TypeScript/Node implementation on branch `feat/pgas-new-foundry`.
+Status: shipped; current release v2.3.0 on main.
 
 `pgas-new` is a PGAS-specific foundry for producing new PGAS programs. It is not a general coding assistant. Its responsibility is to govern the creation of a PGAS program: collect the mandate, research when allowed, design the PGAS architecture, plan artifacts, write only planned artifacts, verify deterministically, run a user-selected live provider graduation, rebase on the current target repo, and open a PR.
 
@@ -99,4 +99,4 @@ The static ladder is:
 
 Post-rebase verification reruns the static ladder after `gitStatus` and `gitRebaseLatest`. Live-provider evidence is separate from command-runner evidence and is recorded as `liveProviderRoundTrip`.
 
-The current branch has static verification. Live graduation remains pending until the user selects a real provider scenario and runs it through the external API.
+Static and live graduation are complete through v2.2.0. Future branches must re-run the full static ladder after rebase.

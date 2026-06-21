@@ -67,10 +67,7 @@ Vitest `live-provider.test.ts` ran green: 2/2 pass, 6.34 s. Full evidence in
 `pgas-new-grad-3-standalone`; transcript snapshots in
 `/tmp/pgas-new-grad-3-logs/`.
 
-Open follow-up: REPL `controlCliAdapter` rejects the default `dev-token` baked
-into the rendered `src/repl/index.ts.tmpl`. The HTTP API surface is unaffected
-and the scaffolded `npm run dev` server runs fine. Pre-existing scaffold
-limitation, not new on this branch.
+REPL `controlCliAdapter` auth: fixed in graduation-3 commit `6779444` via `devReplAuthProvider()`. The rendered REPL now uses `PGAS_CLI_TOKEN ?? 'dev-token'` and the devMode server accepts it.
 
 ### 2026-06-19 - Graduation 2 in flight on this branch (web-scraper template + live LLM round)
 

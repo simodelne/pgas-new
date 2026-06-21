@@ -692,4 +692,62 @@ describe('template renderer', () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  it('renders policy-drafting program in a standalone scaffold via --template', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-pd-'));
+    try {
+      const result = renderStandaloneScaffold({
+        outDir,
+        slug: 'draft-policy',
+        name: 'Draft Policy',
+        template: 'policy-drafting',
+        mandate: 'Risk-based policy drafting for SimoneOS.',
+      });
+
+      expect(result.written).toEqual(
+        createStandaloneArtifactPlan({ slug: 'draft-policy', name: 'Draft Policy' }).artifacts.map(
+          (a) => a.path,
+        ),
+      );
+
+      const spec = readFileSync(join(outDir, 'src/programs/draft-policy/specs.yml'), 'utf8');
+      for (const artifact of result.plan.artifacts) {
+        expect(readFileSync(join(outDir, artifact.path), 'utf8')).not.toContain('{{');
+      }
+      expect(spec).toContain('policy_objectives');
+      expect(spec).toContain('approve_outline');
+      expect(spec).toContain('render_policy_outputs');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders web-scraper program in a standalone scaffold via --template', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-ws-'));
+    try {
+      const result = renderStandaloneScaffold({
+        outDir,
+        slug: 'web-scraper',
+        name: 'Web Scraper',
+        template: 'web-scraper',
+        mandate: 'Ethical corpus scraper with hard network guardrails.',
+      });
+
+      expect(result.written).toEqual(
+        createStandaloneArtifactPlan({ slug: 'web-scraper', name: 'Web Scraper' }).artifacts.map(
+          (a) => a.path,
+        ),
+      );
+
+      const spec = readFileSync(join(outDir, 'src/programs/web-scraper/specs.yml'), 'utf8');
+      for (const artifact of result.plan.artifacts) {
+        expect(readFileSync(join(outDir, artifact.path), 'utf8')).not.toContain('{{');
+      }
+      expect(spec).toContain('egress.confirmed');
+      expect(spec).toContain('fetch_one_asset');
+      expect(spec).toContain('strategy.user_approved');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
 });
