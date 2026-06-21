@@ -18,7 +18,7 @@ if (!DEV_MODE && TOKEN === 'dev-token') {
 
 const client = createPgasClient(fetchTransport({ baseUrl: API_BASE, token: TOKEN }));
 
-const state: ReplState = { sessionId: null, mode: null, running: false };
+const state: ReplState = { sessionId: null, mode: null, running: false, widgetActive: false };
 
 intro('{{NAME}} — PGAS REPL');
 
@@ -48,9 +48,13 @@ const ws = connectNotifications(
         case 'session:pending_input': {
           const widget = ev.data.normalizedWidget as NormalizedWidget | undefined;
           if (!widget) break;
+          state.widgetActive = true;
           renderWidget(widget, (channel, payload) =>
             runTrigger(ev.sessionId, channel, payload).finally(() => updatePrompt()),
-          ).catch((err) => renderError(String(err)));
+          ).finally(() => {
+            state.widgetActive = false;
+            updatePrompt();
+          }).catch((err) => renderError(String(err)));
           break;
         }
         case 'session_terminal':
@@ -76,7 +80,7 @@ updatePrompt();
 
 rl.on('line', async (line: string) => {
   const input = line.trim();
-  if (!input || state.running) return;
+  if (!input || state.running || state.widgetActive) return;
   if (input.startsWith('/')) {
     await handleCommand(input).catch((err) => renderError(String(err)));
   } else {

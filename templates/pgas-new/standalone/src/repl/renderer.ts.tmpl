@@ -5,6 +5,8 @@ export interface ReplState {
   sessionId: string | null;
   mode: string | null;
   running: boolean;
+  // true while a clack prompt (renderWidget) holds stdin — readline must not compete
+  widgetActive: boolean;
 }
 
 export interface ActionResult {
