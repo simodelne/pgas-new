@@ -127,6 +127,32 @@ updatePrompt();
 // Commands that are always safe to run, including while a round is in flight.
 const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'status', 'history', 'help']);
 
+// Pending free text and unsafe commands typed while a round is in flight.
+// Drained after the active round completes so nothing the user types is lost.
+const pendingInputs: string[] = [];
+// Single in-flight handler — prevents the rl.on('line') x2 startup race where two
+// rapid lines both call handleText and both reach client.sessions.create.
+let inputBusy = false;
+
+function dispatchInput(input: string): Promise<void> {
+  inputBusy = true;
+  const handler = input.startsWith('/') ? handleCommand(input) : handleText(input);
+  return handler
+    .catch((err) => renderError(String(err)))
+    .finally(() => {
+      inputBusy = false;
+      if (!state.running) {
+        // Drain any input that arrived while the previous handler was running.
+        const next = pendingInputs.shift();
+        if (next !== undefined) {
+          void dispatchInput(next);
+        } else {
+          updatePrompt();
+        }
+      }
+    });
+}
+
 rl.on('line', (line: string) => {
   const input = line.trim();
   if (!input) {
@@ -134,17 +160,22 @@ rl.on('line', (line: string) => {
     return;
   }
   const cmd = input.startsWith('/') ? input.slice(1).split(' ')[0] : '';
-  if (state.running && (!cmd || !ALWAYS_AVAILABLE_COMMANDS.has(cmd))) {
-    // Free text and unsafe commands are ignored mid-round so the spinner is uninterrupted.
+  const isAlwaysAvailable = !!cmd && ALWAYS_AVAILABLE_COMMANDS.has(cmd);
+  // Free text and unsafe commands queue while a round is in flight or the
+  // previous input is still being processed. /abort, /status, /history, /help
+  // bypass the queue and run immediately.
+  if ((state.running || inputBusy) && !isAlwaysAvailable) {
+    pendingInputs.push(input);
     return;
   }
-  const handler = input.startsWith('/') ? handleCommand(input) : handleText(input);
-  handler
-    .catch((err) => renderError(String(err)))
-    .finally(() => {
-      if (!state.running) updatePrompt();
-    });
+  void dispatchInput(input);
 });
+
+function drainPendingAfterRound(): void {
+  if (state.running || inputBusy) return;
+  const next = pendingInputs.shift();
+  if (next !== undefined) void dispatchInput(next);
+}
 
 let exiting = false;
 async function shutdown(exitCode = 0): Promise<void> {
@@ -385,5 +416,7 @@ async function runTrigger(sessionId: string, channel: string, payload: unknown):
   } finally {
     state.running = false;
     if (activeSpinner === s) activeSpinner = null;
+    // Drain anything the user typed during the round.
+    drainPendingAfterRound();
   }
 }

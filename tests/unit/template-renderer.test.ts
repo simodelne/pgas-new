@@ -567,6 +567,8 @@ describe('template renderer', () => {
 
       // package.json: chalk dep present (@clack/prompts kept for future widget flows)
       expect(pkg).toContain('chalk');
+      expect(pkg).toContain('"dev": "node --import tsx src/server.ts"');
+      expect(pkg).toContain('"repl": "node --import tsx src/repl/index.ts"');
 
       // no unresolved tokens
       expect(index).not.toContain('{{');
@@ -608,9 +610,34 @@ describe('template renderer', () => {
       const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
 
       expect(index).toContain("await client.controls.invoke(PROGRAM, 'abort'");
-      expect(index).toContain("input.startsWith('/') ? handleCommand(input) : handleText(input)");
       expect(index).not.toContain('if (!input || state.running)');
       expect(index).toContain('state.abortRequested = true');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders REPL with input queue + busy guard against startup-race double-create', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-queue-'));
+    try {
+      renderStandaloneScaffold({
+        outDir,
+        slug: 'my-program',
+        name: 'My Program',
+      });
+
+      const index = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
+
+      // Queue + busy guard surfaces are declared
+      expect(index).toContain('pendingInputs');
+      expect(index).toContain('inputBusy');
+      expect(index).toContain('dispatchInput');
+      expect(index).toContain('drainPendingAfterRound');
+
+      // Free text mid-round is queued, not dropped
+      expect(index).toContain('pendingInputs.push(input)');
+      // The queue is drained after each round completes
+      expect(index).toContain('drainPendingAfterRound()');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
