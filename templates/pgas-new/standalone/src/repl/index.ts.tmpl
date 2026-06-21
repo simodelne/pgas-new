@@ -1,8 +1,8 @@
 import readline from 'node:readline';
 import { intro, log, outro, spinner } from '@clack/prompts';
 import { connectNotifications, createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
-import type { NormalizedWidget, ReplState } from './renderer.js';
-import { renderAction, renderError, renderModeChange, renderWidget } from './renderer.js';
+import type { ReplState } from './renderer.js';
+import { renderAction, renderError, renderModeChange } from './renderer.js';
 
 const API_BASE = process.env.PGAS_API_BASE ?? 'http://localhost:3000';
 const WS_BASE =
@@ -18,7 +18,7 @@ if (!DEV_MODE && TOKEN === 'dev-token') {
 
 const client = createPgasClient(fetchTransport({ baseUrl: API_BASE, token: TOKEN }));
 
-const state: ReplState = { sessionId: null, mode: null, running: false, widgetActive: false };
+const state: ReplState = { sessionId: null, mode: null, running: false };
 
 intro('{{NAME}} — PGAS REPL');
 
@@ -46,15 +46,14 @@ const ws = connectNotifications(
           break;
         }
         case 'session:pending_input': {
-          const widget = ev.data.normalizedWidget as NormalizedWidget | undefined;
+          const widget = ev.data.normalizedWidget as { message?: string } | undefined;
           if (!widget) break;
-          state.widgetActive = true;
-          renderWidget(widget, (channel, payload) =>
-            runTrigger(ev.sessionId, channel, payload).finally(() => updatePrompt()),
-          ).finally(() => {
-            state.widgetActive = false;
-            updatePrompt();
-          }).catch((err) => renderError(String(err)));
+          // Print the server's prompt without blocking stdin.
+          // The user responds through the readline interface below.
+          // renderWidget (clack select/text) is reserved for user-initiated
+          // confirmation flows where stdin ownership is unambiguous.
+          log.info(widget.message || 'Input requested — type your response.');
+          updatePrompt();
           break;
         }
         case 'session_terminal':
@@ -80,7 +79,7 @@ updatePrompt();
 
 rl.on('line', async (line: string) => {
   const input = line.trim();
-  if (!input || state.running || state.widgetActive) return;
+  if (!input || state.running) return;
   if (input.startsWith('/')) {
     await handleCommand(input).catch((err) => renderError(String(err)));
   } else {
