@@ -10,7 +10,6 @@ const state: ReplState = {
   sessionId: null,
   mode: null,
   running: true,
-  awaitingInput: false,
 };
 
 intro('{{NAME}} REPL');
@@ -43,9 +42,7 @@ async function trigger(channel: string, payload: unknown): Promise<void> {
     } else if (event.type === 'action') {
       renderAction(event.result);
     } else if (event.type === 'widget') {
-      state.awaitingInput = true;
       await renderWidget(event.widget, trigger);
-      state.awaitingInput = false;
     }
   }
 }

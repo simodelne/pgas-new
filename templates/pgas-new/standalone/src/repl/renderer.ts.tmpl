@@ -5,7 +5,6 @@ export interface ReplState {
   sessionId: string | null;
   mode: string | null;
   running: boolean;
-  awaitingInput: boolean;
 }
 
 export interface ActionResult {
@@ -79,6 +78,7 @@ export async function renderWidget(
       ],
     });
     if (typeof answer === 'symbol') return;
+    if (answer === 'skip') return;
 
     let instruction = '';
     if (answer === 'reject') {
