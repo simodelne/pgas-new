@@ -130,18 +130,28 @@ const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'status', 'history', 'help']
 // Pending free text and unsafe commands typed while a round is in flight.
 // Drained after the active round completes so nothing the user types is lost.
 const pendingInputs: string[] = [];
-// Single in-flight handler — prevents the rl.on('line') x2 startup race where two
-// rapid lines both call handleText and both reach client.sessions.create.
+// inputBusy: a handler (any kind) is currently executing. Prevents two free-text
+// or two unsafe-command handlers running concurrently.
 let inputBusy = false;
+// textBusy: a free-text handler is in flight specifically. Required separately
+// because an always-available command (/status, /history, /help) running
+// concurrently must NOT clear inputBusy if a free-text handler is still
+// awaiting sessions.create() — otherwise a subsequent free-text input
+// bypasses the queue and starts a second create. See round-3 issue 9.
+let textBusy = false;
 
 function dispatchInput(input: string): Promise<void> {
+  const isText = !input.startsWith('/');
+  if (isText) textBusy = true;
   inputBusy = true;
-  const handler = input.startsWith('/') ? handleCommand(input) : handleText(input);
+  const handler = isText ? handleText(input) : handleCommand(input);
   return handler
     .catch((err) => renderError(String(err)))
     .finally(() => {
-      inputBusy = false;
-      if (!state.running) {
+      if (isText) textBusy = false;
+      // Only clear inputBusy if no other handler is still in flight.
+      if (!textBusy) inputBusy = false;
+      if (!state.running && !textBusy) {
         // Drain any input that arrived while the previous handler was running.
         const next = pendingInputs.shift();
         if (next !== undefined) {
@@ -161,10 +171,10 @@ rl.on('line', (line: string) => {
   }
   const cmd = input.startsWith('/') ? input.slice(1).split(' ')[0] : '';
   const isAlwaysAvailable = !!cmd && ALWAYS_AVAILABLE_COMMANDS.has(cmd);
-  // Free text and unsafe commands queue while a round is in flight or the
-  // previous input is still being processed. /abort, /status, /history, /help
-  // bypass the queue and run immediately.
-  if ((state.running || inputBusy) && !isAlwaysAvailable) {
+  // Free text and unsafe commands queue while a round is in flight, while a
+  // free-text handler is still awaiting create-session, OR while the previous
+  // handler hasn't resolved. /abort, /status, /history, /help bypass the queue.
+  if ((state.running || textBusy || inputBusy) && !isAlwaysAvailable) {
     pendingInputs.push(input);
     return;
   }
@@ -172,7 +182,7 @@ rl.on('line', (line: string) => {
 });
 
 function drainPendingAfterRound(): void {
-  if (state.running || inputBusy) return;
+  if (state.running || inputBusy || textBusy) return;
   const next = pendingInputs.shift();
   if (next !== undefined) void dispatchInput(next);
 }

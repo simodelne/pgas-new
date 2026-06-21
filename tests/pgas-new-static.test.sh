@@ -39,9 +39,8 @@ echo "[5/6] unit/static tests"
 npm run test:unit >/tmp/pgas-new-vitest.log && pass "Vitest suite passed" || fail "Vitest suite failed"
 
 echo "[6/6] optional generated scaffold install/test"
-NPM_TOKEN="${NPM_TOKEN:-$(gh auth token 2>/dev/null || true)}"
-if [[ -z "$NPM_TOKEN" ]]; then
-  echo "  SKIP: NPM_TOKEN unavailable; generated scaffold package install/test not run"
+if [[ -z "${NPM_TOKEN:-}" ]]; then
+  echo "  SKIP: NPM_TOKEN not explicitly set; generated scaffold package install/test not run"
 else
   (
     cd "$WORK"

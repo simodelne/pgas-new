@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx src/server.ts",
-    "repl": "tsx src/repl/index.ts",
+    "dev": "node --import tsx src/server.ts",
+    "repl": "node --import tsx src/repl/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

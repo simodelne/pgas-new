@@ -634,6 +634,13 @@ describe('template renderer', () => {
       expect(index).toContain('dispatchInput');
       expect(index).toContain('drainPendingAfterRound');
 
+      // textBusy tracks free-text handlers specifically — required so always-
+      // available commands (/status, /history, /help) running concurrently
+      // don't clear the guard while a pending sessions.create is in flight.
+      // See round-3 issue 9.
+      expect(index).toContain('textBusy');
+      expect(index).toContain('state.running || textBusy || inputBusy');
+
       // Free text mid-round is queued, not dropped
       expect(index).toContain('pendingInputs.push(input)');
       // The queue is drained after each round completes
