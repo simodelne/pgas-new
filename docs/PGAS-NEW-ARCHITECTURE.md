@@ -1,6 +1,6 @@
 # PGAS-New Architecture
 
-Status: shipped; current release v2.2.0 on main.
+Status: shipped; current release v2.3.0 on main.
 
 `pgas-new` is a PGAS-specific foundry for producing new PGAS programs. It is not a general coding assistant. Its responsibility is to govern the creation of a PGAS program: collect the mandate, research when allowed, design the PGAS architecture, plan artifacts, write only planned artifacts, verify deterministically, run a user-selected live provider graduation, rebase on the current target repo, and open a PR.
 
