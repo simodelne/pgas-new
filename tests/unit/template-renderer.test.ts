@@ -205,6 +205,7 @@ describe('template renderer', () => {
         action_map: Record<string, {
           description: string;
           channel: string;
+          arg_descriptions?: Record<string, string>;
           mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
         }>;
         schema: Record<string, string>;
@@ -361,8 +362,15 @@ describe('template renderer', () => {
       expect(parsed.action_map.ask_design_question).toMatchObject({
         description: 'Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round\'s inputs.user_text carries the answer.',
         channel: 'widget_output',
+        arg_descriptions: {
+          question_number: 'Which Q is being asked (1-6).',
+          question_text: 'The question prompt to display to the user.',
+        },
       });
-      expect(parsed.action_map.ask_design_question.mutations).toEqual([]);
+      expect(parsed.action_map.ask_design_question.mutations).toEqual([
+        { op: 'MSet', path: 'intake.last_question_asked', from_arg: 'question_number' },
+        { op: 'MSet', path: 'intake.last_question_text', from_arg: 'question_text' },
+      ]);
       expect(parsed.action_map.record_q1_purpose).toMatchObject({
         description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does.",
         channel: 'widget_output',
@@ -479,6 +487,8 @@ describe('template renderer', () => {
         'program.target_dir_confirmed': 'boolean',
         'program.skip_dimensions': 'array',
         'program.skip_dimensions.*': 'string',
+        'intake.last_question_asked': 'number',
+        'intake.last_question_text': 'string',
         'intake.purpose': 'string',
         'intake.q1_recorded': 'boolean',
         'intake.entry_channel': 'string',

@@ -111,9 +111,12 @@ describe('foundry intake tool-call protocol guidance', () => {
       expect(captured.questionTool).toMatchObject({
         type: 'object',
         properties: {
-          message: expect.objectContaining({ type: 'string' }),
+          question_number: expect.objectContaining({ type: 'number' }),
+          question_text: expect.objectContaining({ type: 'string' }),
         },
+        required: expect.arrayContaining(['question_number', 'question_text']),
       });
+      expect(captured.questionTool?.required).not.toContain('message');
       expect(captured.targetTool).toMatchObject({
         type: 'object',
         properties: {
@@ -126,6 +129,49 @@ describe('foundry intake tool-call protocol guidance', () => {
       expect(world.domain['program.slug']).toBe('native-target');
       expect(world.domain['program.name']).toBe('Native Target');
       expect(world.domain['program.target_dir']).toBe('/tmp/native-target');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('fires ask_design_question from structured native tool_calls and records the last question', async () => {
+    const questionText = 'Q1 Purpose -- what does the program do?';
+    const server = await createUnifiedServer(async () => ({
+      tool_calls: [{
+        id: 'call_question',
+        function: {
+          name: 'ask_design_question',
+          arguments: JSON.stringify({
+            question_number: 1,
+            question_text: questionText,
+          }),
+        },
+      }],
+    }));
+
+    try {
+      const created = await fetchJson<{ sessionId: string }>(server, '/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ program: 'pgas-new' }),
+      });
+      const result = await fetchJson<{ result: { name?: string; payload?: unknown } }>(server, `/sessions/${created.sessionId}/trigger`, {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'user_text',
+          payload: 'Ask the first design question.',
+        }),
+      });
+      const world = await fetchJson<{ domain: Record<string, unknown> }>(server, `/sessions/${created.sessionId}/world`);
+
+      expect(result.result).toMatchObject({
+        name: 'ask_design_question',
+        payload: {
+          question_number: 1,
+          question_text: questionText,
+        },
+      });
+      expect(world.domain['intake.last_question_asked']).toBe(1);
+      expect(world.domain['intake.last_question_text']).toBe(questionText);
     } finally {
       await server.close();
     }

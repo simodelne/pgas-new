@@ -383,7 +383,9 @@ action_map:
     arg_descriptions:
       question_number: "Which Q is being asked (1-6)."
       question_text: "The question prompt to display to the user."
-    mutations: []
+    mutations:
+      - { op: MSet, path: intake.last_question_asked, from_arg: question_number }
+      - { op: MSet, path: intake.last_question_text, from_arg: question_text }
     channel: widget_output
   record_q1_purpose:
     description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does."
@@ -571,6 +573,8 @@ schema:
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
   intake.mandate: string
+  intake.last_question_asked: number
+  intake.last_question_text: string
   intake.purpose: string
   intake.q1_recorded: boolean
   intake.entry_channel: string

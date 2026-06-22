@@ -80,6 +80,8 @@ export interface PgasNewState {
   };
   intake: {
     mandate?: string;
+    last_question_asked: number;
+    last_question_text: string;
     research_confirmed: boolean;
     user_requested_research: boolean;
     research_allowed: boolean;
@@ -144,6 +146,8 @@ export function createInitialState(): PgasNewState {
       active_session_running: false,
     },
     intake: {
+      last_question_asked: 0,
+      last_question_text: '',
       research_confirmed: false,
       user_requested_research: false,
       research_allowed: false,
