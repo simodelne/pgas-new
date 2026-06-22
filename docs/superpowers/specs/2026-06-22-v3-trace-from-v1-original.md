@@ -42,20 +42,22 @@ Each row: **v1 design** → **v3 implementation** → **adherence check (test or
 >
 > If the user answers **default** (or skips), go straight to Step 1 — the scaffold emits the minimal three-mode program unchanged. **Do not block on the interview.**
 
-**v3 implementation:**
+**v3 implementation (Codex R4-I1 fix: ordering corrected — identity capture comes FIRST, then design-path fork):**
 
-- The foundry's `intake_intelligence` mode's **first action** is a `request_user_action` with `intent='choose_design_path'`, offering two options: `design` or `default`.
-- If user picks **default** (or any non-`design` value): the agent calls `choose_design_path` with `design_path: 'default'` (sets `program.design_path = 'default'`), then immediately calls `apply_default_skeleton` (no args; the spec's declared MSet mutations populate `intake.stages = [{slug:'start', is_bootstrap:true}, {slug:'working'}, {slug:'complete', is_terminal:true}]`, `intake.transitions = [{from:'start', to:'working', trigger:'auto'}, {from:'working', to:'complete', trigger:'auto', guard_field:'work.example_ready', guard_value:true}]`, `intake.completion = {final_stage:'complete', guard_field:'work.example_ready'}`, etc., and `intake.program_intake_recorded = true`).
+- The foundry's `intake_intelligence` mode's **first action** is `record_program_target` — captures slug/name/target_dir (either pre-filled from CLI `--slug`/`--name`/`--out` or asked via `request_user_action` with `intent='collect_program_identity'`). Sets `program.target_dir_confirmed = true`.
+- Only AFTER `program.target_dir_confirmed = true` (engine-enforced precondition) does the agent call `request_user_action` with `intent='choose_design_path'`, offering two options: `design` or `default`.
+- If user picks **default**: the agent calls `choose_design_path` with `design_path: 'default'` (sets `program.design_path = 'default'`), then immediately calls `apply_default_skeleton` (no args; the spec's declared MSet mutations populate `intake.stages = [{slug:'start', is_bootstrap:true}, {slug:'working'}, {slug:'complete', is_terminal:true}]`, `intake.transitions = [{from:'start', to:'working', trigger:'auto'}, {from:'working', to:'complete', trigger:'auto', guard_field:'work.example_ready', guard_value:true}]`, `intake.completion = {final_stage:'complete', guard_field:'work.example_ready'}`, etc., and `intake.program_intake_recorded = true`).
 - If user picks **design**: the agent enters the Q1–Q6 interview.
 
-**Mandatory minimum questions** even in `default` path: program name (kebab-case) and slug. Per v1 spec: "no questions beyond name/slug."
+**Mandatory minimum questions** even in `default` path: program name (kebab-case slug). Per v1 spec: "no questions beyond name/slug." Captured by `record_program_target` BEFORE the design-path fork.
 
 **Adherence check (new test):**
 ```ts
-it('foundry intake offers default-skeleton vs design-interview fork before Q1', () => {
-  // assert intake_intelligence guidance mentions both paths
-  // assert request_user_action with intent='choose_design_path' is the first guidance line
-  // assert default-path skeleton constants are documented in the spec
+it('foundry intake_intelligence orders record_program_target before choose_design_path', () => {
+  // assert record_program_target precondition is program.target_dir_confirmed != true
+  // assert choose_design_path precondition is program.target_dir_confirmed = true (engine-enforced ordering)
+  // assert apply_default_skeleton precondition is program.design_path == 'default'
+  // assert intake_intelligence guidance mentions identity capture first, then design-path fork
 });
 ```
 
@@ -243,7 +245,7 @@ These five tests run against a freshly synthesized program produced by feeding a
    - Add the 11 schema entries (`intake.purpose: string`, `intake.entry_channel: string`, `intake.stages: array`, `intake.stages.*: object`, `intake.transitions: array`, `intake.transitions.*: object`, `intake.delegation: object`, `intake.completion: object`, `intake.completion.final_stage: string`, `intake.completion.guard_field: string`, `intake.program_intake_recorded: boolean`).
    - Add `record_program_intake` to `intake_intelligence` mode's vocabulary and projection.
    - Add guidance with the four directives the user's test asserts (ask Q1–Q6 in order; use `request_user_action` with `intent='collect_program_intake'`; call `record_program_intake` with structured payload; don't re-ask what's already extracted).
-5. **NEW from this trace doc — §2 fork:** add the choose-design-path step as the first guidance line. Add `program.design_path: string` to schema (rebuild-plan revision moved this from `intake.design_path` to `program.design_path` to keep the design-path decision under `program.*` namespace per D3). Add a separate mode-action `apply_default_skeleton` with declared `mutations:` populating `intake.stages/transitions/completion` to the 3-mode defaults; precondition gates it on `program.design_path == 'default'`. Two-action approach by design (rebuild-plan N5): `choose_design_path` records the choice only, `apply_default_skeleton` populates defaults; guidance instructs the LLM to call them in sequence.
+5. **NEW from this trace doc — §2 fork:** add `record_program_target` as the first guidance line (captures slug/name/target_dir before the design-path fork — Codex R4-I1 ordering). Then add the choose-design-path step as the second guidance line. Add `program.design_path: string` to schema under the `program.*` namespace (D3). Add a separate mode-action `apply_default_skeleton` with declared `mutations:` populating `intake.stages/transitions/completion` to the 3-mode defaults; precondition gates it on `program.design_path == 'default'`. Two-action approach by design (rebuild-plan N5): `choose_design_path` records the choice only, `apply_default_skeleton` populates defaults; guidance instructs the LLM to call them in sequence.
 6. **NEW from this trace doc — §4 echo-back:** `intake_intelligence` ends with `confirm_design` user_confirmation step. Mode transition out of `intake_intelligence` gated on `program.design_confirmed = true`.
 7. Handler stub for `record_program_intake` (already asserted by user's test).
 8. Tool registration for `record_program_intake` (already asserted by user's test).
@@ -270,13 +272,15 @@ These five tests run against a freshly synthesized program produced by feeding a
 Phase 2 ships when ALL of:
 
 - [ ] `pgas-new` (no args) opens the REPL and runs the foundry program
-- [ ] Foundry's `intake_intelligence` mode offers the choose-design-path fork
-- [ ] If user picks `default`: skeleton populated, name/slug only required
+- [ ] Foundry's `intake_intelligence` mode captures identity (`record_program_target`) BEFORE asking the design-path question (Codex R4-I1 ordering)
+- [ ] After identity is captured, the mode offers the choose-design-path fork
+- [ ] If user picks `default`: `apply_default_skeleton` fires with declared MSet mutations; name/slug only required
 - [ ] If user picks `design`: Q1–Q6 asked in order, skips fall back to defaults
-- [ ] After Q6 (or after `default` skeleton), agent echoes the design back for user confirmation
+- [ ] After Q6 (or after `default` skeleton), agent echoes the design back for user confirmation (`confirm_design`)
+- [ ] `confirm_design` and `approve_plan` are idempotent (`FieldFalsy` precondition on themselves; Codex R4-I2)
 - [ ] All foundry spec contracts asserted by the user's test in `tests/unit/template-renderer.test.ts` pass
 - [ ] Bare-entry test asserts the REPL opens (without requiring an actual LLM server in unit tests — use a stub)
-- [ ] All existing tests (88 unit / 21 manifest / 8 static) stay green; new tests added (target 95+ unit)
+- [ ] All existing tests stay green; new tests added per the plan
 
 Phase 3 ships when ALL of Phase 2 + ALL of:
 

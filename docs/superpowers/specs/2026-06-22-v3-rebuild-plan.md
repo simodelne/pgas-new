@@ -259,9 +259,15 @@ synthesize_program_spec:
 - `confirm_design` precondition list:
   - `{ kind: FieldTruthy, path: intake.program_intake_recorded }`
   - `{ kind: FieldTruthy, path: program.target_dir_confirmed }`
+  - `{ kind: FieldFalsy, path: program.design_confirmed }` (Codex R4-I2 idempotency fix — refuses a second call)
   - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
   - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
-- `approve_plan` preconditions: shape similar to `confirm_design`, gated on artifact-plan state
+- `approve_plan` precondition list:
+  - `{ kind: FieldTruthy, path: program.synthesis_complete }` (artifact-plan only meaningful after synthesis)
+  - `{ kind: FieldTruthy, path: artifact_plan.approved_for_user }` (or equivalent — depends on existing artifact-plan state model; the foundry's existing `gates.ts` already enforces this)
+  - `{ kind: FieldFalsy, path: program.plan_approved }` (Codex R4-I2 idempotency fix)
+  - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
+  - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
 - `synthesize_program_spec` precondition: `program.design_confirmed = true` (synthesis runs in `architecture_design` mode after intake is confirmed)
 
 **Schema additions (D3 + Codex C2 fix for FM5 + Codex N1 fix for target_dir):**
