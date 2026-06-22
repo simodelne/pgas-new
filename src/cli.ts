@@ -36,6 +36,24 @@ interface AgentArgs {
   nonInteractive?: boolean;
 }
 
+interface DomainPatch {
+  path: string;
+  value: unknown;
+}
+
+interface SeededSessionClient {
+  sessions: {
+    create(body: { program: string; domain_context?: unknown }): Promise<{ sessionId: string }>;
+    patchDomain(sessionId: string, body: { patches: DomainPatch[] }): Promise<unknown>;
+  };
+}
+
+export interface CreateSessionWithInitialStateOptions {
+  program: string;
+  initialState: Record<string, unknown>;
+  domainContext?: unknown;
+}
+
 const KNOWN_SUBCOMMANDS = new Set([
   'help',
   'version',
@@ -94,17 +112,104 @@ export async function runCli(argv: string[]): Promise<CliResult> {
 
 async function runAgentSession(args: AgentArgs): Promise<CliResult> {
   const server = await startFoundryServer({});
+  const initialDomain = initialDomainFromAgentArgs(args);
+  const restoreFetch = installInitialStateSessionCreateInterceptor(initialDomain);
   try {
     const replExit = await runRepl({
       baseUrl: server.url,
       slug: 'pgas-new',
-      initialDomain: initialDomainFromAgentArgs(args),
+      initialDomain,
       nonInteractive: args.nonInteractive,
     });
     return { exitCode: replExit.exitCode, stdout: '', stderr: '' };
   } finally {
+    restoreFetch();
     await server.kill();
   }
+}
+
+export async function createSessionWithInitialState(
+  client: SeededSessionClient,
+  options: CreateSessionWithInitialStateOptions,
+): Promise<{ sessionId: string }> {
+  const created = await client.sessions.create({
+    program: options.program,
+    ...(options.domainContext !== undefined ? { domain_context: options.domainContext } : {}),
+  });
+  const patches = initialStatePatchesFromDomain(options.initialState);
+  if (patches.length > 0) {
+    await client.sessions.patchDomain(created.sessionId, { patches });
+  }
+  return created;
+}
+
+export function initialStatePatchesFromDomain(initialState: Record<string, unknown>): DomainPatch[] {
+  const patches: DomainPatch[] = [];
+  const slug = stringValue(initialState['program.slug']);
+  const name = stringValue(initialState['program.name']);
+  const targetDir = stringValue(initialState['program.target_dir']);
+
+  if (slug !== undefined) patches.push({ path: 'program.slug', value: slug });
+  if (name !== undefined) patches.push({ path: 'program.name', value: name });
+  if (targetDir !== undefined) patches.push({ path: 'program.target_dir', value: targetDir });
+  if (slug !== undefined && name !== undefined && targetDir !== undefined) {
+    patches.push({ path: 'program.target_dir_confirmed', value: true });
+  }
+
+  return patches;
+}
+
+function installInitialStateSessionCreateInterceptor(initialState: Record<string, unknown>): () => void {
+  const originalFetch = globalThis.fetch;
+  if (typeof originalFetch !== 'function') return () => {};
+
+  globalThis.fetch = createInitialStateSessionCreateFetch(originalFetch.bind(globalThis), initialState);
+
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+export function createInitialStateSessionCreateFetch(
+  originalFetch: typeof fetch,
+  initialState: Record<string, unknown>,
+): typeof fetch {
+  const patches = initialStatePatchesFromDomain(initialState);
+  if (patches.length === 0) return originalFetch;
+
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (request.method !== 'POST' || !url.pathname.endsWith('/sessions')) {
+      return originalFetch(request);
+    }
+
+    const body = await readJsonObject(request.clone());
+    if (!body || typeof body.program !== 'string') {
+      return originalFetch(request);
+    }
+
+    const createResponse = await originalFetch(new Request(request, {
+      body: JSON.stringify(stripInitialStateFromCreateBody(body, initialState)),
+      headers: jsonHeaders(request.headers),
+    }));
+    if (!createResponse.ok) return createResponse;
+
+    const created = await readJsonObject(createResponse.clone());
+    const sessionId = typeof created?.sessionId === 'string' ? created.sessionId : '';
+    if (sessionId.length > 0) {
+      const patchResponse = await originalFetch(new Request(sessionDomainUrl(url, sessionId), {
+        method: 'PATCH',
+        headers: jsonHeaders(request.headers),
+        body: JSON.stringify({ patches }),
+      }));
+      if (!patchResponse.ok) {
+        throw new Error(`initial state patch failed (${String(patchResponse.status)}): ${await patchResponse.text()}`);
+      }
+    }
+
+    return createResponse;
+  };
 }
 
 function sessionCommand(command: string | undefined): CliResult {
@@ -320,6 +425,56 @@ function initialDomainFromAgentArgs(args: AgentArgs): Record<string, unknown> {
     domain['program.target_dir'] = args.outDir;
   }
   return domain;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+async function readJsonObject(requestOrResponse: Request | Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    const parsed = JSON.parse(await requestOrResponse.text()) as unknown;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripInitialStateFromCreateBody(
+  body: Record<string, unknown>,
+  initialState: Record<string, unknown>,
+): Record<string, unknown> {
+  const domainContext = body.domain_context;
+  if (domainContext === null || typeof domainContext !== 'object' || Array.isArray(domainContext)) {
+    return body;
+  }
+
+  const strippedContext: Record<string, unknown> = { ...domainContext };
+  for (const key of Object.keys(initialState)) {
+    delete strippedContext[key];
+  }
+
+  const strippedBody = { ...body };
+  if (Object.keys(strippedContext).length === 0) {
+    delete strippedBody.domain_context;
+  } else {
+    strippedBody.domain_context = strippedContext;
+  }
+  return strippedBody;
+}
+
+function jsonHeaders(headers: Headers): Headers {
+  const next = new Headers(headers);
+  next.set('content-type', 'application/json');
+  next.delete('content-length');
+  return next;
+}
+
+function sessionDomainUrl(createUrl: URL, sessionId: string): string {
+  const patchPath = createUrl.pathname.replace(/\/sessions$/u, `/sessions/${encodeURIComponent(sessionId)}/domain`);
+  return `${createUrl.origin}${patchPath}`;
 }
 
 function deriveNameFromSlug(slug: string): string {
