@@ -188,16 +188,19 @@ describe('template renderer', () => {
     }
   });
 
-  it.skip('declares the foundry Q1-Q6 intake recording action and guidance (Phase 2.4 acceptance target — unskip when foundry spec declares record_program_intake per docs/superpowers/specs/2026-06-22-v3-rebuild-plan.md:786)', () => {
+  it('declares the foundry intake actions, JSON-string intake recording shape, and guidance', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-intake-'));
     try {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
 
       const specText = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
-      const handlers = readFileSync(join(outDir, 'src/programs/pgas-new/handlers.ts'), 'utf8');
-      const tools = readFileSync(join(outDir, 'src/programs/pgas-new/tools.ts'), 'utf8');
       const parsed = load(specText) as {
-        modes: Record<string, { vocabulary: string[] }>;
+        modes: Record<string, {
+          vocabulary: string[];
+          channels?: string[];
+          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
+          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
+        }>;
         projection: Record<string, { include: string[] }>;
         action_map: Record<string, {
           description: string;
@@ -205,58 +208,172 @@ describe('template renderer', () => {
           mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
         }>;
         schema: Record<string, string>;
+        ingestion: Record<string, string[]>;
         guidance: Record<string, string[]>;
       };
 
+      expect(parsed.modes.intake_intelligence.vocabulary).toEqual(
+        expect.arrayContaining([
+          'record_program_target',
+          'choose_design_path',
+          'apply_default_skeleton',
+          'record_program_intake',
+          'confirm_design',
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
+      expect(parsed.modes.intake_intelligence.transitions).toEqual(
+        expect.arrayContaining([
+          { target: 'architecture_design', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_program_target).toEqual(
+        expect.arrayContaining([{ kind: 'FieldFalsy', path: 'program.target_dir_confirmed' }]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.choose_design_path).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
+          { kind: 'FieldFalsy', path: 'program.design_path' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.apply_default_skeleton).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldEquals', path: 'program.design_path', value: 'default' },
+          { kind: 'FieldFalsy', path: 'intake.program_intake_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_program_intake).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldEquals', path: 'program.design_path', value: 'design' },
+          { kind: 'FieldFalsy', path: 'intake.program_intake_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.confirm_design).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.program_intake_recorded' },
+          { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
+          { kind: 'FieldFalsy', path: 'program.design_confirmed' },
+          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+        ]),
+      );
+
+      expect(parsed.action_map.record_program_target.mutations).toEqual([
+        { op: 'MSet', path: 'program.slug', from_arg: 'slug' },
+        { op: 'MSet', path: 'program.name', from_arg: 'name' },
+        { op: 'MSet', path: 'program.target_dir', from_arg: 'target_dir' },
+        { op: 'MSet', path: 'program.target_dir_confirmed', value: true },
+      ]);
+      expect(parsed.action_map.choose_design_path.mutations).toEqual([
+        { op: 'MSet', path: 'program.design_path', from_arg: 'choice' },
+      ]);
+      expect(parsed.action_map.apply_default_skeleton.mutations).toEqual([
+        { op: 'MSet', path: 'intake.purpose', value: '' },
+        { op: 'MSet', path: 'intake.entry_channel', value: 'user_text' },
+        {
+          op: 'MSet',
+          path: 'intake.stages_json',
+          value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]',
+        },
+        {
+          op: 'MSet',
+          path: 'intake.transitions_json',
+          value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]',
+        },
+        { op: 'MSet', path: 'intake.delegation_json', value: '{}' },
+        {
+          op: 'MSet',
+          path: 'intake.completion_json',
+          value: '{"final_stage":"complete","guard_field":"work.example_ready"}',
+        },
+        { op: 'MSet', path: 'intake.program_intake_recorded', value: true },
+      ]);
       expect(parsed.modes.intake_intelligence.vocabulary).toContain('record_program_intake');
       expect(parsed.action_map.record_program_intake).toMatchObject({
-        description: "Capture the user's Q1-Q6 design interview answers into governed state.",
+        description: "Capture the user's Q1-Q6 design interview answers into governed JSON-string scalar state.",
         channel: 'widget_output',
       });
       expect(parsed.action_map.record_program_intake.mutations).toEqual([
         { op: 'MSet', path: 'intake.purpose', from_arg: 'purpose' },
         { op: 'MSet', path: 'intake.entry_channel', from_arg: 'entry_channel' },
-        { op: 'MSet', path: 'intake.stages', from_arg: 'stages' },
-        { op: 'MSet', path: 'intake.transitions', from_arg: 'transitions' },
-        { op: 'MSet', path: 'intake.delegation', from_arg: 'delegation' },
-        { op: 'MSet', path: 'intake.completion', from_arg: 'completion' },
+        { op: 'MSet', path: 'intake.stages_json', from_arg: 'stages_json' },
+        { op: 'MSet', path: 'intake.transitions_json', from_arg: 'transitions_json' },
+        { op: 'MSet', path: 'intake.delegation_json', from_arg: 'delegation_json' },
+        { op: 'MSet', path: 'intake.completion_json', from_arg: 'completion_json' },
         { op: 'MSet', path: 'intake.program_intake_recorded', value: true },
+      ]);
+      expect(parsed.action_map.confirm_design.mutations).toEqual([
+        { op: 'MSet', path: 'program.design_confirmed', value: true },
+      ]);
+      expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+          { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+          { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
+          { kind: 'FieldFalsy', path: 'artifact_plan.approved' },
+          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+        ]),
+      );
+      expect(parsed.ingestion.user_confirmation).toEqual([
+        'inputs.user_decision',
+        'inputs.user_decision.decision',
+        'inputs.user_decision.instruction',
       ]);
       expect(parsed.projection.intake_intelligence.include).toEqual(
         expect.arrayContaining([
+          'inputs.user_text',
+          'inputs.user_decision',
+          'inputs.user_decision.decision',
+          'inputs.user_decision.instruction',
           'intake.purpose',
           'intake.entry_channel',
-          'intake.stages',
-          'intake.transitions',
-          'intake.delegation',
-          'intake.completion',
+          'intake.stages_json',
+          'intake.transitions_json',
+          'intake.delegation_json',
+          'intake.completion_json',
           'intake.program_intake_recorded',
+          'program.slug',
+          'program.name',
+          'program.target_dir',
+          'program.target_dir_confirmed',
+          'program.design_path',
+          'program.design_confirmed',
+          'program.skip_dimensions',
         ]),
       );
       expect(parsed.schema).toMatchObject({
+        'inputs.user_text': 'string',
+        'inputs.user_decision': 'object',
+        'inputs.user_decision.decision': 'string',
+        'inputs.user_decision.instruction': 'string',
+        'program.design_path': 'string',
+        'program.design_confirmed': 'boolean',
+        'program.synthesized_spec': 'object',
+        'program.synthesis_complete': 'boolean',
+        'program.target_dir': 'string',
+        'program.target_dir_confirmed': 'boolean',
+        'program.skip_dimensions': 'array',
+        'program.skip_dimensions.*': 'string',
         'intake.purpose': 'string',
         'intake.entry_channel': 'string',
-        'intake.stages': 'array',
-        'intake.stages.*': 'object',
-        'intake.transitions': 'array',
-        'intake.transitions.*': 'object',
-        'intake.delegation': 'object',
-        'intake.completion': 'object',
-        'intake.completion.final_stage': 'string',
-        'intake.completion.guard_field': 'string',
+        'intake.stages_json': 'string',
+        'intake.transitions_json': 'string',
+        'intake.delegation_json': 'string',
+        'intake.completion_json': 'string',
         'intake.program_intake_recorded': 'boolean',
       });
       expect(parsed.guidance.intake_intelligence).toEqual(
         expect.arrayContaining([
-          expect.stringContaining('ask the 6 design questions in order'),
-          expect.stringContaining("request_user_action with intent='collect_program_intake'"),
-          expect.stringContaining('call `record_program_intake` with the structured payload'),
+          expect.stringContaining('program.target_dir_confirmed is not true'),
+          expect.stringContaining("intent='choose_design_path'"),
+          expect.stringContaining('call apply_default_skeleton'),
+          expect.stringContaining('ask the 6 design questions IN ORDER'),
+          expect.stringContaining('JSON-string scalar fields'),
+          expect.stringContaining("intent='confirm_design'"),
           expect.stringContaining("Don't re-ask anything you already extracted"),
         ]),
       );
-      expect(handlers).toContain('async record_program_intake(payload)');
-      expect(handlers).toContain("kind: 'pgas_new_intake_recorded'");
-      expect(tools).toContain("'record_program_intake'");
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }

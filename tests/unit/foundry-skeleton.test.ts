@@ -26,6 +26,7 @@ const ENGINE_OWNED_SCHEMA_PATHS = [
 const SPEC_SKELETON = 'templates/pgas-new/program/spec-skeleton.yml.tmpl';
 const HANDLERS_SKELETON = 'templates/pgas-new/program/handlers-skeleton.ts.tmpl';
 const REGISTRATION_SKELETON = 'templates/pgas-new/program/registration-skeleton.ts.tmpl';
+const FOUNDRY_SPEC = 'src/foundry-program/specs.yml';
 
 interface SkeletonSpec {
   modes: Record<string, { channels?: string[] }>;
@@ -88,6 +89,15 @@ describe('foundry generic program skeleton engine loader', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  engineLoaderTest('loads the foundry runtime spec through the installed @simodelne/pgas-server loader', async () => {
+    await import(/* @vite-ignore */ pathToFileURL(engineTestingPath as string).href);
+    const plugin = await import(/* @vite-ignore */ pathToFileURL(enginePluginPath as string).href) as Record<string, unknown>;
+    const loadSpecWithPatterns = plugin.loadSpecWithPatterns as ((path: string) => unknown) | undefined;
+
+    expect(typeof loadSpecWithPatterns).toBe('function');
+    expect(() => loadSpecWithPatterns?.(FOUNDRY_SPEC)).not.toThrow();
   });
 });
 
