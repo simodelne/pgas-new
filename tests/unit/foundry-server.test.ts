@@ -1,23 +1,43 @@
-import { EventEmitter } from 'node:events';
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { PgasServer, PgasServerConfig } from '@simodelne/pgas-server/create-server.js';
+import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 import { startFoundryServer } from '../../src/foundry-server.js';
 
-vi.mock('node:child_process', () => ({
-  spawn: vi.fn(),
+const mocks = vi.hoisted(() => {
+  const foundryEntry = {
+    spec: { name: 'pgas-new' },
+    createAdapters: vi.fn(),
+  } as unknown as ProgramEntry;
+
+  return {
+    createPgasServer: vi.fn(),
+    createPgasNewFoundryProgramEntry: vi.fn(() => foundryEntry),
+    foundryEntry,
+  };
+});
+
+vi.mock('@simodelne/pgas-server/create-server.js', () => ({
+  createPgasServer: mocks.createPgasServer,
+}));
+
+vi.mock('../../src/foundry-program/registration.js', () => ({
+  createPgasNewFoundryProgramEntry: mocks.createPgasNewFoundryProgramEntry,
 }));
 
 describe('startFoundryServer', () => {
-  const spawnMock = vi.mocked(spawn);
+  const createPgasServerMock = vi.mocked(createPgasServer);
+  const createEntryMock = vi.mocked(createPgasNewFoundryProgramEntry);
   const originalFoundryPort = process.env.PGAS_FOUNDRY_PORT;
 
   beforeEach(() => {
-    spawnMock.mockReset();
+    createPgasServerMock.mockReset();
+    createEntryMock.mockClear();
     delete process.env.PGAS_FOUNDRY_PORT;
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     if (originalFoundryPort === undefined) {
       delete process.env.PGAS_FOUNDRY_PORT;
     } else {
@@ -25,135 +45,90 @@ describe('startFoundryServer', () => {
     }
   });
 
+  it('starts the in-process engine with the foundry program entry', async () => {
+    const engine = mockPgasServer({ boundPort: 4555 });
+    createPgasServerMock.mockResolvedValue(engine);
+
+    const server = await startFoundryServer({ port: 4555, hostname: '127.0.0.1' });
+
+    expect(server.url).toBe('http://127.0.0.1:4555');
+    expect(createEntryMock).toHaveBeenCalledOnce();
+    expect(createPgasServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      programs: [{ name: 'pgas-new', entry: mocks.foundryEntry }],
+      port: 4555,
+    }));
+    expect(engine.start).toHaveBeenCalledOnce();
+  });
+
   it('uses an explicit options.port before PGAS_FOUNDRY_PORT', async () => {
-    const child = mockChildProcess();
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
+    const engine = mockPgasServer({ boundPort: 4555 });
+    createPgasServerMock.mockResolvedValue(engine);
     process.env.PGAS_FOUNDRY_PORT = '4666';
 
     const server = await startFoundryServer({ port: 4555, hostname: '127.0.0.1' });
 
     expect(server.url).toBe('http://127.0.0.1:4555');
-    expect(spawnMock).toHaveBeenCalledWith(
-      'pgas-server',
-      [
-        '--program-dir',
-        expect.stringMatching(/src\/foundry-program$/),
-        '--port',
-        '4555',
-        '--hostname',
-        '127.0.0.1',
-      ],
-      expect.objectContaining({ stdio: ['ignore', 'pipe', 'ignore'] }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4555/healthz');
+    expect(serverConfig().port).toBe(4555);
   });
 
   it('uses PGAS_FOUNDRY_PORT when options.port is absent', async () => {
-    const child = mockChildProcess();
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
+    const engine = mockPgasServer({ boundPort: 4666 });
+    createPgasServerMock.mockResolvedValue(engine);
     process.env.PGAS_FOUNDRY_PORT = '4666';
 
     const server = await startFoundryServer({ hostname: '127.0.0.1' });
 
     expect(server.url).toBe('http://127.0.0.1:4666');
-    expect(spawnMock).toHaveBeenCalledWith(
-      'pgas-server',
-      [
-        '--program-dir',
-        expect.stringMatching(/src\/foundry-program$/),
-        '--port',
-        '4666',
-        '--hostname',
-        '127.0.0.1',
-      ],
-      expect.objectContaining({ stdio: ['ignore', 'pipe', 'ignore'] }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4666/healthz');
+    expect(serverConfig().port).toBe(4666);
   });
 
   it('falls back to an ephemeral port when no port override is configured', async () => {
-    const child = mockChildProcess();
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    emitStdoutListening(child, 4876);
+    const engine = mockPgasServer({ boundPort: 4876 });
+    createPgasServerMock.mockResolvedValue(engine);
 
     const server = await startFoundryServer({ hostname: '127.0.0.1' });
 
     expect(server.url).toBe('http://127.0.0.1:4876');
-    expect(spawnMock).toHaveBeenCalledWith(
-      'pgas-server',
-      [
-        '--program-dir',
-        expect.stringMatching(/src\/foundry-program$/),
-        '--port',
-        '0',
-        '--hostname',
-        '127.0.0.1',
-      ],
-      expect.objectContaining({ stdio: ['ignore', 'pipe', 'ignore'] }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4876/healthz');
+    expect(serverConfig().port).toBe(0);
   });
 
-  it('parses the bound port from stdout before probing readiness', async () => {
-    const child = mockChildProcess();
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    process.nextTick(() => {
-      child.stdout.emit('data', Buffer.from('foundry server listening '));
-      child.stdout.emit('data', Buffer.from('on port 4988\n'));
-    });
+  it('uses the server start readback for an explicitly ephemeral port', async () => {
+    const engine = mockPgasServer({ boundPort: 4988 });
+    createPgasServerMock.mockResolvedValue(engine);
 
     const server = await startFoundryServer({ port: 0, hostname: 'localhost' });
 
     expect(server.url).toBe('http://localhost:4988');
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4988/healthz');
+    expect(serverConfig().port).toBe(0);
   });
 
-  it('polls readiness until /healthz returns HTTP 200', async () => {
-    const child = mockChildProcess();
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response('', { status: 503 }))
-      .mockResolvedValueOnce(new Response('', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await startFoundryServer({ port: 4556, hostname: 'localhost' });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:4556/healthz');
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:4556/healthz');
-  });
-
-  it('returns a kill function that terminates the child process', async () => {
-    const child = mockChildProcess();
-    spawnMock.mockReturnValue(child as unknown as ChildProcess);
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 200 })));
+  it('returns a kill function that closes the in-process server', async () => {
+    const engine = mockPgasServer({ boundPort: 4557 });
+    createPgasServerMock.mockResolvedValue(engine);
 
     const server = await startFoundryServer({ port: 4557, hostname: '127.0.0.1' });
     await server.kill();
 
-    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(engine.close).toHaveBeenCalledOnce();
   });
+
+  function serverConfig(): PgasServerConfig {
+    const [config] = createPgasServerMock.mock.calls.at(-1) ?? [];
+    if (!config) throw new Error('createPgasServer was not called');
+    return config;
+  }
 });
 
-function mockChildProcess(): EventEmitter & { kill: ReturnType<typeof vi.fn>; stdout: EventEmitter } {
-  return Object.assign(new EventEmitter(), {
-    kill: vi.fn(() => true),
-    stdout: new EventEmitter(),
-  });
-}
-
-function emitStdoutListening(child: { stdout: EventEmitter }, port: number): void {
-  process.nextTick(() => {
-    child.stdout.emit('data', `foundry server listening on port ${String(port)}\n`);
-  });
+function mockPgasServer(options: { boundPort: number }): PgasServer {
+  return {
+    app: {} as PgasServer['app'],
+    info: {
+      programs: ['pgas-new'],
+      provider: 'mock',
+      model: 'mock',
+      port: null,
+    },
+    start: vi.fn(async () => ({ port: options.boundPort })),
+    close: vi.fn(async () => {}),
+  };
 }
