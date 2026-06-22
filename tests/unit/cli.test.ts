@@ -50,7 +50,7 @@ describe('pgas-new CLI', () => {
     const result = await runCli(['version']);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('@simodelne/pgas-server@2.10.0');
+    expect(result.stdout).toContain('@simodelne/pgas-server@2.13.0');
   });
 
   it('maps session commands to generated control-plane controls and points users to the REPL', async () => {

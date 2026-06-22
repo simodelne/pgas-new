@@ -15,7 +15,7 @@ decisions. It is not a changelog and not a session handoff.
 - Direction unchanged: a PGAS-specific TypeScript/Node foundry for creating
   governed PGAS programs.
 - Current server target: latest checked published `@simodelne/pgas-server` is
-  `2.10.0`.
+  `2.13.0`.
 - Generated runtime code must use public server imports only:
   `plugin.js`, `create-server.js`, `client.js`, `channels/index.js`, and
   `routes/index.js`. `testing.js` is test-only.

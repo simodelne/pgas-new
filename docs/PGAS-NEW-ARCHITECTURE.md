@@ -6,7 +6,7 @@ Status: shipped; current release v2.3.0 on main.
 
 ## PGAS Contract
 
-Generated consumers target `@simodelne/pgas-server@2.10.0` and use only these public imports:
+Generated consumers target `@simodelne/pgas-server@2.13.0` and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
