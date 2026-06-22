@@ -21,6 +21,7 @@ channels:
   user_confirmation: { direction: In, sync: Async, structured_decision: true }
   system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
+  artifact_plan_output: { direction: Out, sync: Sync }
 
 modes:
   intake_intelligence:
@@ -104,7 +105,7 @@ modes:
         guard: { kind: FieldTruthy, path: program.synthesis_complete }
   scaffold_plan:
     vocabulary: [plan_artifacts, approve_artifact_plan, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_confirmation, system_mode_entry, widget_output]
+    channels: [user_confirmation, system_mode_entry, widget_output, artifact_plan_output]
     preconditions:
       approve_artifact_plan:
         - { kind: FieldTruthy, path: repo.write_authorized }
@@ -220,10 +221,10 @@ projection:
     include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
     exclude: []
   scaffold_plan:
-    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, artifact_plan.status, artifact_plan.approved, artifact_plan.write_authorized]
+    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized]
     exclude: []
   branch_write:
-    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, artifact_plan.status, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
+    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
     exclude: []
   static_verify:
     include: [program.target_dir, graduation.static_verification, graduation.static_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
@@ -264,7 +265,7 @@ prompts:
       1. Emit the question text as a non-terminal response. The engine pauses.
       2. The user's answer arrives via user_text on the next round.
       3. Fire the corresponding `record_qN_<topic>` action with the user's
-         answer parsed into the declared `from_arg` field.
+         answer parsed into that action's named argument.
       4. Move to the next question.
     - After Q6 fires, immediately fire `record_program_intake_finalize`.
     - Do NOT attempt to batch multiple answers into one action. Do NOT attempt
@@ -312,6 +313,10 @@ ingestion:
 action_map:
   record_program_target:
     description: "Tool call for capturing program identity. Arguments must be string fields {slug, name, target_dir}; confirms program.target_dir_confirmed."
+    arg_descriptions:
+      slug: "Lowercase kebab-case program slug."
+      name: "Human-readable program name."
+      target_dir: "Repository directory where generated files should be written."
     mutations:
       - { op: MSet, path: program.slug, from_arg: slug }
       - { op: MSet, path: program.name, from_arg: name }
@@ -320,6 +325,8 @@ action_map:
     channel: widget_output
   choose_design_path:
     description: "Tool call for selecting intake path after target capture. Argument {choice} must be the string 'default' or 'design'."
+    arg_descriptions:
+      choice: "Either 'default' for the standard skeleton or 'design' for the six-question interview."
     mutations:
       - { op: MSet, path: program.design_path, from_arg: choice }
     channel: widget_output
@@ -342,36 +349,48 @@ action_map:
     channel: widget_output
   record_q1_purpose:
     description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does."
+    arg_descriptions:
+      purpose: "User's answer to Q1: the program purpose."
     mutations:
       - { op: MSet, path: intake.purpose, from_arg: purpose }
       - { op: MSet, path: intake.q1_recorded, value: true }
     channel: widget_output
   record_q2_entry_channel:
     description: "Capture Q2 (entry channel -- how does work arrive: user_text, webhook, scheduled tick, another program delegating)."
+    arg_descriptions:
+      entry_channel: "User's answer to Q2: how work enters the program."
     mutations:
       - { op: MSet, path: intake.entry_channel, from_arg: entry_channel }
       - { op: MSet, path: intake.q2_recorded, value: true }
     channel: widget_output
   record_q3_stages:
     description: "Capture Q3 (stages of work) as a JSON-string scalar in intake.stages_json."
+    arg_descriptions:
+      stages_json: "JSON string describing the ordered mode/stage list."
     mutations:
       - { op: MSet, path: intake.stages_json, from_arg: stages_json }
       - { op: MSet, path: intake.q3_recorded, value: true }
     channel: widget_output
   record_q4_transitions:
     description: "Capture Q4 (decision points and transitions) as a JSON-string scalar in intake.transitions_json."
+    arg_descriptions:
+      transitions_json: "JSON string describing transitions, branches, loops, and guards."
     mutations:
       - { op: MSet, path: intake.transitions_json, from_arg: transitions_json }
       - { op: MSet, path: intake.q4_recorded, value: true }
     channel: widget_output
   record_q5_delegation:
     description: "Capture Q5 (delegation design) as a JSON-string scalar in intake.delegation_json."
+    arg_descriptions:
+      delegation_json: "JSON string describing delegation behavior, or an empty object if none."
     mutations:
       - { op: MSet, path: intake.delegation_json, from_arg: delegation_json }
       - { op: MSet, path: intake.q5_recorded, value: true }
     channel: widget_output
   record_q6_completion:
     description: "Capture Q6 (completion criteria) as a JSON-string scalar in intake.completion_json."
+    arg_descriptions:
+      completion_json: "JSON string describing terminal stage and completion guard."
     mutations:
       - { op: MSet, path: intake.completion_json, from_arg: completion_json }
       - { op: MSet, path: intake.q6_recorded, value: true }
@@ -451,11 +470,12 @@ action_map:
       - { op: MSet, path: program.synthesis_complete, value: true }
   plan_artifacts:
     description: "Plan artifacts."
+    result_path: artifact_plan.artifacts
     mutations:
       - { op: MSet, path: artifact_plan.status, value: draft }
       - { op: MSet, path: artifact_plan.approved, value: false }
       - { op: MSet, path: artifact_plan.write_authorized, value: false }
-    channel: widget_output
+    channel: artifact_plan_output
   approve_artifact_plan:
     description: "Approve artifact plan after write authorization."
     mutations:
@@ -556,6 +576,8 @@ schema:
   program.skip_dimensions.*: string
   program.architecture_ready: boolean
   artifact_plan.status: string
+  artifact_plan.artifacts: array
+  artifact_plan.artifacts.*: object
   artifact_plan.approved: boolean
   artifact_plan.write_authorized: boolean
   artifacts.written: boolean
@@ -584,7 +606,7 @@ guidance:
     - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If any of slug/name/target_dir is missing, ask exactly one missing-identity question as plain text and stop; the user's reply will arrive next round as inputs.user_text. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
     - "After record_program_target, if program.design_path is not set, ask in plain text whether the user wants to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton (intent='choose_design_path'), then stop. On the next user_text reply, call choose_design_path with choice='design' or choice='default'."
     - "If program.design_path == 'default' and intake.program_intake_finalized is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
-    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Emit the question text as a non-terminal response. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into the declared from_arg field. 4. Move to the next question. After Q6 fires, immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
+    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Emit the question text as a non-terminal response. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into that action's named argument. 4. Move to the next question. After Q6 fires, immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
     - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Emit the question as plain text and stop; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."

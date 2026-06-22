@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
-import { load } from 'js-yaml';
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import {
@@ -157,8 +156,7 @@ export const handlers: Record<string, ToolHandler> = {
   async plan_artifacts(payload) {
     const sessionId = sessionIdFromPayload(payload);
     const domain = domainFromPayload(payload);
-    const synthesized = requireSynthesizedArtifact(sessionId);
-    const parsedSpec = load(synthesized.spec_yaml) as { name?: string; modes?: Record<string, unknown> };
+    requireSynthesizedArtifact(sessionId);
     const program = {
       slug: stringDomainField(domain, 'program.slug'),
       name: stringDomainField(domain, 'program.name'),
@@ -168,17 +166,7 @@ export const handlers: Record<string, ToolHandler> = {
       ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain))
       : createStandaloneArtifactPlan(program);
 
-    return {
-      kind: 'artifact_plan_drafted',
-      target: plan.target,
-      artifact_count: plan.artifacts.length,
-      artifacts: plan.artifacts,
-      synthesized_spec: {
-        name: parsedSpec.name,
-        mode_names: Object.keys(parsedSpec.modes ?? {}),
-        sha256: synthesized.sha256,
-      },
-    };
+    return plan.artifacts;
   },
 
   async record_user_note(payload) {
