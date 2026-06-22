@@ -68,6 +68,17 @@ export {
 
 export { createPgasNewFoundryProgramEntry } from "./foundry-program/registration.js";
 
+export { runRepl, runStreamingRepl } from "./repl/runner.js";
+
+export type {
+  ActionResult,
+  ReplExitInfo,
+  ReplLogger,
+  ReplOptions,
+  ReplState,
+  ReplStreamEvent,
+} from "./repl/types.js";
+
 export {
   runLiveProviderVerification,
   runPostRebaseVerification,
