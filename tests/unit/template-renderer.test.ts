@@ -221,6 +221,12 @@ describe('template renderer', () => {
           'confirm_design',
         ]),
       );
+      expect(parsed.modes.architecture_design.vocabulary).toEqual(
+        expect.arrayContaining(['synthesize_program_spec']),
+      );
+      expect(parsed.modes.architecture_design.preconditions?.synthesize_program_spec).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'program.design_confirmed' }]),
+      );
       expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
       expect(parsed.modes.intake_intelligence.transitions).toEqual(
         expect.arrayContaining([
@@ -305,6 +311,13 @@ describe('template renderer', () => {
       expect(parsed.action_map.confirm_design.mutations).toEqual([
         { op: 'MSet', path: 'program.design_confirmed', value: true },
       ]);
+      expect(parsed.action_map.synthesize_program_spec).toMatchObject({
+        description: 'Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete.',
+        channel: 'widget_output',
+      });
+      expect(parsed.action_map.synthesize_program_spec.mutations).toEqual([
+        { op: 'MSet', path: 'program.synthesis_complete', value: true },
+      ]);
       expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
         expect.arrayContaining([
           { kind: 'FieldTruthy', path: 'repo.write_authorized' },
@@ -355,7 +368,6 @@ describe('template renderer', () => {
         'inputs.user_decision.timestamp': 'string',
         'program.design_path': 'string',
         'program.design_confirmed': 'boolean',
-        'program.synthesized_spec': 'object',
         'program.synthesis_complete': 'boolean',
         'program.target_dir': 'string',
         'program.target_dir_confirmed': 'boolean',
@@ -369,6 +381,7 @@ describe('template renderer', () => {
         'intake.completion_json': 'string',
         'intake.program_intake_recorded': 'boolean',
       });
+      expect(parsed.schema).not.toHaveProperty('program.synthesized_spec');
       expect(parsed.guidance.intake_intelligence).toEqual(
         expect.arrayContaining([
           expect.stringContaining('program.target_dir_confirmed is not true'),

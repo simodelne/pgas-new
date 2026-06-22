@@ -18,6 +18,7 @@ const semanticTools = [
   'load_wiring_manifest',
   'authorize_existing_repo_target',
   'create_curator_request',
+  'synthesize_program_spec',
   'design_architecture',
   'plan_artifacts',
   'approve_artifact_plan',

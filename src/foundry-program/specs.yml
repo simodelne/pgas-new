@@ -69,9 +69,11 @@ modes:
       - target: curator_request
         guard: { kind: FieldTruthy, path: repo.blocked }
   architecture_design:
-    vocabulary: [design_architecture, record_user_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [synthesize_program_spec, design_architecture, record_user_note, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [system_mode_entry, widget_output]
     preconditions:
+      synthesize_program_spec:
+        - { kind: FieldTruthy, path: program.design_confirmed }
       web_research:
         - { kind: FieldTruthy, path: intake.research_allowed }
     transitions:
@@ -324,6 +326,11 @@ action_map:
     description: "Mark architecture ready."
     mutations: [{ op: MSet, path: program.architecture_ready, value: true }]
     channel: widget_output
+  synthesize_program_spec:
+    description: "Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete."
+    channel: widget_output
+    mutations:
+      - { op: MSet, path: program.synthesis_complete, value: true }
   plan_artifacts:
     description: "Plan artifacts."
     mutations:
@@ -414,7 +421,6 @@ schema:
   program.name: string
   program.design_path: string
   program.design_confirmed: boolean
-  program.synthesized_spec: object
   program.synthesis_complete: boolean
   program.target_dir: string
   program.target_dir_confirmed: boolean

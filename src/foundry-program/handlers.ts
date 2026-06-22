@@ -1,4 +1,6 @@
 import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+import { synthesizeProgramSpecFromDomain } from './synthesizer.js';
+import { putSynthesizedArtifact } from './synthesizer-store.js';
 
 const defaultStages = [
   { slug: 'start', is_bootstrap: true },
@@ -41,6 +43,23 @@ function optionalJsonField(payload: Record<string, unknown>, structuredKey: stri
 }
 
 export const handlers: Record<string, ToolHandler> = {
+  async synthesize_program_spec(payload) {
+    const sessionId = sessionIdFromPayload(payload);
+    const synthesized = synthesizeProgramSpecFromDomain(domainFromPayload(payload));
+    putSynthesizedArtifact(sessionId, {
+      spec_yaml: synthesized.spec_yaml,
+      mode_names: synthesized.mode_names,
+      sha256: synthesized.sha256,
+      created_at: new Date().toISOString(),
+    });
+    return {
+      kind: 'mechanical_synthesis',
+      no_llm_call: true,
+      mode_names: synthesized.mode_names,
+      sha256: synthesized.sha256,
+    };
+  },
+
   async record_program_target(payload) {
     return {
       kind: 'pgas_new_target_recorded',
@@ -108,3 +127,27 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 };
+
+function sessionIdFromPayload(payload: Record<string, unknown>): string {
+  const direct = payload.session_id ?? payload.sessionId;
+  if (typeof direct === 'string' && direct.length > 0) {
+    return direct;
+  }
+  const domain = payload.domain;
+  if (domain && typeof domain === 'object' && !Array.isArray(domain)) {
+    const domainRecord = domain as Record<string, unknown>;
+    const fromDomain = domainRecord.session_id ?? domainRecord.sessionId ?? domainRecord['session.id'];
+    if (typeof fromDomain === 'string' && fromDomain.length > 0) {
+      return fromDomain;
+    }
+  }
+  throw new Error('synthesize_program_spec requires a session id in payload.session_id, payload.sessionId, or payload.domain');
+}
+
+function domainFromPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const domain = payload.domain;
+  if (!domain || typeof domain !== 'object' || Array.isArray(domain)) {
+    throw new Error('synthesize_program_spec requires payload.domain from the engine domain snapshot');
+  }
+  return domain as Record<string, unknown>;
+}

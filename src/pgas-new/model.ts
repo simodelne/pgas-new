@@ -47,6 +47,7 @@ export const PGAS_NEW_ACTIONS = [
   'authorize_existing_repo_target',
   'load_wiring_manifest',
   'create_curator_request',
+  'synthesize_program_spec',
   'design_architecture',
   'plan_artifacts',
   'approve_artifact_plan',
