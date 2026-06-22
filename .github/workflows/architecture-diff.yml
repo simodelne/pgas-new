@@ -1,0 +1,45 @@
+name: Architecture diff
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  architecture-diff:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require architecture section when architecture doc changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          latest_release_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+          if [ -z "$latest_release_tag" ]; then
+            echo "No release tag found; cannot evaluate architecture diff." >&2
+            exit 1
+          fi
+
+          if git diff --quiet "$latest_release_tag" -- docs/PGAS-NEW-ARCHITECTURE.md; then
+            echo "No architecture doc changes since $latest_release_tag."
+            exit 0
+          fi
+
+          pr_body="$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')"
+          if printf '%s\n' "$pr_body" | grep -Eq '^##[[:space:]]+Architectural changes[[:space:]]*$'; then
+            echo "Architecture doc changed; PR body includes Architectural changes section."
+            exit 0
+          fi
+
+          echo "docs/PGAS-NEW-ARCHITECTURE.md changed since $latest_release_tag." >&2
+          echo "Add a '## Architectural changes' section to the PR body." >&2
+          exit 1
