@@ -68,6 +68,10 @@ export {
 
 export { createPgasNewFoundryProgramEntry } from "./foundry-program/registration.js";
 
+export { startFoundryServer } from "./foundry-server.js";
+
+export type { FoundryServerOptions, StartedFoundryServer } from "./foundry-server.js";
+
 export { runRepl, runStreamingRepl } from "./repl/runner.js";
 
 export type {
