@@ -1,8 +1,12 @@
 # v3.0 Implementation — v1 → v3 Point-by-Point Trace
 
-Date: 2026-06-22  
-Status: draft, canonical reference for Phase 2/3 implementation  
-Source-of-truth for v1: `commands/pgas-new-program.md` (465 lines) and `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (211 lines), both deleted in commit `3d832b5` but recoverable from git history. Working copies at `/tmp/v1-pgas-new-program.md`, `/tmp/v1-pgas-new-consumer.md`, `/tmp/v1-arch.md`.
+Date: 2026-06-22 (revised 2026-06-22 per rebuild plan r3 cleanups)  
+Status: draft, **supplemental reference** for Phase 2/3 implementation. The rebuild plan (`2026-06-22-v3-rebuild-plan.md`) is the canonical implementation source-of-truth; this trace is the v1→v3 mapping.
+
+**Revisions:**
+- r3 (2026-06-22): renamed `architecture.synthesized_spec` → `program.synthesized_spec` per rebuild plan D3; renamed `confirm_architecture` → `confirm_design` per rebuild plan §7.1.1; clarified that `apply_default_skeleton` is a **separate spec-declared action** called by the LLM after `choose_design_path` when default is selected (the two-action approach is intentional per rebuild plan N5 fix — keeps all state mutations declarative).
+
+Source-of-truth for v1: `commands/pgas-new-program.md` (465 lines) and `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (211 lines), both deleted in commit `3d832b5` but recoverable from git history.
 
 ## Why this doc exists
 
@@ -239,8 +243,8 @@ These five tests run against a freshly synthesized program produced by feeding a
    - Add the 11 schema entries (`intake.purpose: string`, `intake.entry_channel: string`, `intake.stages: array`, `intake.stages.*: object`, `intake.transitions: array`, `intake.transitions.*: object`, `intake.delegation: object`, `intake.completion: object`, `intake.completion.final_stage: string`, `intake.completion.guard_field: string`, `intake.program_intake_recorded: boolean`).
    - Add `record_program_intake` to `intake_intelligence` mode's vocabulary and projection.
    - Add guidance with the four directives the user's test asserts (ask Q1–Q6 in order; use `request_user_action` with `intent='collect_program_intake'`; call `record_program_intake` with structured payload; don't re-ask what's already extracted).
-5. **NEW from this trace doc — §2 fork:** add the choose-design-path step as the first guidance line. Add `intake.design_path: string` to schema. Document default-skeleton constants in a new mode-action `apply_default_skeleton` (mutations populate stages/transitions/completion with the 3-mode defaults).
-6. **NEW from this trace doc — §4 echo-back:** `intake_intelligence` ends with `confirm_design` user_confirmation step. Add `inputs.user_decision.intent: string` if not already there. Mode transition out of `intake_intelligence` gated on `inputs.user_decision.decision == 'approve'`.
+5. **NEW from this trace doc — §2 fork:** add the choose-design-path step as the first guidance line. Add `program.design_path: string` to schema (rebuild-plan revision moved this from `intake.design_path` to `program.design_path` to keep the design-path decision under `program.*` namespace per D3). Add a separate mode-action `apply_default_skeleton` with declared `mutations:` populating `intake.stages/transitions/completion` to the 3-mode defaults; precondition gates it on `program.design_path == 'default'`. Two-action approach by design (rebuild-plan N5): `choose_design_path` records the choice only, `apply_default_skeleton` populates defaults; guidance instructs the LLM to call them in sequence.
+6. **NEW from this trace doc — §4 echo-back:** `intake_intelligence` ends with `confirm_design` user_confirmation step. Mode transition out of `intake_intelligence` gated on `program.design_confirmed = true`.
 7. Handler stub for `record_program_intake` (already asserted by user's test).
 8. Tool registration for `record_program_intake` (already asserted by user's test).
 9. Tests covering: bare-entry behavior, design-path fork, echo-back gate, full Q1–Q6 mutations and schema.
@@ -249,8 +253,8 @@ These five tests run against a freshly synthesized program produced by feeding a
 
 1. Ship `templates/pgas-new/program/spec-skeleton.yml.tmpl` — the canonical 3-mode skeleton, FM3-safe, with all engine-owned schema paths declared (FM5).
 2. Implement `synthesize_program_spec` handler in the foundry: rename + copy-block per §5. **No LLM call.** Validate output against the engine's spec loader before returning.
-3. `architecture_design` mode runs `synthesize_program_spec`, writes result to `architecture.synthesized_spec`, ends with a `confirm_architecture` user_confirmation step.
-4. `scaffold_plan` reads `architecture.synthesized_spec`, produces an artifact plan including handlers + tools + tests.
+3. `architecture_design` mode runs `synthesize_program_spec`, writes result to `program.synthesized_spec` (D3 namespace decision). The `confirm_design` user_confirmation step is the FIRST of the two D4 confirms and happens at the END of `intake_intelligence` (gating entry into `architecture_design`), not at the end of `architecture_design`. Architecture_design runs the deterministic synthesizer + a final readback before transitioning to `scaffold_plan`.
+4. `scaffold_plan` reads `program.synthesized_spec`, produces an artifact plan including handlers/{index,_resolver}.ts (FM1 layout) + tools + tests, then ends with the SECOND D4 confirm (`approve_plan`).
 5. `branch_write` writes the synthesized program.
 6. Regression corpus: feed each `docs/graduation-evidence/<name>/MANDATE.md` into the synthesizer (deterministic, no LLM), assert structural-equivalence with the frozen graduation spec.
 7. FM1–FM5 closure tests (§7).

@@ -1,17 +1,25 @@
-# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 2)
+# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 3)
 
 Date: 2026-06-22  
-Status: revision 2 (incorporates Codex validation findings + 6 open-question decisions); pending re-validation before delegation  
-Supersedes: revision 1 (commit `18b2626`)  
+Status: revision 3 (addresses Codex r2 verdict "APPROVED WITH MINOR FIXES"); ready for delegation when re-validated  
+Supersedes: revision 2 (commit `679e114`)  
 Anchors:
-- v1 source: `commands/pgas-new-program.md` (recoverable from commit `3d832b5^`; copy at `/tmp/v1-pgas-new-program.md`)
-- v1 architecture paper: `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (recoverable from `3d832b5^`; copy at `/tmp/v1-arch.md`)
+- v1 source: `commands/pgas-new-program.md` (recoverable from commit `3d832b5^`)
+- v1 architecture paper: `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (recoverable from `3d832b5^`)
 - Current architecture doc: `docs/PGAS-NEW-ARCHITECTURE.md`
-- Trace: `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md`
+- Trace: `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` (updated in r3 — see §16)
 - Post-mortem: `docs/POST-MORTEM-2026-06-22-design-phase-drift.md`
 - Strategic invariants: `MEMORY.md` (SI-1 through SI-5)
-- Revision 1: commit `18b2626`
-- Codex validation: `.uat/codex-validate-rebuild-plan-report.md`
+- Revision 2: commit `679e114`
+- Codex r1 validation: `.uat/codex-validate-rebuild-plan-report.md`
+- Codex r2 validation: `.uat/codex-validate-rebuild-plan-r2-report.md` ("APPROVED WITH MINOR FIXES" — 5 cleanups, no human decisions)
+
+**What changed from r2 → r3** (per Codex r2 cleanup items N1–N5):
+- N1: `program.target_dir` + `program.target_dir_confirmed` added to schema + projection; new `record_program_target` action; identity capture explicit in `intake_intelligence` guidance.
+- N2: `@simodelne/pgas-server` dependency addition moved from Phase 2.1 into Phase 1's atomic commit so the skeleton's engine-loader test can actually run in Phase 1.
+- N3: Trace doc updated (separate commit) to drop `apply_default_skeleton` references — wait, **kept**: the two-action approach is the right design (see N5). Trace updated to use `confirm_design` and `program.synthesized_spec` (not `confirm_architecture` or `architecture.synthesized_spec`). CLAUDE.md foundry-spec path updated to `src/foundry-program/specs.yml`.
+- N4: E2E "0 llm_call events" assertion replaced with handler-instrumentation marker check (the synthesizer handler emits `{kind: 'mechanical_synthesis', no_llm_call: true}` in its action result; E2E asserts on that field).
+- N5: Default-path is now a **two-action sequence**, both with declared mutations: `choose_design_path` (records `program.design_path` only) + `apply_default_skeleton` (populates `intake.*` defaults via MSet literals, with a precondition `program.design_path == 'default'`). No handler-side state extension; all mutations are spec-declared.
 
 ## §0 Goal (Simone's own words, verbatim)
 
@@ -92,6 +100,7 @@ Output: a fresh PGAS consumer (standalone repo per **standalone mode**, or progr
 | `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` | — | **Salvage with targeted edits.** Drop `apply_default_skeleton` in trace §12 (D-resolved: `choose_design_path` covers both record + populate per Codex I5). |
 | `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` | — | **Mark as superseded by this plan + the trace doc.** Add `> Status: superseded by 2026-06-22-v3-rebuild-plan.md` at the top. |
 | `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/*` | — | Stay as evidence + regression corpus. |
+| `docs/superpowers/plans/*` (existing implementation plans from prior work, e.g. `2026-06-21-streaming-repl.md`) | — | Stay as historical reference. Do not load by tooling. (Codex r2 N-minor.) |
 | `CLAUDE.md` | — | **Salvage with targeted edits.** Replace `pgas-new design <slug>` references with `pgas-new` (D1). |
 | `MEMORY.md` | — | **Salvage with targeted edits.** Replace SI-1's `pgas-new design <slug>` with `pgas-new` (D1). |
 | `.github/workflows/ci.yml` | 67 | Stay as-is. |
@@ -170,18 +179,45 @@ Modes unchanged from the existing template. **New actions, schema, and gates per
 
 **New actions added to `action_map`:**
 
+(Codex N5 fix: split the design-path mechanism into two actions so all state changes flow through declared `mutations:` — no handler-side state extension. The LLM is instructed by guidance to call `apply_default_skeleton` immediately after `choose_design_path` when the user picked 'default'.)
+
 ```yaml
 choose_design_path:
-  description: "Record whether the user wants the interactive interview or the default 3-mode skeleton, and on 'default' pre-populate the skeleton constants so they don't have to answer Q1-Q6."
+  description: "Record whether the user wants the interactive interview ('design') or the default 3-mode skeleton ('default'). Pure record action — does not populate intake.* defaults."
   mutations:
     - { op: MSet, path: program.design_path, from_arg: design_path }
-    # When design_path == 'default', the handler ALSO populates the skeleton constants
-    # via subsequent MSet mutations on intake.stages, intake.transitions, intake.completion.
-    # See handler implementation in §7.1.2.
+  channel: widget_output
+
+apply_default_skeleton:
+  description: "Populate intake.* with the default start->working->complete skeleton constants. ONLY legal when program.design_path == 'default' (precondition). Closes intake without asking Q1-Q6."
+  mutations:
+    - { op: MSet, path: intake.purpose, value: '' }
+    - { op: MSet, path: intake.entry_channel, value: 'user_text' }
+    - { op: MSet, path: intake.stages, value: [
+        { slug: 'start', is_bootstrap: true },
+        { slug: 'working' },
+        { slug: 'complete', is_terminal: true }
+      ] }
+    - { op: MSet, path: intake.transitions, value: [
+        { from: 'start', to: 'working', trigger: 'auto' },
+        { from: 'working', to: 'complete', trigger: 'auto', guard_field: 'work.example_ready', guard_value: true }
+      ] }
+    - { op: MSet, path: intake.delegation, value: {} }
+    - { op: MSet, path: intake.completion, value: { final_stage: 'complete', guard_field: 'work.example_ready' } }
+    - { op: MSet, path: intake.program_intake_recorded, value: true }
+  channel: widget_output
+
+record_program_target:
+  description: "Capture the user's program name, slug, and target output directory. Called once during intake_intelligence; required before confirm_design."
+  mutations:
+    - { op: MSet, path: program.slug, from_arg: slug }
+    - { op: MSet, path: program.name, from_arg: name }
+    - { op: MSet, path: program.target_dir, from_arg: target_dir }
+    - { op: MSet, path: program.target_dir_confirmed, value: true }
   channel: widget_output
 
 record_program_intake:
-  description: "Capture the user's Q1-Q6 design interview answers into governed state."
+  description: "Capture the user's Q1-Q6 design interview answers into governed state. Only legal when program.design_path == 'design'."
   mutations:
     - { op: MSet, path: intake.purpose, from_arg: purpose }
     - { op: MSet, path: intake.entry_channel, from_arg: entry_channel }
@@ -216,25 +252,31 @@ synthesize_program_spec:
 
 - `intake_intelligence → architecture_design` transition gated on `program.design_confirmed = true`
 - `scaffold_plan → branch_write` transition gated on `program.plan_approved = true`
-- `record_program_intake` precondition: `intake.program_intake_recorded` is not true (idempotency)
-- `synthesize_program_spec` precondition: `intake.program_intake_recorded = true` AND `program.design_confirmed = true`
-- `confirm_design` preconditions:
+- `apply_default_skeleton` precondition: `{ kind: FieldEquals, path: program.design_path, value: 'default' }` AND `intake.program_intake_recorded` is not true
+- `record_program_intake` precondition: `{ kind: FieldEquals, path: program.design_path, value: 'design' }` AND `intake.program_intake_recorded` is not true (idempotency)
+- `record_program_target` precondition: `intake.program_intake_recorded = true` AND `program.target_dir_confirmed` is not true
+- `confirm_design` precondition list:
+  - `{ kind: FieldTruthy, path: intake.program_intake_recorded }`
+  - `{ kind: FieldTruthy, path: program.target_dir_confirmed }`
   - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
   - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
-- `approve_plan` preconditions: same shape as `confirm_design`
+- `approve_plan` preconditions: shape similar to `confirm_design`, gated on artifact-plan state
+- `synthesize_program_spec` precondition: `program.design_confirmed = true` (synthesis runs in `architecture_design` mode after intake is confirmed)
 
-**Schema additions (D3 + Codex C2 fix for FM5):**
+**Schema additions (D3 + Codex C2 fix for FM5 + Codex N1 fix for target_dir):**
 
 ```yaml
 schema:
   # Existing fields kept
   ...
-  # D3 — program.* namespace for synthesis
+  # D3 — program.* namespace for synthesis (Codex N1: target_dir governed state)
   program.design_path: string                # 'design' | 'default'
   program.design_confirmed: boolean
   program.plan_approved: boolean
   program.synthesized_spec: object
   program.synthesis_complete: boolean
+  program.target_dir: string                 # absolute path or kebab-slug default './<slug>'
+  program.target_dir_confirmed: boolean      # set by record_program_target
   program.skip_dimensions: array             # Q1..Q6 skipped — used for fallback defaults
   program.skip_dimensions.*: string
   # Intake structured fields (matches user's existing test in tests/unit/template-renderer.test.ts)
@@ -270,6 +312,9 @@ projection:
   intake_intelligence:
     include:
       - inputs.user_text
+      - inputs.user_decision
+      - inputs.user_decision.decision
+      - inputs.user_decision.instruction
       - intake.mandate
       - intake.purpose
       - intake.entry_channel
@@ -278,6 +323,10 @@ projection:
       - intake.delegation
       - intake.completion
       - intake.program_intake_recorded
+      - program.slug
+      - program.name
+      - program.target_dir
+      - program.target_dir_confirmed
       - program.design_path
       - program.design_confirmed
       - program.skip_dimensions
@@ -285,13 +334,18 @@ projection:
       - notebook.pins
 ```
 
-**Guidance for `intake_intelligence`:**
+**Guidance for `intake_intelligence` (Codex N5 + N1 fix: two-action default path + explicit target_dir capture):**
 
 ```yaml
 guidance:
   intake_intelligence:
-    - "If program.design_path is not set, your first move is to ask the user whether they want to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton. Use request_user_action with intent='choose_design_path'. Then call choose_design_path with the user's answer."
-    - "If program.design_path == 'default': you're done — choose_design_path's handler populated the skeleton constants. Move to the confirm step."
+    # === Step 1 of intake: capture program identity (name, slug, target_dir) ===
+    - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug / program.name / program.target_dir via initialDomain. If any of slug/name/target_dir is missing, ask the user via request_user_action with intent='collect_program_identity'. If slug provided but name is missing, derive name as title-case of slug (e.g. 'legal-fee-proposals' -> 'Legal Fee Proposals'). If target_dir is blank, default to './<slug>'. Echo back the proposed slug/name/target_dir for confirmation, then call record_program_target with the structured payload."
+    # === Step 2 of intake: design-path fork (choose_design_path) ===
+    - "After record_program_target, if program.design_path is not set, ask the user whether they want to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton. Use request_user_action with intent='choose_design_path'. Then call choose_design_path with the user's answer."
+    # === Step 3a: default path → call apply_default_skeleton ===
+    - "If program.design_path == 'default' and intake.program_intake_recorded is not true: immediately call apply_default_skeleton (no args needed). This populates intake.* defaults atomically via declared mutations. Do NOT ask Q1-Q6."
+    # === Step 3b: design path → run Q1-Q6 ===
     - "If program.design_path == 'design' and intake.program_intake_recorded is not true: ask the 6 design questions IN ORDER, one at a time or in a small batch, with brief context for each. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
@@ -302,9 +356,10 @@ guidance:
     - "If the user replies 'skip' to any of Q1-Q6 (or any clearly equivalent intent), record the skip in program.skip_dimensions and use the dimension's default in the structured payload. Don't re-ask."
     - "If the user replies 'reject' or 'change' or 'edit <text>' to a question, treat the prior answer as discarded and ask the question again. Don't proceed."
     - "Once you have all 6 answers (or defaults for skipped dimensions), call record_program_intake with the structured payload."
-    - "After record_program_intake, echo back the synthesized mode list + transitions to the user — render via widget_output — and ask for confirmation via request_user_action with intent='confirm_design'. Wait for the user_confirmation trigger."
+    # === Step 4: echo-back + confirm_design (first of D4's two confirms) ===
+    - "After intake is recorded (via apply_default_skeleton OR record_program_intake), echo back the proposed mode list + transitions + target_dir to the user — render via widget_output — and ask for confirmation via request_user_action with intent='confirm_design'. Wait for the user_confirmation trigger."
     - "On user_confirmation with decision='approve', call confirm_design."
-    - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask the user which dimension they want to revise, re-run the relevant question, and re-emit the echo-back."
+    - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask the user which dimension they want to revise (identity, design-path, individual Q1-Q6, or target_dir), re-run the relevant step, and re-emit the echo-back."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
 ```
 
@@ -575,6 +630,11 @@ export interface SpawnedServer {
  *   - default: ~/.pgas-new/foundry-v<PGAS_NEW_VERSION>/
  *     where PGAS_NEW_VERSION is read from package.json
  *   - override via PGAS_NEW_FOUNDRY_WORKDIR env
+ *   - cache-bust: developers iterating on src/foundry-program/* locally
+ *     can either rm -rf ~/.pgas-new/foundry-v<version>/ between runs OR
+ *     set PGAS_NEW_FOUNDRY_WORKDIR=$(mktemp -d) per invocation.
+ *     A future enhancement could include a content hash in the cache
+ *     key; not needed for v3.0 since releases are pinned by version. (Codex r2 N-minor.)
  *
  * First-run render:
  *   1. If workdir does NOT exist:
@@ -660,7 +720,7 @@ Lands BEFORE Phase 1. Implements correction issues #37, #38, #39:
 
 **Acceptance:** all three CI / template / prompt files exist, one test PR validates the new gates fire, README updated to document the contributor flow.
 
-### Phase 1 — Foundry-program relocation (atomic, Codex I12 fix)
+### Phase 1 — Foundry-program relocation + engine dependency (atomic, Codex I12 + N2 fix)
 
 **Single commit that atomically:**
 
@@ -668,21 +728,21 @@ Lands BEFORE Phase 1. Implements correction issues #37, #38, #39:
 2. Updates `src/pgas-new/template-renderer.ts` to load the foundry-self-program from `src/foundry-program/` when `--template pgas-new-foundry` is requested.
 3. Creates `templates/pgas-new/program/{spec-skeleton,handlers-skeleton,tools-skeleton,registration-skeleton}.{yml,ts}.tmpl` as the new generic skeleton with full FM5 schema (Codex C2 fix).
 4. Updates `src/index.ts` to re-export `createPgasNewFoundryProgramEntry`.
-5. Adds `tests/unit/foundry-skeleton.test.ts` asserting skeleton FM3+FM5 invariants.
-6. Marks `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` as superseded.
+5. **(Codex N2 fix)** Adds `@simodelne/pgas-server` to `package.json` `dependencies` + runs `npm install` (lock file update). The skeleton's engine-loader test in step 6 needs the engine available at this phase, so the dep cannot be deferred to Phase 2.1 as r2 said.
+6. Adds `tests/unit/foundry-skeleton.test.ts` asserting skeleton FM3+FM5 invariants AND skeleton loads through `loadSpecWithPatterns` (engine validator). Static portion runs on every commit; engine-loader portion can be gated on the dep being present (skip in environments without registry access — separate from PASS/FAIL per §9 SKIP-vs-PASS rule).
+7. Marks `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` as superseded.
 
-**Acceptance:** `npm test` clean. The foundry-program-as-template still renders correctly (existing tests pass). The new skeleton parses through engine validator.
+**Acceptance:** `npm test` clean. The foundry-program-as-template still renders correctly (existing tests pass). The new skeleton parses through engine validator (rung gated on `@simodelne/pgas-server` install — SKIP allowed in offline CI but recorded as SKIP, not PASS).
 
 ### Phase 2 — The agent surface (Codex I8 + I9 fix; ~1 week)
 
-Split into 6 ordered sub-commits, each atomic + green:
+Split into 5 ordered sub-commits, each atomic + green (was 6 sub-commits in r2; the engine-dep step moved to Phase 1 per N2):
 
-**2.1** Add `@simodelne/pgas-server` to `package.json` dependencies; `npm install`; verify `node --import tsx` can load the foundry-program in-process via testing harness.  
-**2.2** Create `src/repl/{runner.ts,renderer.ts,types.ts}` (refactor from template). Add `tests/unit/repl-runner.test.ts` with injected stdin/stdout.  
-**2.3** Create `src/foundry-server.ts`. Add `tests/unit/foundry-server.test.ts` with mocked spawn (real spawn in integration test).  
-**2.4** Update `src/cli.ts` entry switch (corrected classifier per §7.4). Add `tests/unit/cli-interactive.test.ts` covering: bare entry, `--slug` only, `--out` only, `--non-interactive`, unknown command, all existing subcommands unchanged.  
-**2.5** Update foundry-program spec with new actions (`choose_design_path`, `record_program_intake`, `confirm_design`, `approve_plan`), schema, projection, guidance per §7.1.1.  
-**2.6** Implement the four intake-side handlers in `src/foundry-program/handlers.ts`. Add `tests/integration/foundry-intake-flow.test.ts`.
+**2.1** Create `src/repl/{runner.ts,renderer.ts,types.ts}` (refactor from template). Add `tests/unit/repl-runner.test.ts` with injected stdin/stdout.  
+**2.2** Create `src/foundry-server.ts`. Add `tests/unit/foundry-server.test.ts` with mocked spawn (real spawn in integration test).  
+**2.3** Update `src/cli.ts` entry switch (corrected classifier per §7.4). Add `tests/unit/cli-interactive.test.ts` covering: bare entry, `--slug` only, `--out` only, `--non-interactive`, unknown command, all existing subcommands unchanged.  
+**2.4** Update foundry-program spec with new actions (`choose_design_path`, `apply_default_skeleton`, `record_program_target`, `record_program_intake`, `confirm_design`, `approve_plan`), schema, projection, guidance per §7.1.1 (N1 + N5 — six new actions, not four).  
+**2.5** Implement the six intake-side handlers in `src/foundry-program/handlers.ts`. Add `tests/integration/foundry-intake-flow.test.ts`.
 
 **Acceptance:** running `pgas-new` against a deterministic LLM stub via the testing harness opens the REPL, runs the design-path fork, runs Q1–Q6 (or default), echoes back for confirm, gates the transition. The session reaches `architecture_design` mode with all intake state correctly populated. (Architecture-design + downstream is empty stubs at this phase.)
 
@@ -732,16 +792,18 @@ curl -sf http://100.100.74.6:8000/v1/models | jq -r '.data[0].id'
 **Scenario A — design path, standalone repo (incident triage)**
 
 Same as revision 1, but verification adds:
+- `record_program_target` action fired with the user's name/slug/target_dir
 - Q1–Q6 were asked **in order** (verified by inspecting the session log's round_dispatch + llm_raw_response sequence)
 - `record_program_intake` action fired exactly once with all 7 mutations
 - `confirm_design` and `approve_plan` actions fired exactly once each
 - `synthesize_program_spec` action fired and `program.synthesized_spec` is populated in session world state
-- No LLM call inside the synthesizer (verified by looking at session log: `synthesize_program_spec` round has 0 llm_call events)
+- **(Codex N4 fix)** The synthesizer handler itself made no LLM/network call — asserted by inspecting the action result for the handler-emitted marker `{kind: 'mechanical_synthesis', no_llm_call: true, ...}`. The PGAS round around the action *will* contain LLM calls (the LLM picks the action and observes the result); the invariant is that the HANDLER is pure. Verified at two layers: (1) the marker in session log, (2) unit-test of `synthesize_program_spec` handler that runs without any engine harness at all (`tests/unit/synthesize-program-spec.test.ts`).
 
 **Scenario B — default skeleton path, standalone repo (minimal-test)**
 
 - User selects "default" at the design-path fork
-- Codex asserts `choose_design_path` handler populated `intake.stages` to the 3-mode default
+- Codex asserts `choose_design_path` fired with `program.design_path = 'default'`
+- Codex asserts `apply_default_skeleton` then fired and populated `intake.stages` to the 3-mode default via declared MSet mutations
 - Only the two confirms are asked (design echo-back of the default skeleton + plan approve)
 - Output uses `start → working → complete` mode names
 

@@ -34,10 +34,14 @@ verification ladder, and graduates a PR. The full design contract lives in
   streaming REPL.
 - A "general coding assistant." pgas-new does PGAS programs only.
 
-**The foundry's own PGAS spec** (`templates/pgas-new/program/specs.yml.tmpl`)
-declares the 10 modes above. That spec IS the design contract. If you change
-the CLI in a way that bypasses any of those modes, you are drifting away from
-the program's nature — stop and surface the change.
+**The foundry's own PGAS spec** lives at `src/foundry-program/specs.yml` from
+v2.7.0 (Phase 1 of the v3 rebuild). It was previously at
+`templates/pgas-new/program/specs.yml.tmpl` — a misnamed location that
+conflated the foundry's runtime program with a user-output template; see
+`docs/POST-MORTEM-2026-06-22-design-phase-drift.md`. The spec declares the
+10 modes above. That spec IS the design contract. If you change the CLI
+in a way that bypasses any of those modes, you are drifting away from the
+program's nature — stop and surface the change.
 
 ## What This Repo Is
 
