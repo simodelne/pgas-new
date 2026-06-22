@@ -45,7 +45,7 @@ Each row: **v1 design** → **v3 implementation** → **adherence check (test or
 **v3 implementation:**
 
 - The foundry's `intake_intelligence` mode's **first action** is a `request_user_action` with `intent='choose_design_path'`, offering two options: `design` or `default`.
-- If user picks **default** (or any non-`design` value): the agent sets `intake.design_path = 'default'` and `intake.program_intake_recorded = true` with the default 3-stage skeleton baked in (`stages = [start, working, complete]`, `transitions = [{from: start, to: working, trigger: auto}, {from: working, to: complete, guard: work.example_ready}]`, `completion = {final_stage: complete, guard_field: work.example_ready}`).
+- If user picks **default** (or any non-`design` value): the agent calls `choose_design_path` with `design_path: 'default'` (sets `program.design_path = 'default'`), then immediately calls `apply_default_skeleton` (no args; the spec's declared MSet mutations populate `intake.stages = [{slug:'start', is_bootstrap:true}, {slug:'working'}, {slug:'complete', is_terminal:true}]`, `intake.transitions = [{from:'start', to:'working', trigger:'auto'}, {from:'working', to:'complete', trigger:'auto', guard_field:'work.example_ready', guard_value:true}]`, `intake.completion = {final_stage:'complete', guard_field:'work.example_ready'}`, etc., and `intake.program_intake_recorded = true`).
 - If user picks **design**: the agent enters the Q1–Q6 interview.
 
 **Mandatory minimum questions** even in `default` path: program name (kebab-case) and slug. Per v1 spec: "no questions beyond name/slug."
@@ -178,7 +178,7 @@ These five tests run against a freshly synthesized program produced by feeding a
 **v1 arch paper:**
 > "five-rung verification ladder that executes every scaffold surface against the real engine"
 
-**v3 implementation:** the foundry's `static_verify` and `live_verify` modes are exactly this. Already declared in `templates/pgas-new/program/specs.yml.tmpl`.
+**v3 implementation:** the foundry's `static_verify` and `live_verify` modes are exactly this. Declared in `src/foundry-program/specs.yml` (relocated from `templates/pgas-new/program/specs.yml.tmpl` in Phase 1 of v3 per the rebuild plan).
 
 | Rung | v1 step | v3 mode |
 |---|---|---|
@@ -219,7 +219,7 @@ These five tests run against a freshly synthesized program produced by feeding a
 ## §11 — What v3 adds beyond v1 (not drift, evolution)
 
 - **Streaming REPL UI** with SSE phase indicators, mode banners, ANSI box rendering of action results. v1 was inline-Claude-session text; v3 is a real terminal UI. Same intent (one conversation), better UX.
-- **Foundry runs as a real PGAS program** (the spec at `templates/pgas-new/program/specs.yml.tmpl`) against `@simodelne/pgas-server`. v1's design phase was Claude-driven prose execution; v3's design phase is engine-driven mode-machine execution. Stronger contract.
+- **Foundry runs as a real PGAS program** (the spec at `src/foundry-program/specs.yml`, relocated in v3 Phase 1) against `@simodelne/pgas-server`. v1's design phase was Claude-driven prose execution; v3's design phase is engine-driven mode-machine execution. Stronger contract.
 - **`.pgas/wiring.yml` manifest** for attach (replaces marker injection — documented in §6).
 - **Verification ladder as PGAS modes** (`static_verify`, `live_verify`, `rebase_verify`, `pr_graduation`) rather than ad-hoc shell scripts. Each rung records evidence to governed state.
 

@@ -17,7 +17,7 @@ Anchors:
 **What changed from r2 → r3** (per Codex r2 cleanup items N1–N5):
 - N1: `program.target_dir` + `program.target_dir_confirmed` added to schema + projection; new `record_program_target` action; identity capture explicit in `intake_intelligence` guidance.
 - N2: `@simodelne/pgas-server` dependency addition moved from Phase 2.1 into Phase 1's atomic commit so the skeleton's engine-loader test can actually run in Phase 1.
-- N3: Trace doc updated (separate commit) to drop `apply_default_skeleton` references — wait, **kept**: the two-action approach is the right design (see N5). Trace updated to use `confirm_design` and `program.synthesized_spec` (not `confirm_architecture` or `architecture.synthesized_spec`). CLAUDE.md foundry-spec path updated to `src/foundry-program/specs.yml`.
+- N3: Trace doc updated to use `confirm_design` (not `confirm_architecture`) and `program.synthesized_spec` (not `architecture.synthesized_spec`). The two-action default-path approach (`choose_design_path` + `apply_default_skeleton`) is kept by design per N5 — declarative MSet over handler-side state extension. CLAUDE.md foundry-spec path updated from `templates/pgas-new/program/specs.yml.tmpl` to `src/foundry-program/specs.yml`.
 - N4: E2E "0 llm_call events" assertion replaced with handler-instrumentation marker check (the synthesizer handler emits `{kind: 'mechanical_synthesis', no_llm_call: true}` in its action result; E2E asserts on that field).
 - N5: Default-path is now a **two-action sequence**, both with declared mutations: `choose_design_path` (records `program.design_path` only) + `apply_default_skeleton` (populates `intake.*` defaults via MSet literals, with a precondition `program.design_path == 'default'`). No handler-side state extension; all mutations are spec-declared.
 
@@ -97,7 +97,7 @@ Output: a fresh PGAS consumer (standalone repo per **standalone mode**, or progr
 | `docs/PGAS-NEW-ARCHITECTURE.md` | — | **Salvage with targeted edits.** Add §"CLI Surface" describing bare `pgas-new` entry. Already references the 10-mode flow correctly. |
 | `docs/PGAS-NEW-LIVE-GRADUATION.md` | — | Stay as-is. |
 | `docs/POST-MORTEM-2026-06-22-design-phase-drift.md` | — | Stay as-is. |
-| `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` | — | **Salvage with targeted edits.** Drop `apply_default_skeleton` in trace §12 (D-resolved: `choose_design_path` covers both record + populate per Codex I5). |
+| `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` | — | **Salvage with targeted edits.** Trace updated in r3 commit to use `program.design_path` (not `intake.design_path`), `program.synthesized_spec` (not `architecture.synthesized_spec`), `confirm_design` (not `confirm_architecture`), and the two-action `choose_design_path` + `apply_default_skeleton` flow (matches rebuild plan §7.1.1 N5 decision). |
 | `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` | — | **Mark as superseded by this plan + the trace doc.** Add `> Status: superseded by 2026-06-22-v3-rebuild-plan.md` at the top. |
 | `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/*` | — | Stay as evidence + regression corpus. |
 | `docs/superpowers/plans/*` (existing implementation plans from prior work, e.g. `2026-06-21-streaming-repl.md`) | — | Stay as historical reference. Do not load by tooling. (Codex r2 N-minor.) |
@@ -252,9 +252,10 @@ synthesize_program_spec:
 
 - `intake_intelligence → architecture_design` transition gated on `program.design_confirmed = true`
 - `scaffold_plan → branch_write` transition gated on `program.plan_approved = true`
+- `record_program_target` precondition: `program.target_dir_confirmed` is not true (Codex R3-I1 fix: was incorrectly gated on `intake.program_intake_recorded = true`, which deadlocked — target capture must happen BEFORE intake)
+- `choose_design_path` precondition: `program.target_dir_confirmed = true` AND `program.design_path` is not set (target identity must be captured before design-path is asked)
 - `apply_default_skeleton` precondition: `{ kind: FieldEquals, path: program.design_path, value: 'default' }` AND `intake.program_intake_recorded` is not true
 - `record_program_intake` precondition: `{ kind: FieldEquals, path: program.design_path, value: 'design' }` AND `intake.program_intake_recorded` is not true (idempotency)
-- `record_program_target` precondition: `intake.program_intake_recorded = true` AND `program.target_dir_confirmed` is not true
 - `confirm_design` precondition list:
   - `{ kind: FieldTruthy, path: intake.program_intake_recorded }`
   - `{ kind: FieldTruthy, path: program.target_dir_confirmed }`
@@ -385,18 +386,45 @@ Handler implementations for every action in the foundry's spec. Each handler has
  * choose_design_path
  *   args: { design_path: 'design' | 'default' }
  *   side effects: none
- *   state mutations: program.design_path (via spec mutations); IF 'default',
- *     handler returns additional mutations to populate intake.* defaults:
- *       intake.stages = [{slug:'start', is_bootstrap:true}, {slug:'working'}, {slug:'complete', is_terminal:true}]
- *       intake.transitions = [{from:'start', to:'working', trigger:'auto'},
- *                             {from:'working', to:'complete', trigger:'auto', guard_field:'work.example_ready', guard_value:true}]
- *       intake.completion = { final_stage:'complete', guard_field:'work.example_ready' }
- *       intake.purpose = '' (skip default per guidance)
- *       intake.entry_channel = 'user_text'
- *       intake.delegation = {}
- *       intake.program_intake_recorded = true
+ *   state mutations: program.design_path ONLY (via spec mutations). Pure record action.
+ *     Handler does NOT extend mutations. Default-skeleton population is done by a
+ *     separate spec-declared action (apply_default_skeleton, see below) — guidance
+ *     instructs the LLM to call apply_default_skeleton immediately after
+ *     choose_design_path when the user picked 'default'.
  *   failure modes: invalid design_path value — throw with clear error
  *   secret redaction: n/a
+ */
+
+/**
+ * apply_default_skeleton
+ *   args: {} (no args — all mutations are literal MSet declared in spec)
+ *   side effects: none
+ *   state mutations: ALL declared in spec via MSet with literal values for
+ *     intake.purpose (''), intake.entry_channel ('user_text'),
+ *     intake.stages (the canonical 3-mode skeleton), intake.transitions
+ *     (linear start→working→complete with guard), intake.delegation ({}),
+ *     intake.completion ({final_stage:'complete', guard_field:'work.example_ready'}),
+ *     intake.program_intake_recorded (true).
+ *     Handler does NOT extend mutations. Engine applies the literal MSet values.
+ *   failure modes: engine rejects literal MSet shape for array/object paths
+ *     (Codex R3-I2 risk; see Phase 1 acceptance gate below)
+ *   secret redaction: n/a
+ *   precondition (enforced in spec): program.design_path == 'default'.
+ *     Engine refuses the action otherwise; handler is unreachable in that path.
+ */
+
+/**
+ * record_program_target
+ *   args: { slug: string, name: string, target_dir: string }
+ *   side effects: none (validation only)
+ *   state mutations: program.slug, program.name, program.target_dir,
+ *     program.target_dir_confirmed = true (all via spec MSet from_arg)
+ *   validation: slug must match kebab-case regex; name must be non-empty;
+ *     target_dir must be a safe path (no '..', no shell escapes)
+ *   failure modes: validation failure — throw with clear error
+ *   secret redaction: n/a
+ *   precondition (enforced in spec): program.target_dir_confirmed != true (idempotency).
+ *     Runs as the FIRST intake action — must succeed before choose_design_path.
  */
 
 /**
@@ -733,6 +761,8 @@ Lands BEFORE Phase 1. Implements correction issues #37, #38, #39:
 7. Marks `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` as superseded.
 
 **Acceptance:** `npm test` clean. The foundry-program-as-template still renders correctly (existing tests pass). The new skeleton parses through engine validator (rung gated on `@simodelne/pgas-server` install — SKIP allowed in offline CI but recorded as SKIP, not PASS).
+
+**Codex R3-I2 gate (must pass before Phase 1 merges):** The skeleton AND the foundry's own `src/foundry-program/specs.yml` (with the new `apply_default_skeleton` action containing nested array/object MSet literals) must load through `loadSpecWithPatterns` without error. If the engine rejects nested literals on array/object-typed paths (per `docs/PGAS-NEW-GRADUATION-2-EVIDENCE.md` S-11 — JSON-string scalar fallback was needed for some array/object state), the Phase 1 commit must use the **JSON-string scalar shape** instead: `apply_default_skeleton` mutations write `intake.stages_json: string` etc., and the synthesizer reads them via `JSON.parse` before operating on the structured form. Decide upfront in Phase 1 — do not punt the decision into Phase 2/3.
 
 ### Phase 2 — The agent surface (Codex I8 + I9 fix; ~1 week)
 
