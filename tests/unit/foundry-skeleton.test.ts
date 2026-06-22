@@ -29,6 +29,8 @@ const REGISTRATION_SKELETON = 'templates/pgas-new/program/registration-skeleton.
 const FOUNDRY_SPEC = 'src/foundry-program/specs.yml';
 
 interface SkeletonSpec {
+  channels: Record<string, { direction: string; sync: string }>;
+  ingestion: Record<string, string[]>;
   modes: Record<string, { channels?: string[] }>;
   schema: Record<string, string>;
 }
@@ -50,14 +52,12 @@ describe('foundry generic program skeleton', () => {
     expect(handlers).toContain('resolveDomainValue');
   });
 
-  it('does not include system_mode_entry triggers in the generic skeleton', () => {
-    const specText = readFileSync(SPEC_SKELETON, 'utf8');
+  it('declares the internal mode-entry channel for bootstrap continuation', () => {
     const spec = readSkeletonSpec();
 
-    expect(specText).not.toContain('system_mode_entry');
-    for (const mode of Object.values(spec.modes)) {
-      expect(mode.channels ?? []).not.toContain('system_mode_entry');
-    }
+    expect(spec.channels.system_mode_entry).toEqual({ direction: 'In', sync: 'Async' });
+    expect(spec.ingestion.system_mode_entry).toEqual(['inputs.mode_entry']);
+    expect(spec.modes.start.channels ?? []).toContain('system_mode_entry');
   });
 
   it('uses the createAdapters override convention in registration', () => {

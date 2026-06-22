@@ -17,24 +17,25 @@ features:
 
 channels:
   user_text: { direction: In, sync: Async }
+  system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
 
 modes:
   start:
     vocabulary: [begin_work, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: working
         guard: { kind: FieldTruthy, path: work.started }
   working:
     vocabulary: [example_action, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [user_text, widget_output]
+    channels: [user_text, system_mode_entry, widget_output]
     transitions:
       - target: complete
         guard: { kind: FieldTruthy, path: work.example_ready }
   complete:
     vocabulary: [session_status, session_history, session_help]
-    channels: [widget_output]
+    channels: [system_mode_entry, widget_output]
 
 proceed_to:
   begin_work: working
@@ -72,6 +73,8 @@ prompts:
 ingestion:
   user_text:
     - inputs.user_text
+  system_mode_entry:
+    - inputs.mode_entry
 
 action_map:
   begin_work:
@@ -107,6 +110,7 @@ schema:
   inputs.query_meta.continuation_round: number
   inputs.query_meta.scope_redirect: string
   inputs.query_meta.message: string
+  inputs.mode_entry: object
   inputs.mode_entry.mode: string
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
@@ -158,3 +162,60 @@ control_plane:
           channel: user_text
           payload: "$args.query"
           mode: async
+    abort:
+      title: Abort run
+      aliases: ["/abort", "/stop"]
+      availability:
+        when: "active_session.running"
+      dispatch:
+        - op: abort_session
+          session: "$active_session.id"
+      presentation:
+        priority: destructive
+        confirm: true
+    new:
+      title: New session
+      aliases: ["/new", "/reset", "/restart"]
+      dispatch:
+        - op: create_session
+          as: session
+          program: "{{SLUG}}"
+      presentation:
+        priority: secondary
+    history:
+      title: Recent sessions
+      aliases: ["/history", "/recent"]
+      dispatch:
+        - op: list_sessions
+          as: sessions
+      presentation:
+        priority: secondary
+    status:
+      title: Status
+      aliases: ["/status"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: render_session
+          session: "$active_session.id"
+          view: status
+      presentation:
+        priority: contextual
+    resume:
+      title: Resume
+      aliases: ["/resume"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: send_runtime_control
+          session: "$active_session.id"
+          control: resume
+      presentation:
+        priority: contextual
+    help:
+      title: Help
+      aliases: ["/help"]
+      dispatch:
+        - op: render_help
+      presentation:
+        priority: secondary

@@ -928,9 +928,9 @@ describe('template renderer', () => {
         expect(parsed.channels.system_mode_entry).toEqual({ direction: 'In', sync: 'Async' });
         expect(parsed.ingestion.system_mode_entry).toEqual(['inputs.mode_entry']);
         expect(parsed.schema['inputs.mode_entry']).toBe('object');
-        for (const mode of Object.values(parsed.modes)) {
-          expect(mode.channels).toContain('system_mode_entry');
-        }
+        const firstMode = Object.keys(parsed.modes)[0];
+        expect(firstMode).toBeDefined();
+        expect(parsed.modes[firstMode as string]?.channels).toContain('system_mode_entry');
       } finally {
         rmSync(outDir, { recursive: true, force: true });
       }

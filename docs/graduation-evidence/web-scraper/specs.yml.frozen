@@ -1,0 +1,487 @@
+name: "web-scraper"
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
+
+preamble: |
+  Program: Web Scraper. Scrape an ethical legal corpus under hard network, robots, terms, rate-limit, privacy, and single-asset verification guardrails.
+
+  Workflow: intake -> intelligence -> egress_verification -> web_analysis ->
+  strategy_review -> scraping -> asset_verification -> complete (or blocked).
+  This is a SAFETY-CRITICAL, NETWORK-AWARE program. Do not invent steps,
+  do not skip gates, and never use anonymity to evade site policy.
+
+  Hard rules:
+  - No target-site network call before egress.confirmed is true.
+  - No scraping action before strategy.user_approved is true.
+  - Exactly one asset per fetch_one_asset call. No URL arrays. No loops.
+  - Asset must be verified (scraping.last_asset_verified=true) before the
+    next fetch. The gate enforces this.
+  - Respect robots.txt, terms, crawl-delay, captcha, rate limits, and any
+    legal uncertainty. When in doubt, halt — do not evade.
+  - Privacy/anonymity is preserved but NEVER used to bypass site policy.
+
+  Use only the declared tools for the current mode. Record durable user
+  decisions and findings in governed state and in the durable ledger at
+  ledger.path. Do not rely on chat history as state.
+
+initial: intake
+terminal: [complete, blocked]
+
+features:
+  - base
+  - runtime_control
+
+channels:
+  user_text: { direction: In, sync: Async }
+  user_confirmation: { direction: In, sync: Async, structured_decision: true }
+  system_mode_entry: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Async }
+
+modes:
+  intake:
+    vocabulary: [record_intake, request_user_action, record_user_note]
+    channels: [user_text, system_mode_entry, widget_output]
+    transitions:
+      - target: intelligence
+        guard: { kind: FieldTruthy, path: intake.complete }
+  intelligence:
+    vocabulary: [web_search_sources, request_user_action, record_user_note]
+    channels: [user_text, system_mode_entry, widget_output]
+    preconditions:
+      web_search_sources:
+        - { kind: FieldTruthy, path: intake.complete }
+    transitions:
+      - target: egress_verification
+        guard: { kind: FieldTruthy, path: intelligence.complete }
+  egress_verification:
+    vocabulary: [confirm_egress_ip, request_user_action, record_user_note]
+    channels: [user_text, system_mode_entry, widget_output]
+    preconditions:
+      confirm_egress_ip:
+        - { kind: FieldTruthy, path: intelligence.complete }
+    transitions:
+      - target: web_analysis
+        guard: { kind: FieldTruthy, path: egress.confirmed }
+      - target: blocked
+        guard: { kind: FieldTruthy, path: run.block_reason }
+  web_analysis:
+    vocabulary: [check_robots_and_terms, analyze_html_sample, playwright_snapshot, vision_analyze_snapshot, request_user_action, record_user_note]
+    channels: [user_text, system_mode_entry, widget_output]
+    preconditions:
+      check_robots_and_terms:
+        - { kind: FieldTruthy, path: egress.confirmed }
+      analyze_html_sample:
+        - { kind: FieldTruthy, path: egress.confirmed }
+      playwright_snapshot:
+        - { kind: FieldTruthy, path: egress.confirmed }
+      vision_analyze_snapshot:
+        - { kind: FieldTruthy, path: egress.confirmed }
+    transitions:
+      - target: strategy_review
+        guard: { kind: FieldTruthy, path: analysis.complete }
+      - target: blocked
+        guard: { kind: FieldTruthy, path: analysis.halt_reason }
+  strategy_review:
+    vocabulary: [propose_scraping_strategy, approve_scraping_strategy, request_user_action, record_user_note]
+    channels: [user_text, user_confirmation, system_mode_entry, widget_output]
+    preconditions:
+      propose_scraping_strategy:
+        - { kind: FieldTruthy, path: analysis.complete }
+      approve_scraping_strategy:
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
+        - { kind: FieldTruthy, path: strategy.proposal_json }
+    transitions:
+      - target: scraping
+        guard: { kind: FieldTruthy, path: strategy.user_approved }
+      - target: blocked
+        guard: { kind: FieldTruthy, path: run.block_reason }
+  scraping:
+    vocabulary: [fetch_one_asset, skip_duplicate, request_user_action]
+    channels: [system_mode_entry, widget_output]
+    preconditions:
+      fetch_one_asset:
+        - { kind: FieldTruthy, path: egress.confirmed }
+        - { kind: FieldTruthy, path: strategy.user_approved }
+        - { kind: FieldEquals, path: scraping.last_asset_verified, value: true }
+      skip_duplicate:
+        - { kind: FieldTruthy, path: strategy.user_approved }
+    transitions:
+      - target: asset_verification
+        guard: { kind: FieldTruthy, path: scraping.last_asset_id }
+  asset_verification:
+    vocabulary: [verify_asset, append_scrape_ledger, request_user_action]
+    channels: [system_mode_entry, widget_output]
+    preconditions:
+      verify_asset:
+        - { kind: FieldTruthy, path: scraping.last_asset_id }
+      append_scrape_ledger:
+        - { kind: FieldEquals, path: verification.last_status, value: pass }
+    transitions:
+      - target: scraping
+        guard: { kind: FieldEquals, path: scraping.last_asset_verified, value: true }
+      - target: complete
+        guard: { kind: FieldTruthy, path: scraping.budget_exhausted }
+      - target: blocked
+        guard: { kind: FieldTruthy, path: verification.requires_user_decision }
+  complete:
+    vocabulary: [complete_run, request_user_action]
+    channels: [system_mode_entry, widget_output]
+  blocked:
+    vocabulary: [request_user_action, record_user_note]
+    channels: [system_mode_entry, widget_output]
+
+proceed_to:
+  record_intake: intelligence
+  web_search_sources: egress_verification
+  confirm_egress_ip: web_analysis
+  propose_scraping_strategy: strategy_review
+  approve_scraping_strategy: scraping
+  fetch_one_asset: asset_verification
+  skip_duplicate: scraping
+  verify_asset: asset_verification
+  append_scrape_ledger: scraping
+  complete_run: complete
+
+projection:
+  intake:
+    include: [inputs.user_text, intake.objective, intake.jurisdiction, intake.target_legal_domain, intake.allowed_source_classes_json, intake.user_constraints, intake.privacy_requirements, intake.max_network_budget, intake.complete, notebook.entries, notebook.pins]
+    exclude: []
+  intelligence:
+    include: [inputs.user_text, intake.objective, intake.jurisdiction, intake.target_legal_domain, intake.allowed_source_classes_json, intelligence.candidate_sources, intelligence.queries_count, intelligence.complete, notebook.entries]
+    exclude: []
+  egress_verification:
+    include: [egress.ip, egress.region, egress.proxy_status, egress.verified_at, egress.confirmed, intake.privacy_requirements, notebook.entries]
+    exclude: []
+  web_analysis:
+    include: [intelligence.candidate_sources, analysis.candidates_analyzed, analysis.calls_used_total, analysis.calls_per_candidate_json, analysis.halt_reason, analysis.complete, egress.confirmed, notebook.entries]
+    exclude: []
+  strategy_review:
+    include: [inputs.user_text, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, analysis.candidates_analyzed, strategy.proposal_json, strategy.user_approved, strategy.call_budget, strategy.min_delay_ms, strategy.allowed_url_patterns_json, strategy.disallowed_url_patterns_json, strategy.dedupe_ledger_path, notebook.entries]
+    exclude: []
+  scraping:
+    include: [strategy.user_approved, strategy.call_budget, strategy.min_delay_ms, strategy.allowed_url_patterns_json, strategy.disallowed_url_patterns_json, strategy.dedupe_ledger_path, scraping.assets_fetched_count, scraping.last_asset_id, scraping.last_fetch_at, scraping.last_asset_verified, scraping.budget_exhausted, ledger.entries_count]
+    exclude: []
+  asset_verification:
+    include: [scraping.last_asset_id, scraping.last_fetch_at, scraping.last_asset_verified, verification.last_status, verification.failure_reason, verification.requires_user_decision, ledger.path, ledger.entries_count, ledger.last_appended_at, scraping.budget_exhausted]
+    exclude: []
+  complete:
+    include: [scraping.assets_fetched_count, ledger.path, ledger.entries_count, run.complete]
+    exclude: []
+  blocked:
+    include: [run.block_reason, analysis.halt_reason, verification.failure_reason, notebook.entries]
+    exclude: []
+
+prompts:
+  intake: "Collect scraping objective, jurisdiction, target legal domain, allowed source classes, user constraints, privacy/anonymity requirements, and maximum network budget."
+  intelligence: "Use web_search_sources to identify candidate official/public sources. Do not fetch target sites directly here."
+  egress_verification: "Confirm the egress IP of the actual request stack before any target-site call. Halt if unverifiable."
+  web_analysis: "Analyze candidate website structure within the analysis call budget. Halt on captcha, login wall, paywall, bot prohibition, robots disallow, or legal uncertainty."
+  strategy_review: "Propose a scraping strategy and obtain explicit user approval before any scrape."
+  scraping: "Fetch exactly one asset per action. Never parallel. Never arrays. Verify before next fetch."
+  asset_verification: "Verify the fetched asset and append to the durable ledger at ledger.path. Halt on verification failure pending user decision."
+  complete: "Report completion and the ledger location."
+  blocked: "Report the precise block reason and the next user action required."
+
+ingestion:
+  user_text: [inputs.user_text]
+  system_mode_entry: [inputs.mode_entry]
+  user_confirmation:
+    - inputs.user_decision.decision
+    - inputs.user_decision.instruction
+    - inputs.user_decision.note_mode
+    - inputs.user_decision.timestamp
+
+action_map:
+  record_user_note:
+    description: "Record a durable web-scraper note."
+    mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }]
+    channel: widget_output
+  request_user_action:
+    description: "Ask the user for a decision or input the program cannot resolve."
+    mutations: []
+    channel: widget_output
+  record_intake:
+    description: "Record complete scraping intake including network budget and privacy posture."
+    mutations:
+      - { op: MSet, path: intake.objective, from_arg: objective }
+      - { op: MSet, path: intake.jurisdiction, from_arg: jurisdiction }
+      - { op: MSet, path: intake.target_legal_domain, from_arg: target_legal_domain }
+      - { op: MSet, path: intake.allowed_source_classes_json, from_arg: allowed_source_classes_json }
+      - { op: MSet, path: intake.user_constraints, from_arg: user_constraints }
+      - { op: MSet, path: intake.privacy_requirements, from_arg: privacy_requirements }
+      - { op: MSet, path: intake.max_network_budget, from_arg: max_network_budget }
+      - { op: MSet, path: intake.complete, value: true }
+    channel: widget_output
+  web_search_sources:
+    description: "Run a single web search query for candidate official/public sources. Cap recorded per the intake budget."
+    mutations:
+      - { op: MAppend, path: intelligence.candidate_sources, from_arg: source }
+      - { op: MSet, path: intelligence.queries_count, from_arg: queries_count }
+      - { op: MSet, path: intelligence.complete, from_arg: complete }
+    channel: widget_output
+  confirm_egress_ip:
+    description: "Confirm the egress IP, region, and proxy status of the actual request stack."
+    mutations:
+      - { op: MSet, path: egress.ip, from_arg: ip }
+      - { op: MSet, path: egress.region, from_arg: region }
+      - { op: MSet, path: egress.proxy_status, from_arg: proxy_status }
+      - { op: MSet, path: egress.verified_at, from_arg: verified_at }
+      - { op: MSet, path: egress.confirmed, value: true }
+    channel: widget_output
+  check_robots_and_terms:
+    description: "Fetch robots.txt / terms / sitemap for one candidate site. Counts against the analysis budget for that candidate."
+    mutations:
+      - { op: MSet, path: analysis.calls_used_total, from_arg: calls_used_total }
+      - { op: MSet, path: analysis.calls_per_candidate_json, from_arg: calls_per_candidate_json }
+    channel: widget_output
+  analyze_html_sample:
+    description: "Fetch and analyze a single HTML sample from one candidate site within the analysis budget."
+    mutations:
+      - { op: MSet, path: analysis.calls_used_total, from_arg: calls_used_total }
+      - { op: MSet, path: analysis.calls_per_candidate_json, from_arg: calls_per_candidate_json }
+    channel: widget_output
+  playwright_snapshot:
+    description: "Take one Playwright snapshot/screenshot of a single page within the analysis budget."
+    mutations:
+      - { op: MSet, path: analysis.calls_used_total, from_arg: calls_used_total }
+      - { op: MSet, path: analysis.calls_per_candidate_json, from_arg: calls_per_candidate_json }
+    channel: widget_output
+  vision_analyze_snapshot:
+    description: "Analyze a captured Playwright snapshot via the vision tool."
+    mutations:
+      - { op: MSet, path: analysis.candidates_analyzed, from_arg: candidates_analyzed }
+      - { op: MSet, path: analysis.complete, from_arg: complete }
+      - { op: MSet, path: analysis.halt_reason, from_arg: halt_reason }
+    channel: widget_output
+  propose_scraping_strategy:
+    description: "Propose a concrete scraping strategy for explicit user approval. Includes target sites, allowed/disallowed URL patterns, call budget, min delay, dedupe ledger path."
+    mutations:
+      - { op: MSet, path: strategy.proposal_json, from_arg: proposal_json }
+      - { op: MSet, path: strategy.call_budget, from_arg: call_budget }
+      - { op: MSet, path: strategy.min_delay_ms, from_arg: min_delay_ms }
+      - { op: MSet, path: strategy.allowed_url_patterns_json, from_arg: allowed_url_patterns_json }
+      - { op: MSet, path: strategy.disallowed_url_patterns_json, from_arg: disallowed_url_patterns_json }
+      - { op: MSet, path: strategy.dedupe_ledger_path, from_arg: dedupe_ledger_path }
+      - { op: MSet, path: strategy.user_approved, value: false }
+    channel: widget_output
+  approve_scraping_strategy:
+    description: "User-approve the proposed strategy. Required before any scraping."
+    mutations:
+      - { op: MSet, path: strategy.user_approved, value: true }
+      - { op: MSet, path: scraping.last_asset_verified, value: true }
+      - { op: MSet, path: ledger.path, from_arg: ledger_path }
+    channel: widget_output
+  fetch_one_asset:
+    description: "Fetch exactly one asset by a single URL. Increment counters. Mark last_asset_verified=false to force the verification step."
+    mutations:
+      - { op: MSet, path: scraping.last_asset_id, from_arg: asset_id }
+      - { op: MSet, path: scraping.last_fetch_at, from_arg: fetched_at }
+      - { op: MSet, path: scraping.last_asset_verified, value: false }
+      - { op: MSet, path: scraping.assets_fetched_count, from_arg: assets_fetched_count }
+      - { op: MSet, path: scraping.budget_exhausted, from_arg: budget_exhausted }
+    channel: widget_output
+  skip_duplicate:
+    description: "Record a duplicate-skip against the durable ledger without performing a network fetch."
+    mutations:
+      - { op: MAppend, path: notebook.entries, from_arg: duplicate_note }
+    channel: widget_output
+  verify_asset:
+    description: "Verify the fetched asset (HTTP status, MIME, size, hash, parse sanity, dedupe ledger check)."
+    mutations:
+      - { op: MSet, path: verification.last_status, from_arg: status }
+      - { op: MSet, path: verification.failure_reason, from_arg: failure_reason }
+      - { op: MSet, path: verification.requires_user_decision, from_arg: requires_user_decision }
+    channel: widget_output
+  append_scrape_ledger:
+    description: "Append a verified asset to the durable ledger at ledger.path."
+    mutations:
+      - { op: MSet, path: ledger.entries_count, from_arg: entries_count }
+      - { op: MSet, path: ledger.last_appended_at, from_arg: appended_at }
+      - { op: MSet, path: scraping.last_asset_verified, value: true }
+    channel: widget_output
+  complete_run:
+    description: "Mark the run complete and record the ledger location."
+    mutations:
+      - { op: MSet, path: run.complete, value: true }
+    channel: widget_output
+
+schema:
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
+  inputs.user_text: string
+  inputs.user_decision: object
+  inputs.user_decision.decision: string
+  inputs.user_decision.instruction: string
+  inputs.user_decision.note_mode: string
+  inputs.user_decision.timestamp: string
+  intake.objective: string
+  intake.jurisdiction: string
+  intake.target_legal_domain: string
+  intake.allowed_source_classes_json: string
+  intake.user_constraints: string
+  intake.privacy_requirements: string
+  intake.max_network_budget: number
+  intake.complete: boolean
+  intelligence.candidate_sources: array
+  intelligence.queries_count: number
+  intelligence.complete: boolean
+  egress.ip: string
+  egress.region: string
+  egress.proxy_status: string
+  egress.verified_at: string
+  egress.confirmed: boolean
+  analysis.candidates_analyzed: number
+  analysis.calls_used_total: number
+  analysis.calls_per_candidate_json: string
+  analysis.halt_reason: string
+  analysis.complete: boolean
+  strategy.proposal_json: string
+  strategy.user_approved: boolean
+  strategy.call_budget: number
+  strategy.min_delay_ms: number
+  strategy.allowed_url_patterns_json: string
+  strategy.disallowed_url_patterns_json: string
+  strategy.dedupe_ledger_path: string
+  scraping.assets_fetched_count: number
+  scraping.last_asset_id: string
+  scraping.last_fetch_at: string
+  scraping.last_asset_verified: boolean
+  scraping.budget_exhausted: boolean
+  verification.last_status: string
+  verification.failure_reason: string
+  verification.requires_user_decision: boolean
+  ledger.path: string
+  ledger.entries_count: number
+  ledger.last_appended_at: string
+  run.complete: boolean
+  run.block_reason: string
+  notebook.entries: array
+  notebook.pins: array
+
+repair_bound: 2
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+guidance:
+  intake:
+    - "First read inputs.user_text. Extract every intake field that is present and call record_intake with the extracted values. Use request_user_action ONLY for missing fields."
+    - "Do not invent a max_network_budget — request it from the user if it is not present in inputs.user_text."
+  intelligence:
+    - "Use web_search_sources to find OFFICIAL/PUBLIC candidate sources. Do not fetch the candidate sites here — that is the web_analysis mode."
+    - "Stop when you have a reasonable number of candidates within the intake budget, then set intelligence.complete=true."
+  egress_verification:
+    - "Call confirm_egress_ip exactly once. If the egress IP / region / proxy status cannot be obtained, use request_user_action and do NOT advance the mode."
+  web_analysis:
+    - "Use ONE analysis call at a time. Stay within the per-candidate cap declared in strategy.call_budget (defaults to the intake budget if no explicit cap)."
+    - "Halt with analysis.halt_reason set to one of {captcha, login_required, paywall, bot_prohibition, robots_disallow, legal_uncertainty, terms_violation} the moment you see the signal. Do not try to bypass."
+    - "Set analysis.complete=true only after you have a usable understanding of at least one viable candidate's structure."
+  strategy_review:
+    - "Propose ONE strategy at a time. Request explicit user approval via the user_confirmation channel."
+    - "Do not advance to scraping until inputs.user_decision.decision=approve."
+  scraping:
+    - "Call fetch_one_asset with exactly ONE URL. No arrays. No xargs. No shell loops. No background jobs."
+    - "If the URL is already in the durable ledger, call skip_duplicate instead of fetch_one_asset."
+    - "Wait for scraping.last_asset_verified=true before the next fetch_one_asset call — the gate enforces this."
+  asset_verification:
+    - "Verify HTTP status, MIME, size, content hash, basic parse sanity, and the dedupe ledger before calling append_scrape_ledger."
+    - "If verification fails, set verification.requires_user_decision=true and use request_user_action."
+  complete:
+    - "Report completion and the ledger location."
+  blocked:
+    - "Report the precise block reason and the next user action required. Do not attempt to bypass."
+
+control_plane:
+  version: 1
+  session:
+    program: "web-scraper"
+    binding: identity_channel_program
+    concurrency:
+      policy: single_active
+      on_busy: reject_with_status
+  free_text:
+    control: ask
+    bind:
+      query: "$text"
+  controls:
+    ask:
+      title: Ask
+      aliases: ["/ask"]
+      args:
+        query:
+          type: string
+          required: true
+          capture: rest
+      dispatch:
+        - op: create_session
+          as: session
+          program: "web-scraper"
+          domain_context:
+            query: "$args.query"
+        - op: trigger
+          session: "$session.id"
+          channel: user_text
+          payload: "$args.query"
+          mode: async
+    abort:
+      title: Abort run
+      aliases: ["/abort", "/stop"]
+      availability:
+        when: "active_session.running"
+      dispatch:
+        - op: abort_session
+          session: "$active_session.id"
+      presentation:
+        priority: destructive
+        confirm: true
+    new:
+      title: New session
+      aliases: ["/new", "/reset", "/restart"]
+      dispatch:
+        - op: create_session
+          as: session
+          program: "web-scraper"
+      presentation:
+        priority: secondary
+    history:
+      title: Recent sessions
+      aliases: ["/history", "/recent"]
+      dispatch:
+        - op: list_sessions
+          as: sessions
+      presentation:
+        priority: secondary
+    status:
+      title: Status
+      aliases: ["/status"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: render_session
+          session: "$active_session.id"
+          view: status
+      presentation:
+        priority: contextual
+    resume:
+      title: Resume
+      aliases: ["/resume"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: send_runtime_control
+          session: "$active_session.id"
+          control: resume
+      presentation:
+        priority: contextual
+    help:
+      title: Help
+      aliases: ["/help"]
+      dispatch:
+        - op: render_help
+      presentation:
+        priority: secondary

@@ -96,7 +96,7 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
       });
     } else {
       synthesizedModes[modeName] = transformMode(cloneRecord(sourceModes.working), {
-        channels: ['user_text', 'widget_output'],
+        channels: unique([entryChannel, 'widget_output']),
         transitions: [],
       });
     }
@@ -162,6 +162,7 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
 
   spec.ingestion = {
     [entryChannel]: [`inputs.${entryChannel}`],
+    system_mode_entry: ['inputs.mode_entry'],
   };
 
   spec.channels = {
@@ -273,7 +274,7 @@ function guidanceFor(modeNames: string[], delegation: Record<string, unknown>): 
 }
 
 function channelsForBootstrap(entryChannel: string): string[] {
-  return [...new Set([entryChannel, 'widget_output'])];
+  return unique([entryChannel, 'system_mode_entry', 'widget_output']);
 }
 
 function validateSynthesizedSpec(specYaml: string): void {
