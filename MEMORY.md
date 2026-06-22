@@ -1,7 +1,64 @@
 # MEMORY - pgas-new
 
-Read after `CLAUDE.md`. This file records current branch state and durable
-decisions. It is not a changelog and not a session handoff.
+Read after `CLAUDE.md` and `docs/PGAS-NEW-ARCHITECTURE.md`. This file records
+strategic invariants (load-bearing — don't drift), current branch state, and
+durable tactical decisions. It is not a changelog and not a session handoff.
+
+## Strategic Invariants (load-bearing — do not drift)
+
+These invariants are protected by `CLAUDE.md` and the architecture doc.
+Reintroducing any of the anti-patterns below is a governance violation and
+must be flagged before the change ships.
+
+### SI-1 — pgas-new is an interactive PGAS-program design foundry
+The CLI must surface an interactive design phase as its primary entry point
+(`pgas-new design <slug>` from v2.8.0). The agent walks the user through the
+10 declared modes (`intake_intelligence → architecture_design → scaffold_plan
+→ branch_write → static_verify → live_verify → rebase_verify → pr_graduation`).
+The foundry IS a PGAS program; the CLI must talk to it through the streaming
+REPL we ship in `templates/pgas-new/standalone/src/repl/`, not bypass it.
+
+**Anti-pattern (do not reintroduce):** the CLI as a non-conversational one-shot
+file emitter that copies frozen graduation programs.
+
+### SI-2 — No per-domain preset templates as CLI surface
+`--template policy-drafting|web-scraper|social-media-agent` is **deprecated in
+v2.7.0** and **removed in v3.0.0**. These three are graduation evidence preserved
+in `docs/graduation-evidence/`, not product surface. `--template pgas-new-foundry`
+stays — it is the legitimate self-bootstrap path.
+
+**Anti-pattern (do not reintroduce):** any new per-domain template baked into
+`templates/pgas-new/consumer/` or surfaced via a CLI flag. New domains belong
+in `docs/example-mandates/` as text files for the interactive intake to consume.
+
+### SI-3 — Synthesis is deterministic code, intake is the LLM-driven part
+v2.9.0's `synthesize_program_spec` action in `architecture_design` mode is
+**mechanical**: stages → mode keys, decision points → transitions with guards,
+completion → terminal-mode guard. The LLM does **judgment** in
+`intake_intelligence` (Q1–Q6 + follow-ups). The LLM does **not** freeform
+emit YAML. Spec shape is testable; the deterministic step has regression coverage.
+
+**Anti-pattern:** asking the LLM to emit a full PGAS spec as freeform JSON.
+That defeats the design-contract tests and reintroduces structural drift.
+
+### SI-4 — Architecture doc is the contract, not a description
+`docs/PGAS-NEW-ARCHITECTURE.md` is required reading every session. The 10-mode
+foundry-as-PGAS-program flow described there is the design contract — code
+must implement it. If a PR changes the implementation in a way that doesn't
+match the doc, the doc must change in the same PR (with a "Why" entry under
+the architecture-changes section per the v3.0 governance plan).
+
+**Anti-pattern:** treating the architecture doc as historical narrative.
+The drift documented in `docs/POST-MORTEM-2026-06-22-design-phase-drift.md`
+happened because we did this for ~3 days.
+
+### SI-5 — Public-import boundary on `@simodelne/pgas-server`
+Generated runtime code uses only the public subpaths declared in
+`src/pgas-new/version.ts:PGAS_SERVER_RUNTIME_IMPORTS`. `testing.js` is
+test-only. Engine gaps file curator requests upstream; do not patch private
+internals.
+
+
 
 ## Current State - 2026-06-19
 

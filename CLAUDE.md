@@ -1,20 +1,59 @@
 # pgas-new
 
-> READ FIRST. This is the load-bearing governance doc for this repo. Every
-> Claude session here must obey it. Then read `MEMORY.md` for current state and
-> `.remember/remember.md` for the latest transient handoff when present.
+> READ FIRST, IN ORDER, EVERY SESSION:
+> 1. This file (governance rules)
+> 2. `docs/PGAS-NEW-ARCHITECTURE.md` (the program's nature — what pgas-new IS)
+> 3. `MEMORY.md` (current state + strategic invariants + tactical decisions)
+> 4. `.remember/remember.md` (latest transient handoff, if present)
+>
+> All four are required. Skipping #2 was the root cause of the 2026-06-19→22
+> design-phase drift documented in `docs/POST-MORTEM-2026-06-22-design-phase-drift.md`.
+
+## Program Nature (load-bearing — do not weaken)
+
+**What pgas-new IS:** an interactive PGAS-program design foundry. It is itself
+a PGAS program. Its CLI starts a streaming REPL session against the foundry's
+own program spec; an LLM agent walks the user through phases
+(`intake_intelligence → architecture_design → scaffold_plan → branch_write →
+static_verify → live_verify → rebase_verify → pr_graduation`), synthesizes a
+fresh PGAS spec from the user's intake, plans artifacts, writes them, runs the
+verification ladder, and graduates a PR. The full design contract lives in
+`docs/PGAS-NEW-ARCHITECTURE.md`.
+
+**What pgas-new MUST NOT drift to:**
+
+- A preset-template selector. Per-domain templates (`policy-drafting`,
+  `web-scraper`, `social-media-agent`) are **graduation evidence**, not
+  product surface. They live in `docs/graduation-evidence/` (since v2.7.0)
+  for regression-corpus purposes only. The CLI must not surface them as
+  `--template <preset>` flags after v3.0.
+- A non-conversational one-shot file emitter. The original v1.0 was a Claude
+  Code slash command with a 6-question design interview. The TypeScript
+  re-platforming (commit `3d832b5`, 2026-06-19) silently deleted that interview
+  and shipped a render-only CLI. v3.0 restores the interview through the
+  streaming REPL.
+- A "general coding assistant." pgas-new does PGAS programs only.
+
+**The foundry's own PGAS spec** (`templates/pgas-new/program/specs.yml.tmpl`)
+declares the 10 modes above. That spec IS the design contract. If you change
+the CLI in a way that bypasses any of those modes, you are drifting away from
+the program's nature — stop and surface the change.
 
 ## What This Repo Is
 
-This repo now builds `pgas-new`: a TypeScript/Node PGAS foundry for creating
-new PGAS programs. It is not a general coding assistant. Its job is to generate
-PGAS-specific program scaffolds, governed specs, repo attachment requests, and
-verification gates aligned with the published `@simodelne/pgas-server` API.
+This repo builds `pgas-new`: a TypeScript/Node PGAS foundry for creating
+new PGAS programs. It is not a general coding assistant. Its job is to **drive
+an interactive design session** that synthesizes governed specs, plans
+artifacts, writes them, runs verification gates, and graduates a PR — aligned
+with the published `@simodelne/pgas-server` API.
 
 The original v1 Claude plugin commands, skills, hooks, and consumer templates
-have been removed from this branch. Do not recreate `commands/`,
+have been removed from the v2 branch. Do not recreate `commands/`,
 `templates/new-consumer/`, `templates/new-program/`, `templates/frontend/`,
 `skills/`, or `hooks/` unless the owner explicitly asks for a legacy restore.
+The interactive-design intent of those v1 surfaces is restored in v2.7.x via
+the streaming REPL + `pgas-new design` command, not by reviving the v1
+plugin surface.
 
 ## Engine Boundary
 
