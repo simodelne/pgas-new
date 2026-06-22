@@ -1,6 +1,9 @@
 import type { Writable } from 'node:stream';
 import type { ActionResult } from './types.js';
 
+export const REPL_CONTROL_HINT =
+  '/approve  /reject  /abort  /new  /status  /history  /resume  /help  /exit';
+
 export interface ReplRenderer {
   renderAction(result: ActionResult): void;
   renderError(message: string): void;

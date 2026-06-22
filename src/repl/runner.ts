@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
-import { createReplRenderer } from './renderer.js';
+import { createReplRenderer, REPL_CONTROL_HINT } from './renderer.js';
 import type { ActionResult, ReplExitInfo, ReplOptions, ReplState, ReplStreamEvent } from './types.js';
 
 const STEP_LABELS: Record<string, string> = {
@@ -12,6 +12,21 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'exit', 'help', 'history', 'quit', 'status']);
+
+export interface UserConfirmationPayload {
+  decision: 'approve' | 'reject';
+  instruction?: string;
+}
+
+export function parseUserConfirmationControl(input: string): UserConfirmationPayload | null {
+  const approve = /^\/approve(\s+(.+))?$/.exec(input);
+  if (approve) return buildUserConfirmationPayload('approve', approve[2]);
+
+  const reject = /^\/reject(\s+(.+))?$/.exec(input);
+  if (reject) return buildUserConfirmationPayload('reject', reject[2]);
+
+  return null;
+}
 
 export async function runRepl(options: ReplOptions): Promise<ReplExitInfo> {
   return runStreamingRepl(options);
@@ -105,9 +120,14 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
 
   function dispatchInput(input: string): Promise<void> {
     const isText = !input.startsWith('/');
+    const userConfirmation = parseUserConfirmationControl(input);
     if (isText) textBusy = true;
     inputBusy = true;
-    const handler = isText ? handleText(input) : handleCommand(input);
+    const handler = userConfirmation
+      ? handleUserConfirmation(userConfirmation)
+      : isText
+        ? handleText(input)
+        : handleCommand(input);
     return handler
       .catch((error) => renderer.renderError(errorMessage(error)))
       .finally(() => {
@@ -138,7 +158,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
         await finish('user_exit');
         break;
       case 'help':
-        renderer.renderInfo('/new  /abort  /status  /history  /resume  /help  /exit');
+        renderer.renderInfo(REPL_CONTROL_HINT);
         break;
       case 'new':
         state.sessionId = null;
@@ -264,6 +284,15 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     await runTrigger(state.sessionId, 'user_text', userText);
   }
 
+  async function handleUserConfirmation(payload: UserConfirmationPayload): Promise<void> {
+    if (!state.sessionId) {
+      renderer.renderInfo('No active session.');
+      return;
+    }
+
+    await runTrigger(state.sessionId, 'user_confirmation', payload);
+  }
+
   async function runTrigger(sessionId: string, channel: string, payload: unknown): Promise<void> {
     state.running = true;
     state.abortRequested = false;
@@ -322,4 +351,11 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   return String(error);
+}
+
+function buildUserConfirmationPayload(
+  decision: UserConfirmationPayload['decision'],
+  instruction: string | undefined,
+): UserConfirmationPayload {
+  return instruction === undefined ? { decision } : { decision, instruction };
 }

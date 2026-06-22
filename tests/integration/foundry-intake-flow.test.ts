@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import { registerPgasNewTools } from '../../src/foundry-program/tools.js';
+import { parseUserConfirmationControl, type UserConfirmationPayload } from '../../src/repl/runner.js';
 
 const intakeToolNames = [
   'record_program_target',
@@ -88,12 +89,18 @@ async function driveIntakeFork(choice: 'design' | 'default') {
     await harness.trigger('Create an incident triage PGAS program.');
     await harness.trigger(choice === 'design' ? 'I want to design it.' : 'Use the default skeleton.');
     await harness.trigger(choice === 'design' ? 'Here are the six design answers.' : 'Apply the default.');
-    await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+    await harness.trigger(replConfirmation('/approve'));
 
     return await harness.snapshot();
   } finally {
     await harness.close();
   }
+}
+
+function replConfirmation(input: string): { channel: 'user_confirmation'; payload: UserConfirmationPayload } {
+  const payload = parseUserConfirmationControl(input);
+  if (!payload) throw new Error(`invalid REPL confirmation control: ${input}`);
+  return { channel: 'user_confirmation', payload };
 }
 
 describe('foundry intake flow', () => {

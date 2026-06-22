@@ -501,12 +501,14 @@ guidance:
     - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."
     - "Once you have all 6 answers or defaults, call record_program_intake with purpose, entry_channel, stages_json, transitions_json, delegation_json, and completion_json. The *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
     - "After intake is recorded via apply_default_skeleton OR record_program_intake, echo back the proposed mode list + transitions + target_dir to the user and ask for confirmation via request_user_action with intent='confirm_design'. Wait for the user_confirmation trigger."
+    - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
     - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask which dimension to revise, re-run the relevant step, and re-emit the echo-back."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
   scaffold_plan:
     - "Call plan_artifacts to produce the artifact plan from the synthesized spec in in-process transit. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
     - "Echo the artifact-plan list (paths + purposes) to the user. Ask for approval via request_user_action with intent='approve_artifact_plan'."
+    - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation decision='approve', call approve_artifact_plan. Then the transition to branch_write fires."
     - "On reject/edit: don't call approve_artifact_plan; ask which artifact the user wants changed; re-emit."
   architecture_design:
