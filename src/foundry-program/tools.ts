@@ -41,7 +41,7 @@ const noopTool: ToolImpl = {
   fn: async (args) => ({ ok: true, args }),
 };
 
-export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
+export function registerPgasNewTools(registry: ToolRegistry): void {
   for (const name of semanticTools) {
     registry.register(name, noopTool);
   }

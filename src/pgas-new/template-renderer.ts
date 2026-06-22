@@ -13,6 +13,7 @@ import { PGAS_SERVER_VERSION } from './version.js';
 import type { WiringManifest } from './wiring-manifest.js';
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new');
+const FOUNDRY_PROGRAM_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../foundry-program');
 
 export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting' | 'web-scraper' | 'social-media-agent';
 
@@ -39,6 +40,8 @@ export interface RenderResult {
 interface TemplateSpec {
   file: string;
   tokens: readonly string[];
+  root?: 'templates' | 'foundry';
+  substitute?: boolean;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -54,10 +57,10 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'src/server.ts': spec('standalone/src/server.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'src/repl/index.ts': spec('standalone/src/repl/index.ts.tmpl', ['NAME', 'SLUG']),
   'src/repl/renderer.ts': spec('standalone/src/repl/renderer.ts.tmpl', []),
-  'src/programs/{{SLUG}}/specs.yml': spec('program/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'NAME', 'SLUG']),
-  'src/programs/{{SLUG}}/registration.ts': spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  'src/programs/{{SLUG}}/handlers.ts': spec('program/handlers.ts.tmpl', []),
-  'src/programs/{{SLUG}}/tools.ts': spec('program/tools.ts.tmpl', ['PASCAL_NAME']),
+  'src/programs/{{SLUG}}/specs.yml': foundrySpec('specs.yml'),
+  'src/programs/{{SLUG}}/registration.ts': foundrySpec('registration.ts'),
+  'src/programs/{{SLUG}}/handlers.ts': foundrySpec('handlers.ts'),
+  'src/programs/{{SLUG}}/tools.ts': foundrySpec('tools.ts'),
   'tests/spec-load.test.ts': spec('tests/spec-load.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/control-plane.test.ts': spec('tests/control-plane.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/program-deterministic.test.ts': spec('tests/program-deterministic.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
@@ -71,7 +74,7 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
 // while the generic artifact manifest remains under templates/pgas-new/consumer.
 const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
   spec: spec('../../docs/graduation-evidence/policy-drafting/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  registration: spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']),
   handler: spec('../../docs/graduation-evidence/policy-drafting/handlers.ts.tmpl', []),
   tool: spec('../../docs/graduation-evidence/policy-drafting/tools.ts.tmpl', ['PASCAL_NAME']),
   dossier: spec('../../docs/graduation-evidence/policy-drafting/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
@@ -81,7 +84,7 @@ const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], 
 
 const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
   spec: spec('../../docs/graduation-evidence/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  registration: spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']),
   handler: spec('../../docs/graduation-evidence/web-scraper/handlers.ts.tmpl', []),
   tool: spec('../../docs/graduation-evidence/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
   dossier: spec('../../docs/graduation-evidence/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
@@ -91,7 +94,7 @@ const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kin
 
 const EXISTING_SOCIAL_MEDIA_AGENT_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
   spec: spec('../../docs/graduation-evidence/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
+  registration: spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']),
   handler: spec('../../docs/graduation-evidence/social-media-agent/handlers.ts.tmpl', []),
   tool: spec('../../docs/graduation-evidence/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
   dossier: spec('../../docs/graduation-evidence/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
@@ -205,8 +208,10 @@ function renderPlan(options: {
       throw new Error(`no template for artifact path: ${artifact.path}`);
     }
 
-    const source = readFileSync(join(TEMPLATE_ROOT, templatePath.file), 'utf8');
-    const rendered = renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
+    const source = readFileSync(join(rootFor(templatePath), templatePath.file), 'utf8');
+    const rendered = templatePath.substitute === false
+      ? renderDirectSource(source)
+      : renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
     const outPath = join(options.rootDir, artifact.path);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, rendered);
@@ -266,6 +271,9 @@ function templateForStandaloneArtifact(
   template: ProgramTemplate,
 ): TemplateSpec | undefined {
   if (template !== 'pgas-new-foundry') {
+    if (artifact.kind === 'registration') {
+      return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
+    }
     const override = STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE[template][artifact.kind];
     if (override) {
       return override;
@@ -300,6 +308,22 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
 
 function spec(file: string, tokens: readonly string[]): TemplateSpec {
   return { file, tokens };
+}
+
+function foundrySpec(file: string): TemplateSpec {
+  return { file, tokens: [], root: 'foundry', substitute: false };
+}
+
+function rootFor(template: TemplateSpec): string {
+  return template.root === 'foundry' ? FOUNDRY_PROGRAM_ROOT : TEMPLATE_ROOT;
+}
+
+function renderDirectSource(source: string): string {
+  if (/\{\{[^}]+\}\}/.test(source)) {
+    throw new Error('foundry program source must not contain template tokens');
+  }
+
+  return source;
 }
 
 function selectTokens(tokens: Record<string, string>, names: readonly string[]): Record<string, string> {

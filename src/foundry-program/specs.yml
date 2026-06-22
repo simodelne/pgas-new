@@ -1,10 +1,10 @@
-name: "{{SLUG}}"
+name: "pgas-new"
 termination: BoundedSession
 topology: CyclicTopology
 pure: true
 
 preamble: |
-  Program: {{NAME}}. You create PGAS programs through governed modes,
+  Program: PGAS New. You create PGAS programs through governed modes,
   explicit artifact planning, repo-curator wiring manifests, and static
   then live verification. Use only the current mode vocabulary and keep
   user decisions in the notebook-backed domain.
@@ -329,7 +329,7 @@ guidance: {}
 control_plane:
   version: 1
   session:
-    program: "{{SLUG}}"
+    program: "pgas-new"
     binding: identity_channel_program
     concurrency:
       policy: single_active
@@ -339,4 +339,79 @@ control_plane:
     bind:
       query: "$text"
   controls:
-{{CONTROL_PLANE_CONTROLS_YAML}}
+    ask:
+      title: Ask
+      aliases: ["/ask"]
+      args:
+        query:
+          type: string
+          required: true
+          capture: rest
+      dispatch:
+        - op: create_session
+          as: session
+          program: "pgas-new"
+          domain_context:
+            query: "$args.query"
+        - op: trigger
+          session: "$session.id"
+          channel: user_text
+          payload: "$args.query"
+          mode: async
+    abort:
+      title: Abort run
+      aliases: ["/abort", "/stop"]
+      availability:
+        when: "active_session.running"
+      dispatch:
+        - op: abort_session
+          session: "$active_session.id"
+      presentation:
+        priority: destructive
+        confirm: true
+    new:
+      title: New session
+      aliases: ["/new", "/reset", "/restart"]
+      dispatch:
+        - op: create_session
+          as: session
+          program: "pgas-new"
+      presentation:
+        priority: secondary
+    history:
+      title: Recent sessions
+      aliases: ["/history", "/recent"]
+      dispatch:
+        - op: list_sessions
+          as: sessions
+      presentation:
+        priority: secondary
+    status:
+      title: Status
+      aliases: ["/status"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: render_session
+          session: "$active_session.id"
+          view: status
+      presentation:
+        priority: contextual
+    resume:
+      title: Resume
+      aliases: ["/resume"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: send_runtime_control
+          session: "$active_session.id"
+          control: resume
+      presentation:
+        priority: contextual
+    help:
+      title: Help
+      aliases: ["/help"]
+      dispatch:
+        - op: render_help
+      presentation:
+        priority: secondary

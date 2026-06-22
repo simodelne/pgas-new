@@ -1,3 +1,5 @@
+> **SUPERSEDED by `docs/superpowers/specs/2026-06-22-v3-rebuild-plan.md` (revision 8).**
+
 # v3.0 Design — Restore the REPL-driven phase walk
 
 > **STATUS: SUPERSEDED** by `2026-06-22-v3-rebuild-plan.md` (the load-bearing v3.0 plan)

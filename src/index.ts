@@ -66,6 +66,8 @@ export {
   type RenderStandaloneOptions,
 } from "./pgas-new/template-renderer.js";
 
+export { createPgasNewFoundryProgramEntry } from "./foundry-program/registration.js";
+
 export {
   runLiveProviderVerification,
   runPostRebaseVerification,

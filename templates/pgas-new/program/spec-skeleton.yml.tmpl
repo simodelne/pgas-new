@@ -1,0 +1,160 @@
+name: "{{SLUG}}"
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
+
+preamble: |
+  Program: {{NAME}}. This is the generic pgas-new skeleton for a synthesized
+  TypeScript/Node PGAS program. Keep state changes declared in action_map
+  mutations and only use the current mode vocabulary.
+
+initial: start
+terminal: [complete]
+
+features:
+  - base
+  - runtime_control
+
+channels:
+  user_text: { direction: In, sync: Async }
+  widget_output: { direction: Out, sync: Async }
+
+modes:
+  start:
+    vocabulary: [begin_work, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [user_text, widget_output]
+    transitions:
+      - target: working
+        guard: { kind: FieldTruthy, path: work.started }
+  working:
+    vocabulary: [example_action, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [user_text, widget_output]
+    transitions:
+      - target: complete
+        guard: { kind: FieldTruthy, path: work.example_ready }
+  complete:
+    vocabulary: [session_status, session_history, session_help]
+    channels: [widget_output]
+
+proceed_to:
+  begin_work: working
+  example_action: complete
+
+projection:
+  start:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - work.started
+    exclude: []
+  working:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - work.example_ready
+      - work.example_result_json
+      - work.example_items_json
+    exclude: []
+  complete:
+    include:
+      - work.example_ready
+      - work.example_result_json
+      - work.example_items_json
+    exclude: []
+
+prompts:
+  start: "Capture the initial request and start the work."
+  working: "Perform the program's primary work."
+  complete: "Terminal mode after the work is complete."
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  begin_work:
+    description: "Record that the program has started."
+    mutations:
+      - { op: MSet, path: work.started, value: true }
+    channel: widget_output
+  record_user_note:
+    description: "Record a notebook note."
+    mutations:
+      - { op: MAppend, path: notebook.entries, from_arg: note }
+    channel: widget_output
+  example_action:
+    description: "Example synthesized action using JSON-string scalar state for structured values."
+    mutations:
+      - { op: MSet, path: work.example_ready, value: true }
+      - { op: MSet, path: work.example_result_json, value: '{"status":"ready","source":"skeleton"}' }
+      - { op: MSet, path: work.example_items_json, value: '["example"]' }
+    channel: widget_output
+  session_new: { description: "Control-plane new session command.", mutations: [], channel: widget_output }
+  session_abort_current: { description: "Control-plane abort current session command.", mutations: [], channel: widget_output }
+  session_status: { description: "Control-plane status command.", mutations: [], channel: widget_output }
+  session_history: { description: "Control-plane history command.", mutations: [], channel: widget_output }
+  session_resume: { description: "Control-plane resume command.", mutations: [], channel: widget_output }
+  session_help: { description: "Control-plane help command.", mutations: [], channel: widget_output }
+
+schema:
+  inputs.user_text: string
+  inputs.query_result.kind: string
+  inputs.query_result.value_json: object
+  inputs.query_meta.source_path: string
+  inputs.query_meta.source_channel: string
+  inputs.query_meta.continuation_round: number
+  inputs.query_meta.scope_redirect: string
+  inputs.query_meta.message: string
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
+  governance.round_counter: number
+  notebook.entries: array
+  notebook.pins: array
+  work.started: boolean
+  work.example_ready: boolean
+  work.example_result_json: string
+  work.example_items_json: string
+
+repair_bound: 2
+
+fallback:
+  channel: widget_output
+  payload: { ok: false }
+
+guidance: {}
+
+control_plane:
+  version: 1
+  session:
+    program: "{{SLUG}}"
+    binding: identity_channel_program
+    concurrency:
+      policy: single_active
+      on_busy: reject_with_status
+  free_text:
+    control: ask
+    bind:
+      query: "$text"
+  controls:
+    ask:
+      title: Ask
+      aliases: ["/ask"]
+      args:
+        query:
+          type: string
+          required: true
+          capture: rest
+      dispatch:
+        - op: create_session
+          as: session
+          program: "{{SLUG}}"
+          domain_context:
+            query: "$args.query"
+        - op: trigger
+          session: "$session.id"
+          channel: user_text
+          payload: "$args.query"
+          mode: async

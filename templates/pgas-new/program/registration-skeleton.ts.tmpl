@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import {
   createProgramAdapters,
   createToolRegistry,
-  enableNotebook,
   loadSpecWithPatterns,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
@@ -12,8 +11,7 @@ import { register{{PASCAL_NAME}}Tools } from './tools.js';
 
 export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
-  const { spec: loaded } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
-  const spec = enableNotebook(loaded, { excludeTerminal: true });
+  const { spec } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
   const toolRegistry = createToolRegistry();
   register{{PASCAL_NAME}}Tools(toolRegistry);
 

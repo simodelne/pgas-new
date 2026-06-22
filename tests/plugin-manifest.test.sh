@@ -42,7 +42,10 @@ for path in \
   src/pgas-new/model.ts \
   src/pgas-new/gates.ts \
   src/pgas-new/template-renderer.ts \
-  templates/pgas-new/program/specs.yml.tmpl \
+  src/foundry-program/specs.yml \
+  src/foundry-program/registration.ts \
+  templates/pgas-new/program/spec-skeleton.yml.tmpl \
+  templates/pgas-new/program/registration-skeleton.ts.tmpl \
   templates/pgas-new/repo/.pgas/wiring.yml.tmpl \
   docs/PGAS-NEW-ARCHITECTURE.md \
   docs/PGAS-NEW-LIVE-GRADUATION.md; do
