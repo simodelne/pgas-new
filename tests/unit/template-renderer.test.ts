@@ -1063,7 +1063,10 @@ describe('template renderer', () => {
       expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
       expect(parsed.schema['repo.write_authorized']).toBe('boolean');
       expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+      expect(parsed.schema['repo.wiring_manifest_json']).toBe('string');
+      expect(parsed.schema['repo.allowed_imports']).toBe('array');
       expect(parsed.schema['intake.research_allowed']).toBe('boolean');
+      expect(parsed.schema['intake.user_research_authorized']).toBe('boolean');
       expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
       expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
       expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
@@ -1073,10 +1076,10 @@ describe('template renderer', () => {
       expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
       expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
       expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.research_allowed' }]),
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
       );
       expect(parsed.modes.architecture_design.preconditions?.web_research).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.research_allowed' }]),
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
       );
       expect(parsed.modes.repo_targeting.preconditions?.authorize_existing_repo_target).toEqual(
         expect.arrayContaining([
@@ -1121,8 +1124,9 @@ describe('template renderer', () => {
       );
       expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ path: 'repo.wiring_manifest.status', from_arg: 'status' }),
-          expect.objectContaining({ path: 'repo.wiring_manifest.path', from_arg: 'path' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'valid' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' }),
+          expect.objectContaining({ path: 'repo.write_authorized', value: true }),
         ]),
       );
       expect(parsed.action_map.run_static_verification.mutations).toEqual(

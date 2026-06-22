@@ -45,7 +45,7 @@ modes:
         - { kind: TriggerType, triggerSet: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
       web_research:
-        - { kind: FieldTruthy, path: intake.research_allowed }
+        - { kind: FieldTruthy, path: intake.user_research_authorized }
     transitions:
       - target: architecture_design
         guard: { kind: FieldTruthy, path: program.design_confirmed }
@@ -75,7 +75,7 @@ modes:
       synthesize_program_spec:
         - { kind: FieldTruthy, path: program.design_confirmed }
       web_research:
-        - { kind: FieldTruthy, path: intake.research_allowed }
+        - { kind: FieldTruthy, path: intake.user_research_authorized }
     transitions:
       - target: scaffold_plan
         guard: { kind: FieldTruthy, path: program.synthesis_complete }
@@ -185,7 +185,7 @@ projection:
       - notebook.pins
     exclude: []
   repo_targeting:
-    include: [repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.write_authorized, repo.required_facilities_missing]
+    include: [repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.wiring_manifest_json, repo.allowed_imports, repo.write_authorized, repo.required_facilities_missing]
     exclude: []
   architecture_design:
     include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
@@ -197,16 +197,19 @@ projection:
     include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, artifact_plan.status, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
     exclude: []
   static_verify:
-    include: [graduation.static_verification, graduation.static_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
+    include: [program.target_dir, graduation.static_verification, graduation.static_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
     exclude: []
   live_verify:
-    include: [graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id]
+    include: [program.target_dir, graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id]
     exclude: []
   rebase_verify:
-    include: [graduation.rebase_status, graduation.rebase_evidence_id, graduation.rebase_verification, graduation.rebase_static_evidence_id]
+    include: [program.target_dir, graduation.rebase_status, graduation.rebase_evidence_id, graduation.rebase_verification, graduation.rebase_static_evidence_id]
+    exclude: []
+  pr_graduation:
+    include: [program.target_dir, graduation.rebase_verification]
     exclude: []
   curator_request:
-    include: [repo.curator_request_lodged, repo.required_facilities_missing]
+    include: [program.slug, repo.curator_request_lodged, repo.wiring_manifest_json, repo.required_facilities_missing, curator_requests.requests]
     exclude: []
 
 prompts:
@@ -279,12 +282,14 @@ action_map:
     mutations:
       - { op: MSet, path: intake.research_confirmed, value: true }
       - { op: MSet, path: intake.research_allowed, value: true }
+      - { op: MSet, path: intake.user_research_authorized, value: true }
     channel: widget_output
   record_user_requested_research:
     description: "Record user-requested research as authorized."
     mutations:
       - { op: MSet, path: intake.user_requested_research, value: true }
       - { op: MSet, path: intake.research_allowed, value: true }
+      - { op: MSet, path: intake.user_research_authorized, value: true }
       - { op: MAppend, path: research.queries, from_arg: query }
     channel: widget_output
   web_research: { description: "Run user-confirmed web research.", mutations: [], channel: widget_output }
@@ -310,9 +315,10 @@ action_map:
   load_wiring_manifest:
     description: "Load and validate fixed .pgas/wiring.yml for existing-repo writes."
     mutations:
-      - { op: MSet, path: repo.wiring_manifest.status, from_arg: status }
-      - { op: MSet, path: repo.wiring_manifest.path, from_arg: path }
-      - { op: MSet, path: repo.blocked, from_arg: blocked }
+      - { op: MSet, path: repo.wiring_manifest.status, value: valid }
+      - { op: MSet, path: repo.wiring_manifest.path, value: .pgas/wiring.yml }
+      - { op: MSet, path: repo.blocked, value: false }
+      - { op: MSet, path: repo.write_authorized, value: true }
     channel: widget_output
   authorize_existing_repo_target:
     description: "Authorize existing-repo writes after fixed manifest validation."
@@ -406,6 +412,7 @@ schema:
   intake.research_confirmed: boolean
   intake.user_requested_research: boolean
   intake.research_allowed: boolean
+  intake.user_research_authorized: boolean
   notebook.entries: array
   notebook.pins: array
   research.queries: array
@@ -416,6 +423,9 @@ schema:
   repo.curator_request_lodged: boolean
   repo.wiring_manifest.status: string
   repo.wiring_manifest.path: string
+  repo.wiring_manifest_json: string
+  repo.allowed_imports: array
+  repo.allowed_imports.*: string
   repo.required_facilities_missing: array
   program.runtime: string
   program.slug: string
@@ -433,6 +443,7 @@ schema:
   artifact_plan.write_authorized: boolean
   artifacts.written: boolean
   artifacts.generated_paths: array
+  curator_requests.requests: array
   graduation.static_verification: string
   graduation.static_evidence_id: string
   graduation.live_verification: string
