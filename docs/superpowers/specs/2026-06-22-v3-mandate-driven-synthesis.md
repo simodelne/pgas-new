@@ -1,154 +1,162 @@
-# v3.0 Design — Mandate-driven program synthesis
+# v3.0 Design — Restore the REPL-driven phase walk
 
 Date: 2026-06-22  
 Status: draft (for review)  
-Tracks: issue #35
+Tracks: issue #35  
+Supersedes: the prior draft of this file at commit `b20f888` (mandate-string framing — wrong, kept in git history)
 
-## Goal
+## Premise
 
-Restore pgas-new to the architecture documented in `docs/PGAS-NEW-ARCHITECTURE.md`: a session-driven foundry that **synthesizes a new PGAS program from a mandate**, not a CLI preset-picker that copies graduation evidence.
-
-After v3.0:
-
-- The CLI does not bake any program designs.
-- A user runs `pgas-new program <slug>`, has a real PGAS-mediated conversation through the foundry's own modes (`intake_intelligence → architecture_design → scaffold_plan → branch_write → static_verify`), and the foundry emits a freshly designed scaffold tailored to that mandate.
-- The three graduation programs (`policy-drafting`, `web-scraper`, `social-media-agent`) move from `templates/pgas-new/consumer/` to `docs/graduation-evidence/` as historical proof artifacts, with their build instructions captured as mandate texts that v3.0's foundry can reproduce.
-
-## What changes
-
-### 1. CLI surface
-
-**Remove:**
-- `--template policy-drafting`
-- `--template web-scraper`
-- `--template social-media-agent`
-
-**Keep:**
-- `--template pgas-new-foundry` (the legitimate self-bootstrap path; used to render a working copy of the foundry itself, which is what runs every other design session)
-
-**Add:**
-- `pgas-new program <slug> --name "<Name>" --mandate "<mandate text>"` — primary entry point. Starts an embedded foundry server, opens a session, drives it through the design modes, writes artifacts when `branch_write` completes, exits.
-- `pgas-new design <slug> --mandate "<mandate text>"` (alias) — same flow, different name if `program` reads as a noun-only.
-
-**Reframe:**
-- `render-standalone` becomes a low-level escape hatch that takes a fully synthesized program spec as input. The foundry uses it internally; humans usually shouldn't call it directly.
-- `render-attach` follows the same pattern for existing-repo flows.
-
-### 2. Foundry-as-PGAS-program is the actual implementation
-
-The `templates/pgas-new/program/specs.yml.tmpl` already declares the 10 design modes. The foundry is *itself* a PGAS program — it just hasn't been wired up to run as the CLI's primary surface.
-
-In v3.0:
+`pgas-new` was originally a **Claude Code slash command** (`/pgas-new-program`, v1.0.0) that ran an **interactive 6-question design interview in the user's session**:
 
 ```
-pgas-new program legal-fee-proposals \
-  --name "Legal Fee Proposals" \
-  --mandate "Draft state-of-art legal fee proposals for SimoneOS, UAE/DIFC jurisdiction, fixed-fee billing for AI audits."
+Q1 Purpose       → spec preamble ROLE + manifest.description
+Q2 Entry channel → bootstrap mode input channel
+Q3 Stages of work → MODE NAMES (not picked from preset!)
+Q4 Decision points → extra transitions, optional guards
+Q5 Delegation    → delegationPolicy TODO + architecture-doc note
+Q6 Completion criteria → terminal mode + guard
 ```
 
-Internally:
+The answers **parameterized a generic skeleton.** There were no `policy-drafting` / `web-scraper` / `social-media-agent` preset programs — those didn't exist yet.
 
-1. CLI starts an embedded `@simodelne/pgas-server` with the foundry program loaded.
-2. CLI opens a session with `domain_context = { query: mandate, slug, name }`.
-3. CLI starts the streaming REPL (the one shipped in `templates/pgas-new/standalone/src/repl/`) but bound to the foundry's own program, not a generated one.
-4. The LLM, running under the foundry's spec, drives `intake_intelligence` → asks clarifying questions if the mandate is underspecified → enters `architecture_design` → emits a fresh PGAS spec (modes, actions, schema) tailored to the mandate → enters `scaffold_plan` → emits an artifact plan → enters `branch_write` → writes the synthesized program to the target dir.
-5. CLI exits when the foundry session reaches a terminal mode.
+Commit `3d832b5` ("feat: add pgas-new foundry", 2026-06-19) re-platformed pgas-new from a Claude Code plugin to a TypeScript/Node CLI. In that one commit, the interactive interview was **deleted** (the CLI has no in-session LLM), and only the "render templates" step survived. The graduation programs (PR #27, #28, #29) were then **hand-authored** to prove the render step worked, and got bolted onto the CLI as `--template <preset>` because the design phase was already gone.
 
-The user can also choose to stay interactive (review the proposed architecture, request revisions, etc.) — same modes, same control plane.
+**That's the drift.** It happened in a single commit and was driven by a platform change, not a design decision.
 
-### 3. What the foundry actually emits
+## v3.0 goal
 
-A v3.0-synthesized program is structurally the same kind of artifact the graduation programs are — but the **shape** (modes, actions, schema fields) comes from the LLM-driven design phase, not from a frozen template.
+Restore the v1 intent on the v2.x foundation. The user gets back the REPL conversation that walks them through phases — but now it runs in the streaming REPL shipped in v2.5.x, against the foundry's own PGAS program (which already declares the right 10 modes), against a real engine (`@simodelne/pgas-server@2.13.0`).
 
-Concrete example. Mandate: "draft customer-support email replies for a SaaS startup."
+**Anti-goal:** the `--mandate "<string>"` one-shot synthesis from the prior draft of this doc is wrong. A single string can't carry the structure the v1 interview captured. The conversation is the design phase.
 
-- v2.6.0 (current): pick `--template policy-drafting`. Get a 5-mode program with `intake → outline → drafting → revision → complete` and fields like `policy_objectives`, `policy_type`, `jurisdiction`. Wrong shape.
-- v3.0: the foundry's `architecture_design` mode reads the mandate, decides email replies need a 4-mode flow: `triage → drafting → review → send_or_revise`; with fields `ticket.id, ticket.category, ticket.customer_tier, draft.body, review.user_approved`. Right shape.
-
-### 4. Where the graduation programs go
-
-`templates/pgas-new/consumer/{policy,web-scraper,social-media-agent}/` → `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/` with:
-
-- The original spec/handler/tool/dossier files preserved verbatim (for historical reference + regression-corpus when validating v3.0 synthesis).
-- A `MANDATE.md` capturing the mandate text that should produce a structurally-equivalent program when fed to v3.0's design phase.
-- A `regression.test.ts` that feeds the mandate into a deterministic harness (mock LLM with canned responses) and asserts the synthesized spec matches the frozen-graduation spec within an equivalence margin.
-
-This turns the three "templates" from product surface into the **deterministic regression corpus** that proves the synthesis engine doesn't drift.
-
-### 5. CLI usability
-
-To preserve the "I just want to render something quickly" path without re-introducing presets, v3.0 ships a small library of **named mandates** in `docs/example-mandates/`:
+## How v3.0 works (end-to-end)
 
 ```
-pgas-new program legal-fees --mandate-file docs/example-mandates/legal-fee-proposals.md
-pgas-new program scraper --mandate-file docs/example-mandates/web-scraper.md
+$ pgas-new design legal-fee-proposals
 ```
 
-Plus an interactive mode:
+1. CLI renders the `pgas-new-foundry` template to a temporary working dir.
+2. CLI starts the rendered foundry's embedded server against the configured LLM provider.
+3. CLI starts the rendered foundry's streaming REPL (the one we shipped in v2.5.x).
+4. The foundry program runs. Its first mode is `intake_intelligence`.
 
+Now the **agent walks the user through phases**, asking questions in the REPL, recording answers as governed state. Each mode advances when its exit gate is met. The user types, the agent responds, the spinner shows live SSE phases, mode banners print when modes change. **This is exactly what the v1 slash command did, but in a real REPL against a real engine.**
+
+The 10-mode walk (already declared in `templates/pgas-new/program/specs.yml.tmpl`):
+
+| Mode | What the agent does |
+|---|---|
+| `intake_intelligence` | Asks the v1 6 questions (Purpose, Entry channel, Stages, Decision points, Delegation, Completion) and any follow-ups. Records to `intake.*` and `notebook.*`. Optionally runs `web_research` if the user authorizes. |
+| `repo_targeting` | Asks whether to scaffold a standalone repo or attach to an existing repo. If existing, loads `.pgas/wiring.yml`. If missing, produces a curator request. |
+| `architecture_design` | Synthesizes the new PGAS spec from `intake.*`: stages become modes, decision points become transitions with guards, completion becomes terminal + guard. Records the synthesized spec to `architecture.*`. **This is the new synthesis action — described in §3 below.** |
+| `scaffold_plan` | Emits a first-class artifact plan for the synthesized program (specs.yml, registration.ts, handlers.ts, tools.ts, dossier, audit, tests, repo wiring). User approves. |
+| `branch_write` | Writes the planned artifacts to the target dir. Only planned artifacts. |
+| `static_verify` | Runs the static ladder on the freshly written scaffold: `npm install`, `npm run typecheck`, `npm test`. Records evidence. |
+| `live_verify` | (optional, user-confirmed) Runs a real-provider round trip against the generated program's external API. |
+| `rebase_verify` | (for attach flows) Rebases on the target repo's latest and reruns static. |
+| `pr_graduation` | Opens the PR. Terminal. |
+| `curator_request` | Side branch when a repo has no manifest or invalid wiring. |
+
+When the user reaches `pr_graduation` (or `branch_write` if they're not opening a PR), they have a working PGAS program tailored to their mandate, written to disk, typechecked, tested.
+
+## §3 The new synthesis action
+
+The single new piece of foundry-program logic v3.0 needs is an action in `architecture_design` mode that turns the structured intake into a PGAS spec.
+
+**Action: `synthesize_program_spec`**
+
+Input (read from state, populated during `intake_intelligence`):
+
+```ts
+{
+  purpose: string,                  // Q1
+  entry_channel: 'user_text' | 'webhook' | 'schedule' | ..., // Q2
+  stages: Array<{                   // Q3
+    slug: string,                   // e.g. 'intake', 'drafting'
+    description: string,
+    is_bootstrap?: boolean,         // first stage
+    is_terminal?: boolean,          // last stage
+  }>,
+  transitions: Array<{              // Q4
+    from: string,
+    to: string,
+    trigger: 'auto' | 'user_text' | 'user_confirmation',
+    guard_field?: string,           // dotted path
+    guard_value?: unknown,
+  }>,
+  delegation?: { from_mode: string, to_program: string }, // Q5
+  completion: {                     // Q6
+    final_stage: string,
+    guard_field: string,            // e.g. 'work.example_ready'
+  },
+}
 ```
-pgas-new design my-program
-> Describe what you want this program to do:
-< [user types mandate]
-> Asking 2 clarifying questions...
+
+Output (written to `architecture.synthesized_spec` as a structured object that `scaffold_plan` later renders to YAML):
+
+```ts
+{
+  name: string,           // from intake.program_slug
+  preamble: string,       // generated from purpose + stages
+  modes: Record<string, ModeSpec>,   // one per stage, FM3-safe (only bootstrap admits system_mode_entry)
+  channels: Record<string, ChannelSpec>,
+  ingestion: Record<string, string[]>,
+  schema: Record<string, string>,
+  action_map: Record<string, ActionSpec>,
+  proceed_to: Record<string, string>,
+  control_plane: ControlPlaneSpec,
+  // ... (full spec)
+}
 ```
 
-The example-mandates are *not* templates — they're text files. The foundry treats them identically to any other mandate. They're convenience starting points, nothing more.
+Synthesis rules — mechanical, the same as v1 (no freeform LLM JSON):
 
-## What stays the same
+1. Stage names → mode keys. First stage = bootstrap mode (the only one admitting `system_mode_entry`). Last stage = terminal mode.
+2. For each non-bootstrap, non-terminal stage: copy the `working` mode block template, rename it. Keeps the FM3-safe channel set.
+3. For each transition: emit a `from → to` row with the optional `guard`.
+4. Completion: terminal-mode transition gated on `work.<completion_field>`.
+5. Channels: emit `user_text`, `widget_output`, `system_mode_entry` (foundry-default) + any from `entry_channel`.
+6. `control_plane`: emit the standard 7-control vocabulary.
+7. Validate against the engine's spec loader before declaring the action complete.
 
-- The PGAS contract (public imports, banned imports, `system_mode_entry` channel, `control_plane` vocabulary).
-- The streaming REPL (`index.ts` + `renderer.ts`) — generated programs get the same REPL; the foundry uses the same REPL to drive its own design session.
-- The artifact-plan model — `planned-artifact-first` discipline is unchanged.
-- The verification ladder (`static_verify`, `live_verify`, `rebase_verify`, `pr_graduation`).
-- Existing-repo attach with `.pgas/wiring.yml` — same manifest, same refusal semantics.
+The LLM does **judgment** in `intake_intelligence` (asking questions, follow-ups, recording structured answers); the **synthesis itself is deterministic code** running inside the foundry handler. That keeps the spec shape predictable and testable.
 
-## What breaks
+## Phased delivery
 
-This is a **v3.0 major** because:
+**v2.7.0** (non-breaking, prepare):
+- Move `templates/pgas-new/consumer/{policy-drafting,web-scraper,social-media-agent}/` to `docs/graduation-evidence/{...}/`. Preserve files verbatim.
+- For each moved program, add a `MANDATE.md` capturing the structured intake (Q1–Q6 answers) that would produce a structurally-equivalent program.
+- Keep the `--template policy-drafting|web-scraper|social-media-agent` CLI flag working but mark deprecated in `--help`. Print a warning when used.
 
-1. `--template policy-drafting|web-scraper|social-media-agent` is removed.
-2. The CLI's primary surface shifts from `render-standalone` (one-shot file emitter) to `program`/`design` (session-driven).
-3. Generated scaffolds may have a slightly different `package.json` layout (peer-dep on the foundry's design library, if we factor anything out).
+**v2.8.0** (additive, conversation):
+- Add `pgas-new design <slug> [--name "..."]` CLI command. Renders `pgas-new-foundry` to a temp dir, starts its server + REPL, the user goes through the modes interactively. At `branch_write`, the foundry writes the synthesized program to the user's `--out` dir (or PWD).
+- Add a `record_intake` action variant in the foundry's spec that captures Q1–Q6 to `intake.purpose`, `intake.entry_channel`, `intake.stages`, `intake.transitions`, `intake.delegation`, `intake.completion`.
+- Old `--template` flags still work.
 
-Migration note for anyone using v2.x:
-- Rendered scaffolds from v2.x keep working (they don't depend on the foundry at runtime).
-- Re-rendering with v3.x via `program`/`design` will produce a different shape; explicit opt-in.
-- `pgas-new-foundry` template still works (it's the foundry's self-program; required for v3.x to bootstrap a copy of itself).
+**v2.9.0** (additive, synthesis):
+- Implement `synthesize_program_spec` action in the foundry's handler (per §3).
+- The action writes the synthesized spec to `architecture.synthesized_spec` and runs validator before completing.
+- `scaffold_plan` reads `architecture.synthesized_spec` and produces an artifact plan from it.
+- `branch_write` writes the synthesized spec + handlers + tools (boilerplate handlers/tools generated from the spec's action_map and channel list).
+- Add deterministic regression tests: feed each graduation `MANDATE.md` into the synthesis flow (with a deterministic LLM stub for the intake conversation) and assert the output matches the frozen graduation spec within a structural-equivalence margin.
 
-## Implementation phases
-
-**Phase 1 — Capture graduation evidence (non-breaking, ships as v2.7.0):**
-- Move spec/handler/tool/dossier files to `docs/graduation-evidence/` (copy, not delete).
-- Add `MANDATE.md` per graduation program describing what the mandate would have been.
-- Keep the `--template` flag working in v2.7.x for backwards compat; mark as deprecated in `--help`.
-
-**Phase 2 — Implement the design CLI (additive, ships as v2.8.0):**
-- Add `pgas-new program <slug> --mandate "..."` and `pgas-new design <slug>` commands.
-- These call into the foundry's PGAS program (via embedded server, same as the streaming REPL).
-- The foundry's `architecture_design` mode needs an `emit_spec` action that produces a `specs.yml` from the projected mandate state — this is the synthesis work.
-- Existing `--template` flag still works; new commands run in parallel.
-
-**Phase 3 — Regression corpus (additive, ships as v2.9.0):**
-- For each graduation program, add a `regression.test.ts` that feeds the captured `MANDATE.md` into the synthesis engine (with deterministic LLM stub) and asserts the output matches the frozen graduation spec within tolerance.
-- Establishes the test fence that prevents the synthesis engine from regressing.
-
-**Phase 4 — Remove templates (breaking, ships as v3.0.0):**
+**v3.0.0** (breaking, cleanup):
+- Delete `--template policy-drafting|web-scraper|social-media-agent`. Print error suggesting `pgas-new design <slug>`.
 - Delete `templates/pgas-new/consumer/`.
-- Remove `--template policy-drafting|web-scraper|social-media-agent` from the CLI surface (return error suggesting `pgas-new program`).
-- Update README, architecture doc, and all docs.
-- Generated scaffolds from v3.0 do *not* carry baked program designs; only `pgas-new-foundry` remains as the bootstrap template.
+- `--template pgas-new-foundry` stays as the bootstrap path.
+- Update README, architecture doc, all docs. Cut v3.0 release.
 
-## Open questions for review
+## What stays the same in v3.0
 
-1. **`emit_spec` action design.** The foundry's `architecture_design` mode needs to output a full PGAS spec from state. What's the shape? Free-form LLM JSON + Zod validation? A constrained DSL? A multi-action sequence (`declare_mode`, `declare_action`, `declare_schema_field`) accumulating into the artifact plan?
-2. **LLM determinism for regression tests.** Phase 3 needs a deterministic stub LLM (canned responses keyed by prompt hash). Is that supported by `@simodelne/pgas-server/testing.js` already, or does it need a new test surface?
-3. **Mandate expressiveness.** A single mandate string limits what the user can express. Should `pgas-new design` open an interactive intake conversation by default (using the foundry's `intake_intelligence` mode), and `pgas-new program` be the one-shot non-interactive variant?
-4. **Existing-repo attach.** `render-attach` currently follows the same preset model. Phase 4 needs to decide whether attach is a thin wrapper around `program` (mandate → synthesize → write to attach paths) or a separate flow.
+- PGAS contract: public-only imports, banned-import scanner, `system_mode_entry` continuation channel, `control_plane` vocabulary.
+- Streaming REPL (`index.ts` + `renderer.ts`): generated programs use it; the foundry uses the same REPL to drive its own design session.
+- Artifact-plan-first discipline.
+- `.pgas/wiring.yml` manifest for existing-repo attach.
+- Verification ladder (`static_verify` → `live_verify` → `rebase_verify` → `pr_graduation`).
 
-## Non-goals for v3.0
+## Implementation delegation
 
-- A generic PGAS spec editor / GUI.
-- Multi-language program generation (Python, Go, etc.) — TypeScript/Node only per the existing invariant.
-- A package on the public npm registry — pgas-new stays on GitHub Packages.
-- Removing the foundry's self-program template (`pgas-new-foundry`). That's the legitimate bootstrap path.
+Implementation of Phase 1 + Phase 2 is delegated to Codex (see the Codex prompt in `.uat/codex-impl-prompt-phase-1-2.md` — Codex runs with `workspace-write` sandbox, approval policy `never`, and works on a branch).
+
+Phase 3 (synthesis + regression tests) is the riskiest piece and should land as its own PR after Phase 2 ships and the conversation flow is verified end-to-end. Phase 4 (breaking) only after Phase 3 ships.
