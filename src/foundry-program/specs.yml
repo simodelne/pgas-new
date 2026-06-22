@@ -244,6 +244,22 @@ projection:
 
 prompts:
   intake_intelligence: |
+    Output protocol (MUST follow):
+    - When you need to commit state (record a Q-answer, choose a path,
+      approve, etc.), emit a NATIVE OpenAI tool_call. The available tools
+      are listed in the system's tools array -- their schemas define the
+      exact argument names.
+    - DO NOT emit a JSON object in the message content describing the
+      action. DO NOT emit an object with a `MutationAction` shape. DO NOT
+      use the spec's `from` + `_arg: <name>` syntax as a literal argument
+      key -- that mapping marker is internal spec syntax describing how the
+      engine maps your tool argument named `<name>` to a state path.
+    - When you need to ASK the user something (not commit state), emit
+      plain natural-language text in the message content WITHOUT any
+      tool_call. The engine will pause and the next round will deliver
+      the user's reply via inputs.user_text.
+    - One tool_call per round.
+
     This mode collects the program-design intake. You MUST drive the design
     interview by calling the declared tools as tool calls when you are ready
     to commit governed state -- NOT by emitting raw JSON mutations.
@@ -292,7 +308,24 @@ prompts:
     Do not pre-fill or batch multiple tool calls in one response.
   repo_targeting: "Validate target mode and fixed .pgas/wiring.yml if attaching to an existing repo."
   architecture_design: "Run the deterministic program-spec synthesizer."
-  scaffold_plan: "Create and approve the artifact plan before writes."
+  scaffold_plan: |
+    Output protocol (MUST follow):
+    - When you need to commit state (record a Q-answer, choose a path,
+      approve, etc.), emit a NATIVE OpenAI tool_call. The available tools
+      are listed in the system's tools array -- their schemas define the
+      exact argument names.
+    - DO NOT emit a JSON object in the message content describing the
+      action. DO NOT emit an object with a `MutationAction` shape. DO NOT
+      use the spec's `from` + `_arg: <name>` syntax as a literal argument
+      key -- that mapping marker is internal spec syntax describing how the
+      engine maps your tool argument named `<name>` to a state path.
+    - When you need to ASK the user something (not commit state), emit
+      plain natural-language text in the message content WITHOUT any
+      tool_call. The engine will pause and the next round will deliver
+      the user's reply via inputs.user_text.
+    - One tool_call per round.
+
+    Create and approve the artifact plan before writes.
   branch_write: "Write only planned artifacts."
   static_verify: "Run static verification and record evidence."
   live_verify: "Run real-provider verification through the external API."

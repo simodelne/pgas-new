@@ -30,11 +30,13 @@ describe('startFoundryServer', () => {
   const createPgasServerMock = vi.mocked(createPgasServer);
   const createEntryMock = vi.mocked(createPgasNewFoundryProgramEntry);
   const originalFoundryPort = process.env.PGAS_FOUNDRY_PORT;
+  const originalDisableJsonResponseFormat = process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
 
   beforeEach(() => {
     createPgasServerMock.mockReset();
     createEntryMock.mockClear();
     delete process.env.PGAS_FOUNDRY_PORT;
+    delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
   });
 
   afterEach(() => {
@@ -42,6 +44,11 @@ describe('startFoundryServer', () => {
       delete process.env.PGAS_FOUNDRY_PORT;
     } else {
       process.env.PGAS_FOUNDRY_PORT = originalFoundryPort;
+    }
+    if (originalDisableJsonResponseFormat === undefined) {
+      delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
+    } else {
+      process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = originalDisableJsonResponseFormat;
     }
   });
 
@@ -110,6 +117,33 @@ describe('startFoundryServer', () => {
     await server.kill();
 
     expect(engine.close).toHaveBeenCalledOnce();
+  });
+
+  it('disables OpenAI JSON response format by default before creating the server', async () => {
+    const engine = mockPgasServer({ boundPort: 4558 });
+    createPgasServerMock.mockImplementation(async () => {
+      expect(process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT).toBe('1');
+      return engine;
+    });
+
+    await startFoundryServer({ port: 4558, hostname: '127.0.0.1' });
+
+    expect(process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT).toBe('1');
+    expect(createPgasServerMock).toHaveBeenCalledOnce();
+  });
+
+  it('honors an explicit OpenAI JSON response format override', async () => {
+    const engine = mockPgasServer({ boundPort: 4559 });
+    createPgasServerMock.mockImplementation(async () => {
+      expect(process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT).toBe('0');
+      return engine;
+    });
+    process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = '0';
+
+    await startFoundryServer({ port: 4559, hostname: '127.0.0.1' });
+
+    expect(process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT).toBe('0');
+    expect(createPgasServerMock).toHaveBeenCalledOnce();
   });
 
   function serverConfig(): PgasServerConfig {

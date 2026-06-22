@@ -17,6 +17,18 @@ const PROGRAM_NAME = 'pgas-new';
 export async function startFoundryServer(options: FoundryServerOptions = {}): Promise<StartedFoundryServer> {
   const requestedPort = resolvePort(options);
   const hostname = options.hostname ?? DEFAULT_HOSTNAME;
+  /**
+   * Phase 3.16 tightened native tool schemas, but Section 10 Round 9 still
+   * captured Qwen emitting legacy MutationAction content with hadToolCalls=false.
+   * The installed PGAS server forces OpenAI JSON response_format unless this env
+   * var is set, and JSON mode + tools pulls Qwen into content instead of
+   * native tool_calls. Default it off for foundry launches while honoring an
+   * explicit override such as =0 for diagnostics.
+   */
+  if (process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT === undefined) {
+    process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = '1';
+  }
+
   const server = await createPgasServer({
     programs: [{ name: PROGRAM_NAME, entry: createPgasNewFoundryProgramEntry() }],
     port: requestedPort,
