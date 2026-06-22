@@ -1,6 +1,9 @@
 import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+import { load } from 'js-yaml';
+import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
+import type { WiringManifest } from '../pgas-new/wiring-manifest.js';
 import { synthesizeProgramSpecFromDomain } from './synthesizer.js';
-import { putSynthesizedArtifact } from './synthesizer-store.js';
+import { putSynthesizedArtifact, requireSynthesizedArtifact } from './synthesizer-store.js';
 
 const defaultStages = [
   { slug: 'start', is_bootstrap: true },
@@ -106,6 +109,33 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 
+  async plan_artifacts(payload) {
+    const sessionId = sessionIdFromPayload(payload);
+    const domain = domainFromPayload(payload);
+    const synthesized = requireSynthesizedArtifact(sessionId);
+    const parsedSpec = load(synthesized.spec_yaml) as { name?: string; modes?: Record<string, unknown> };
+    const program = {
+      slug: stringDomainField(domain, 'program.slug'),
+      name: stringDomainField(domain, 'program.name'),
+    };
+    const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
+    const plan = targetKind === 'existing_repo'
+      ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain))
+      : createStandaloneArtifactPlan(program);
+
+    return {
+      kind: 'artifact_plan_drafted',
+      target: plan.target,
+      artifact_count: plan.artifacts.length,
+      artifacts: plan.artifacts,
+      synthesized_spec: {
+        name: parsedSpec.name,
+        mode_names: Object.keys(parsedSpec.modes ?? {}),
+        sha256: synthesized.sha256,
+      },
+    };
+  },
+
   async record_user_note(payload) {
     return {
       kind: 'note_recorded',
@@ -150,4 +180,43 @@ function domainFromPayload(payload: Record<string, unknown>): Record<string, unk
     throw new Error('synthesize_program_spec requires payload.domain from the engine domain snapshot');
   }
   return domain as Record<string, unknown>;
+}
+
+function stringDomainField(domain: Record<string, unknown>, path: string): string {
+  const value = domainValue(domain, path);
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`missing string domain field: ${path}`);
+  }
+  return value;
+}
+
+function optionalStringDomainField(domain: Record<string, unknown>, path: string): string | undefined {
+  const value = domainValue(domain, path);
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function parseWiringManifestDomainField(domain: Record<string, unknown>): WiringManifest {
+  const value = domainValue(domain, 'repo.wiring_manifest_json') ?? domainValue(domain, 'repo.wiring_manifest');
+  if (typeof value === 'string') {
+    return JSON.parse(value) as WiringManifest;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as WiringManifest;
+  }
+  throw new Error('existing-repo artifact planning requires repo.wiring_manifest_json');
+}
+
+function domainValue(domain: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(domain, path)) {
+    return domain[path];
+  }
+
+  let current: unknown = domain;
+  for (const segment of path.split('.')) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
 }

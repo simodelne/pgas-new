@@ -227,6 +227,9 @@ describe('template renderer', () => {
       expect(parsed.modes.architecture_design.preconditions?.synthesize_program_spec).toEqual(
         expect.arrayContaining([{ kind: 'FieldTruthy', path: 'program.design_confirmed' }]),
       );
+      expect(parsed.modes.architecture_design.transitions).toEqual([
+        { target: 'scaffold_plan', guard: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
+      ]);
       expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
       expect(parsed.modes.intake_intelligence.transitions).toEqual(
         expect.arrayContaining([
@@ -382,6 +385,14 @@ describe('template renderer', () => {
         'intake.program_intake_recorded': 'boolean',
       });
       expect(parsed.schema).not.toHaveProperty('program.synthesized_spec');
+      expect(parsed.guidance.architecture_design).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('call synthesize_program_spec'),
+          expect.stringContaining('in-process transit'),
+        ]),
+      );
+      expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
+      expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
       expect(parsed.guidance.intake_intelligence).toEqual(
         expect.arrayContaining([
           expect.stringContaining('program.target_dir_confirmed is not true'),

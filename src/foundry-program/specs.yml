@@ -78,7 +78,7 @@ modes:
         - { kind: FieldTruthy, path: intake.research_allowed }
     transitions:
       - target: scaffold_plan
-        guard: { kind: FieldTruthy, path: program.architecture_ready }
+        guard: { kind: FieldTruthy, path: program.synthesis_complete }
   scaffold_plan:
     vocabulary: [plan_artifacts, approve_artifact_plan, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_confirmation, system_mode_entry, widget_output]
@@ -146,6 +146,7 @@ proceed_to:
   authorize_standalone_target: architecture_design
   authorize_existing_repo_target: architecture_design
   design_architecture: scaffold_plan
+  synthesize_program_spec: scaffold_plan
   confirm_design: architecture_design
   approve_artifact_plan: branch_write
   write_scaffold_artifacts: static_verify
@@ -187,10 +188,10 @@ projection:
     include: [repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.write_authorized, repo.required_facilities_missing]
     exclude: []
   architecture_design:
-    include: [program.slug, program.runtime, program.architecture_ready]
+    include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
     exclude: []
   scaffold_plan:
-    include: [artifact_plan.status, artifact_plan.approved, artifact_plan.write_authorized]
+    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, artifact_plan.status, artifact_plan.approved, artifact_plan.write_authorized]
     exclude: []
   branch_write:
     include: [artifacts.written, artifacts.generated_paths]
@@ -211,7 +212,7 @@ projection:
 prompts:
   intake_intelligence: "Capture mandate, notebook notes, and confirmed research scope."
   repo_targeting: "Validate target mode and fixed .pgas/wiring.yml if attaching to an existing repo."
-  architecture_design: "Design the PGAS-specific program and attachment points."
+  architecture_design: "Run the deterministic program-spec synthesizer."
   scaffold_plan: "Create and approve the artifact plan before writes."
   branch_write: "Write only planned artifacts."
   static_verify: "Run static verification and record evidence."
@@ -469,10 +470,13 @@ guidance:
     - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask which dimension to revise, re-run the relevant step, and re-emit the echo-back."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
   scaffold_plan:
-    - "Call plan_artifacts to produce the artifact plan from program.synthesized_spec."
+    - "Call plan_artifacts to produce the artifact plan from the synthesized spec in in-process transit. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
     - "Echo the artifact-plan list (paths + purposes) to the user. Ask for approval via request_user_action with intent='approve_artifact_plan'."
     - "On user_confirmation decision='approve', call approve_artifact_plan. Then the transition to branch_write fires."
     - "On reject/edit: don't call approve_artifact_plan; ask which artifact the user wants changed; re-emit."
+  architecture_design:
+    - "On entering architecture_design after confirm_design, call synthesize_program_spec. The handler performs mechanical synthesis with no LLM call, writes the YAML to in-process transit for this session, and flips program.synthesis_complete via the action-map mutation."
+    - "After synthesize_program_spec succeeds, transition to scaffold_plan. If the foundry server restarted and downstream planning reports missing transit state, re-run synthesize_program_spec; same intake produces the same YAML."
 
 control_plane:
   version: 1
