@@ -141,6 +141,49 @@ describe('synthesize_program_spec handler', () => {
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 
+  it('accepts completion before a later blocked terminal sink', async () => {
+    const stageNames = ['intake', 'draft', 'review', 'complete', 'blocked'];
+    clearSynthesizedArtifact('session-nonfinal-completion');
+
+    await handlers.synthesize_program_spec({
+      sessionId: 'session-nonfinal-completion',
+      domain: domain({
+        'intake.stages_json': JSON.stringify(stageNames.map((slug, index) => ({
+          slug,
+          is_bootstrap: index === 0 || undefined,
+          is_terminal: slug === 'complete' || slug === 'blocked' || undefined,
+        }))),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'draft', trigger: 'started', guard_field: 'intake.started' },
+          { from: 'draft', to: 'review', trigger: 'ready', guard_field: 'draft.ready' },
+          { from: 'review', to: 'complete', trigger: 'approved', guard_field: 'review.approved' },
+          { from: 'draft', to: 'blocked', trigger: 'blocked', guard_field: 'draft.blocked' },
+        ]),
+        'intake.completion_json': JSON.stringify({
+          final_stage: 'complete',
+          guard_field: 'review.done',
+        }),
+      }),
+    });
+
+    const artifact = getSynthesizedArtifact('session-nonfinal-completion');
+    const parsed = load(artifact?.spec_yaml ?? '') as {
+      terminal: string[];
+      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
+    };
+
+    expect(Object.keys(parsed.modes)).toEqual(stageNames);
+    expect(parsed.terminal).toEqual(['complete', 'blocked']);
+    expect(parsed.modes.complete.transitions).toEqual([]);
+    expect(parsed.modes.blocked.transitions).toEqual([]);
+    expect(parsed.modes.review.transitions).toEqual([
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.done' } },
+    ]);
+    expect(parsed.modes.complete.vocabulary).toEqual(['session_status', 'session_history', 'session_help']);
+    expect(parsed.modes.blocked.vocabulary).toEqual(['session_status', 'session_history', 'session_help']);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
   it('synthesizes 9-stage intake graphs and parses them through the engine loader', async () => {
     const stageNames = [
       'intake',

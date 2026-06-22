@@ -54,11 +54,21 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
 
   const modeNames = stages.map((stage) => stage.slug);
   const firstMode = modeNames[0] as string;
-  const terminalMode = modeNames[modeNames.length - 1] as string;
-  const intermediateModes = modeNames.slice(1, -1);
-  if (completion.final_stage !== terminalMode) {
-    throw new Error(`completion.final_stage must be ${terminalMode}; got ${completion.final_stage}`);
+  const modeNameSet = new Set(modeNames);
+  if (!modeNameSet.has(completion.final_stage)) {
+    throw new Error(`completion.final_stage must reference a named stage; got ${completion.final_stage}`);
   }
+  const outgoingModes = new Set(transitions.map((transition) => transition.from));
+  const terminalModes = modeNames.filter((modeName) => !outgoingModes.has(modeName));
+  if (terminalModes.length === 0) {
+    throw new Error('synthesized topology must declare at least one terminal stage with no outgoing transitions');
+  }
+  if (!terminalModes.includes(completion.final_stage)) {
+    throw new Error(`completion.final_stage must be terminal (no outgoing transitions); got ${completion.final_stage}`);
+  }
+  const terminalModeSet = new Set(terminalModes);
+  const intermediateModes = modeNames.filter((modeName) => modeName !== firstMode && !terminalModeSet.has(modeName));
+  const firstWorkMode = transitions.find((transition) => transition.from === firstMode)?.to ?? intermediateModes[0];
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
     NAME: name,
@@ -69,31 +79,35 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   spec.name = slug;
   spec.preamble = `Program: ${name}. ${purpose}\n\nThis spec was synthesized mechanically by pgas-new.`;
   spec.initial = firstMode;
-  spec.terminal = [terminalMode];
+  spec.terminal = terminalModes;
 
   const sourceModes = recordField(spec, 'modes');
   const synthesizedModes: MutableRecord = {};
-  synthesizedModes[firstMode] = transformMode(cloneRecord(sourceModes.start), {
-    channels: channelsForBootstrap(entryChannel),
-    transitions: [],
-  });
-  for (const modeName of intermediateModes) {
-    synthesizedModes[modeName] = transformMode(cloneRecord(sourceModes.working), {
-      channels: ['user_text', 'widget_output'],
-      transitions: [],
-    });
+  for (const modeName of modeNames) {
+    if (terminalModeSet.has(modeName)) {
+      synthesizedModes[modeName] = transformMode(cloneRecord(sourceModes.complete), {
+        channels: ['widget_output'],
+        transitions: [],
+      });
+    } else if (modeName === firstMode) {
+      synthesizedModes[modeName] = transformMode(cloneRecord(sourceModes.start), {
+        channels: channelsForBootstrap(entryChannel),
+        transitions: [],
+      });
+    } else {
+      synthesizedModes[modeName] = transformMode(cloneRecord(sourceModes.working), {
+        channels: ['user_text', 'widget_output'],
+        transitions: [],
+      });
+    }
   }
-  synthesizedModes[terminalMode] = transformMode(cloneRecord(sourceModes.complete), {
-    channels: ['widget_output'],
-    transitions: [],
-  });
 
   applyTransitions(synthesizedModes, transitions, completion, modeNames);
   spec.modes = synthesizedModes;
 
   spec.proceed_to = {
-    begin_work: intermediateModes[0],
-    example_action: terminalMode,
+    begin_work: firstWorkMode,
+    example_action: completion.final_stage,
   };
 
   const startedField = `${firstMode}.started`;
@@ -111,11 +125,13 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
       include: unique([`inputs.${entryChannel}`, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
       exclude: [],
     },
-    [terminalMode]: {
+  };
+  for (const modeName of terminalModes) {
+    projection[modeName] = {
       include: unique([...intermediateGuardFields, ...intermediateJsonFields]),
       exclude: [],
-    },
-  };
+    };
+  }
   for (const modeName of intermediateModes) {
     projection[modeName] = {
       include: unique([
@@ -133,8 +149,12 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
 
   const prompts: MutableRecord = {
     [firstMode]: `Capture the initial request for ${name} and start the work.`,
-    [terminalMode]: `Terminal mode after ${name} completion is confirmed.`,
   };
+  for (const modeName of terminalModes) {
+    prompts[modeName] = modeName === completion.final_stage
+      ? `Terminal mode after ${name} completion is confirmed.`
+      : `Terminal sink mode after ${name} cannot progress further.`;
+  }
   for (const modeName of intermediateModes) {
     prompts[modeName] = `Perform the ${modeName} stage for ${name}.`;
   }
