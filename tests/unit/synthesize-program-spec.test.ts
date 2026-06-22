@@ -101,15 +101,74 @@ describe('synthesize_program_spec handler', () => {
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 
-  it('rejects intake with a non-3-stage mode graph', async () => {
-    await expect(
-      handlers.synthesize_program_spec({
-        sessionId: 'session-too-many-stages',
-        domain: domain({
-          'intake.stages_json': JSON.stringify([...stages, { slug: 'closed' }]),
+  it('rejects intake with fewer than 3 stages', async () => {
+    for (const stageList of [[], [{ slug: 'intake' }], [{ slug: 'intake' }, { slug: 'resolved' }]]) {
+      await expect(
+        handlers.synthesize_program_spec({
+          sessionId: `session-${stageList.length}-stages`,
+          domain: domain({
+            'intake.stages_json': JSON.stringify(stageList),
+            'intake.transitions_json': JSON.stringify(transitionsFor(stageList.map((stage) => stage.slug))),
+            'intake.completion_json': JSON.stringify({
+              final_stage: stageList.at(-1)?.slug ?? 'missing',
+              guard_field: 'work.ready',
+            }),
+          }),
         }),
-      }),
-    ).rejects.toThrow(/synthesizer expects 3 stages; got 4/);
+      ).rejects.toThrow(new RegExp(`synthesizer expects at least 3 stages; got ${stageList.length}`));
+    }
+  });
+
+  it('synthesizes 5-stage intake graphs and parses them through the engine loader', async () => {
+    const stageNames = ['intake', 'classify', 'investigate', 'resolve', 'closed'];
+    const result = await synthesizeStageGraph('session-five-stages', stageNames);
+    const artifact = getSynthesizedArtifact('session-five-stages');
+    const parsed = load(artifact?.spec_yaml ?? '') as {
+      modes: Record<string, unknown>;
+      schema: Record<string, string>;
+    };
+
+    expect(result).toMatchObject({ mode_names: stageNames });
+    expect(Object.keys(parsed.modes)).toEqual(stageNames);
+    expect(parsed.schema).toMatchObject({
+      'classify.result_json': 'string',
+      'classify.items_json': 'string',
+      'investigate.result_json': 'string',
+      'investigate.items_json': 'string',
+      'resolve.result_json': 'string',
+      'resolve.items_json': 'string',
+    });
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
+  it('synthesizes 9-stage intake graphs and parses them through the engine loader', async () => {
+    const stageNames = [
+      'intake',
+      'intelligence',
+      'egress_verification',
+      'web_analysis',
+      'strategy_review',
+      'scraping',
+      'asset_verification',
+      'reporting',
+      'complete',
+    ];
+    const result = await synthesizeStageGraph('session-nine-stages', stageNames);
+    const artifact = getSynthesizedArtifact('session-nine-stages');
+    const parsed = load(artifact?.spec_yaml ?? '') as {
+      modes: Record<string, unknown>;
+      schema: Record<string, string>;
+    };
+
+    expect(result).toMatchObject({ mode_names: stageNames });
+    expect(Object.keys(parsed.modes)).toEqual(stageNames);
+    expect(parsed.schema).toMatchObject({
+      'intelligence.result_json': 'string',
+      'web_analysis.items_json': 'string',
+      'asset_verification.result_json': 'string',
+      'reporting.items_json': 'string',
+    });
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 
   it('rejects intake with wrong JSON-string field types', async () => {
@@ -121,6 +180,34 @@ describe('synthesize_program_spec handler', () => {
     ).rejects.toThrow(/missing JSON-string domain field: intake\.transitions_json/);
   });
 });
+
+async function synthesizeStageGraph(sessionId: string, stageNames: string[]) {
+  clearSynthesizedArtifact(sessionId);
+  return handlers.synthesize_program_spec({
+    sessionId,
+    domain: domain({
+      'intake.stages_json': JSON.stringify(stageNames.map((slug, index) => ({
+        slug,
+        is_bootstrap: index === 0 || undefined,
+        is_terminal: index === stageNames.length - 1 || undefined,
+      }))),
+      'intake.transitions_json': JSON.stringify(transitionsFor(stageNames)),
+      'intake.completion_json': JSON.stringify({
+        final_stage: stageNames.at(-1),
+        guard_field: `${stageNames.at(-2)}.ready`,
+      }),
+    }),
+  });
+}
+
+function transitionsFor(stageNames: string[]) {
+  return stageNames.slice(0, -1).map((from, index) => ({
+    from,
+    to: stageNames[index + 1],
+    trigger: index === 0 ? 'started' : 'ready',
+    guard_field: index === 0 ? `${from}.started` : `${from}.ready`,
+  }));
+}
 
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-load-'));

@@ -53,7 +53,9 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   assertCompletion(completion);
 
   const modeNames = stages.map((stage) => stage.slug);
-  const [firstMode, middleMode, terminalMode] = modeNames as [string, string, string];
+  const firstMode = modeNames[0] as string;
+  const terminalMode = modeNames[modeNames.length - 1] as string;
+  const intermediateModes = modeNames.slice(1, -1);
   if (completion.final_stage !== terminalMode) {
     throw new Error(`completion.final_stage must be ${terminalMode}; got ${completion.final_stage}`);
   }
@@ -70,57 +72,73 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   spec.terminal = [terminalMode];
 
   const sourceModes = recordField(spec, 'modes');
-  const synthesizedModes: MutableRecord = {
-    [firstMode]: transformMode(cloneRecord(sourceModes.start), {
-      modeName: firstMode,
-      channels: channelsForBootstrap(entryChannel),
-      transitions: [],
-    }),
-    [middleMode]: transformMode(cloneRecord(sourceModes.working), {
-      modeName: middleMode,
+  const synthesizedModes: MutableRecord = {};
+  synthesizedModes[firstMode] = transformMode(cloneRecord(sourceModes.start), {
+    channels: channelsForBootstrap(entryChannel),
+    transitions: [],
+  });
+  for (const modeName of intermediateModes) {
+    synthesizedModes[modeName] = transformMode(cloneRecord(sourceModes.working), {
       channels: ['user_text', 'widget_output'],
       transitions: [],
-    }),
-    [terminalMode]: transformMode(cloneRecord(sourceModes.complete), {
-      modeName: terminalMode,
-      channels: ['widget_output'],
-      transitions: [],
-    }),
-  };
+    });
+  }
+  synthesizedModes[terminalMode] = transformMode(cloneRecord(sourceModes.complete), {
+    channels: ['widget_output'],
+    transitions: [],
+  });
 
   applyTransitions(synthesizedModes, transitions, completion, modeNames);
   spec.modes = synthesizedModes;
 
   spec.proceed_to = {
-    begin_work: middleMode,
+    begin_work: intermediateModes[0],
     example_action: terminalMode,
   };
 
   const startedField = `${firstMode}.started`;
-  const resultField = `${middleMode}.result_json`;
-  const itemsField = `${middleMode}.items_json`;
-  const completionField = completion.guard_field;
+  const guardFieldsByMode = guardFieldsBySourceMode(transitions, completion);
+  const intermediateJsonFields = intermediateModes.flatMap((modeName) => [
+    `${modeName}.result_json`,
+    `${modeName}.items_json`,
+  ]);
+  const intermediateGuardFields = unique(
+    intermediateModes.flatMap((modeName) => guardFieldsByMode.get(modeName) ?? []),
+  );
 
-  spec.projection = {
+  const projection: MutableRecord = {
     [firstMode]: {
-      include: [`inputs.${entryChannel}`, 'notebook.entries', 'notebook.pins', startedField],
-      exclude: [],
-    },
-    [middleMode]: {
-      include: [`inputs.${entryChannel}`, 'notebook.entries', 'notebook.pins', completionField, resultField, itemsField],
+      include: unique([`inputs.${entryChannel}`, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
       exclude: [],
     },
     [terminalMode]: {
-      include: [completionField, resultField, itemsField],
+      include: unique([...intermediateGuardFields, ...intermediateJsonFields]),
       exclude: [],
     },
   };
+  for (const modeName of intermediateModes) {
+    projection[modeName] = {
+      include: unique([
+        `inputs.${entryChannel}`,
+        'notebook.entries',
+        'notebook.pins',
+        ...(guardFieldsByMode.get(modeName) ?? []),
+        `${modeName}.result_json`,
+        `${modeName}.items_json`,
+      ]),
+      exclude: [],
+    };
+  }
+  spec.projection = projection;
 
-  spec.prompts = {
+  const prompts: MutableRecord = {
     [firstMode]: `Capture the initial request for ${name} and start the work.`,
-    [middleMode]: `Perform the primary ${name} work.`,
     [terminalMode]: `Terminal mode after ${name} completion is confirmed.`,
   };
+  for (const modeName of intermediateModes) {
+    prompts[modeName] = `Perform the ${modeName} stage for ${name}.`;
+  }
+  spec.prompts = prompts;
 
   spec.ingestion = {
     [entryChannel]: [`inputs.${entryChannel}`],
@@ -135,11 +153,13 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   const beginWork = recordField(actionMap, 'begin_work');
   beginWork.mutations = [{ op: 'MSet', path: startedField, value: true }];
   const exampleAction = recordField(actionMap, 'example_action');
-  exampleAction.description = `Complete the synthesized ${middleMode} work using JSON-string scalar state.`;
+  exampleAction.description = `Complete synthesized intermediate-stage work using JSON-string scalar state.`;
   exampleAction.mutations = [
-    { op: 'MSet', path: completionField, value: true },
-    { op: 'MSet', path: resultField, value: '{"status":"ready","source":"synthesizer"}' },
-    { op: 'MSet', path: itemsField, value: '["synthesized"]' },
+    ...intermediateGuardFields.map((path) => ({ op: 'MSet', path, value: true })),
+    ...intermediateModes.flatMap((modeName) => [
+      { op: 'MSet', path: `${modeName}.result_json`, value: '{"status":"ready","source":"synthesizer"}' },
+      { op: 'MSet', path: `${modeName}.items_json`, value: '["synthesized"]' },
+    ]),
   ];
 
   const schema = recordField(spec, 'schema');
@@ -149,11 +169,14 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   delete schema['work.example_items_json'];
   schema[`inputs.${entryChannel}`] = 'string';
   schema[startedField] = 'boolean';
-  schema[completionField] = 'boolean';
-  schema[resultField] = 'string';
-  schema[itemsField] = 'string';
+  for (const field of unique([...guardFieldsByMode.values()].flat())) {
+    schema[field] = 'boolean';
+  }
+  for (const field of intermediateJsonFields) {
+    schema[field] = 'string';
+  }
 
-  spec.guidance = guidanceFor(middleMode, delegation);
+  spec.guidance = guidanceFor(intermediateModes, delegation);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -166,7 +189,6 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
 }
 
 function transformMode(mode: MutableRecord, options: {
-  modeName: string;
   channels: string[];
   transitions: Array<{ target: string; guard?: Record<string, unknown> }>;
 }): MutableRecord {
@@ -190,13 +212,27 @@ function applyTransitions(
     }
     const fromMode = recordField(modes, transition.from);
     const modeTransitions = Array.isArray(fromMode.transitions) ? fromMode.transitions : [];
-    const guardField = transition.to === completion.final_stage ? completion.guard_field : transition.guard_field;
+    const guardField = guardFieldForTransition(transition, completion);
     modeTransitions.push({
       target: transition.to,
       guard: transition.guard ?? guardFromField(guardField),
     });
     fromMode.transitions = modeTransitions;
   }
+}
+
+function guardFieldsBySourceMode(transitions: IntakeTransition[], completion: Completion): Map<string, string[]> {
+  const fieldsByMode = new Map<string, string[]>();
+  for (const transition of transitions) {
+    const guardField = guardFieldForTransition(transition, completion);
+    if (!guardField) continue;
+    fieldsByMode.set(transition.from, unique([...(fieldsByMode.get(transition.from) ?? []), guardField]));
+  }
+  return fieldsByMode;
+}
+
+function guardFieldForTransition(transition: IntakeTransition, completion: Completion): string | undefined {
+  return transition.to === completion.final_stage ? completion.guard_field : transition.guard_field;
 }
 
 function guardFromField(field: string | undefined): Record<string, unknown> {
@@ -206,14 +242,14 @@ function guardFromField(field: string | undefined): Record<string, unknown> {
   return { kind: 'FieldTruthy', path: field };
 }
 
-function guidanceFor(modeName: string, delegation: Record<string, unknown>): Record<string, string[]> {
+function guidanceFor(modeNames: string[], delegation: Record<string, unknown>): Record<string, string[]> {
   const guidance = [
     'Use the synthesized JSON-string scalar fields for structured handler results.',
   ];
   if (Object.keys(delegation).length > 0) {
     guidance.push(`delegation intake captured for this program: ${JSON.stringify(delegation)}.`);
   }
-  return { [modeName]: guidance };
+  return Object.fromEntries(modeNames.map((modeName) => [modeName, guidance]));
 }
 
 function channelsForBootstrap(entryChannel: string): string[] {
@@ -235,8 +271,8 @@ function assertStages(stages: Stage[]): void {
   if (!Array.isArray(stages)) {
     throw new Error('intake.stages_json must decode to an array');
   }
-  if (stages.length !== 3) {
-    throw new Error(`synthesizer expects 3 stages; got ${stages.length}`);
+  if (stages.length < 3) {
+    throw new Error(`synthesizer expects at least 3 stages; got ${stages.length}`);
   }
   for (const stage of stages) {
     if (!stage || typeof stage.slug !== 'string' || stage.slug.length === 0) {
@@ -318,4 +354,8 @@ function cloneRecord(value: unknown): MutableRecord {
     throw new Error('expected object to clone');
   }
   return JSON.parse(JSON.stringify(value)) as MutableRecord;
+}
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
 }
