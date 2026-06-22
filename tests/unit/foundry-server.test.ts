@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 import { startFoundryServer } from '../../src/foundry-server.js';
+import { startToolChoiceProxy } from '../../src/foundry-program/tool-choice-proxy.js';
 
 const mocks = vi.hoisted(() => {
   const foundryEntry = {
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => {
     createPgasServer: vi.fn(),
     createPgasNewFoundryProgramEntry: vi.fn(() => foundryEntry),
     foundryEntry,
+    startToolChoiceProxy: vi.fn(),
   };
 });
 
@@ -26,16 +28,31 @@ vi.mock('../../src/foundry-program/registration.js', () => ({
   createPgasNewFoundryProgramEntry: mocks.createPgasNewFoundryProgramEntry,
 }));
 
+vi.mock('../../src/foundry-program/tool-choice-proxy.js', () => ({
+  startToolChoiceProxy: mocks.startToolChoiceProxy,
+}));
+
 describe('startFoundryServer', () => {
   const createPgasServerMock = vi.mocked(createPgasServer);
   const createEntryMock = vi.mocked(createPgasNewFoundryProgramEntry);
+  const startToolChoiceProxyMock = vi.mocked(startToolChoiceProxy);
   const originalFoundryPort = process.env.PGAS_FOUNDRY_PORT;
+  const originalOpenAiBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
   const originalDisableJsonResponseFormat = process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
+  let proxies: Array<Awaited<ReturnType<typeof startToolChoiceProxy>>> = [];
 
   beforeEach(() => {
     createPgasServerMock.mockReset();
     createEntryMock.mockClear();
+    startToolChoiceProxyMock.mockReset();
+    proxies = [];
+    startToolChoiceProxyMock.mockImplementation(async () => {
+      const proxy = mockToolChoiceProxy({ url: 'http://127.0.0.1:9001/v1' });
+      proxies.push(proxy);
+      return proxy;
+    });
     delete process.env.PGAS_FOUNDRY_PORT;
+    delete process.env.PGAS_OPENAI_BASE_URL;
     delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
   });
 
@@ -44,6 +61,11 @@ describe('startFoundryServer', () => {
       delete process.env.PGAS_FOUNDRY_PORT;
     } else {
       process.env.PGAS_FOUNDRY_PORT = originalFoundryPort;
+    }
+    if (originalOpenAiBaseUrl === undefined) {
+      delete process.env.PGAS_OPENAI_BASE_URL;
+    } else {
+      process.env.PGAS_OPENAI_BASE_URL = originalOpenAiBaseUrl;
     }
     if (originalDisableJsonResponseFormat === undefined) {
       delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
@@ -119,6 +141,33 @@ describe('startFoundryServer', () => {
     expect(engine.close).toHaveBeenCalledOnce();
   });
 
+  it('routes OpenAI-compatible provider traffic through the tool-choice proxy before creating the server', async () => {
+    const engine = mockPgasServer({ boundPort: 4560 });
+    createPgasServerMock.mockImplementation(async () => {
+      expect(process.env.PGAS_OPENAI_BASE_URL).toBe('http://127.0.0.1:9001/v1');
+      return engine;
+    });
+    process.env.PGAS_OPENAI_BASE_URL = 'http://provider.local/v1';
+
+    const server = await startFoundryServer({ port: 4560, hostname: '127.0.0.1' });
+    await server.kill();
+
+    expect(startToolChoiceProxyMock).toHaveBeenCalledWith('http://provider.local/v1');
+    expect(engine.close).toHaveBeenCalledOnce();
+    expect(proxies[0]?.kill).toHaveBeenCalledOnce();
+    expect(process.env.PGAS_OPENAI_BASE_URL).toBe('http://provider.local/v1');
+  });
+
+  it('uses the local Qwen endpoint as the upstream when PGAS_OPENAI_BASE_URL is unset', async () => {
+    const engine = mockPgasServer({ boundPort: 4561 });
+    createPgasServerMock.mockResolvedValue(engine);
+
+    await startFoundryServer({ port: 4561, hostname: '127.0.0.1' });
+
+    expect(startToolChoiceProxyMock).toHaveBeenCalledWith('http://100.100.74.6:8000/v1');
+    expect(process.env.PGAS_OPENAI_BASE_URL).toBe('http://127.0.0.1:9001/v1');
+  });
+
   it('disables OpenAI JSON response format by default before creating the server', async () => {
     const engine = mockPgasServer({ boundPort: 4558 });
     createPgasServerMock.mockImplementation(async () => {
@@ -152,6 +201,13 @@ describe('startFoundryServer', () => {
     return config;
   }
 });
+
+function mockToolChoiceProxy(options: { url: string }): Awaited<ReturnType<typeof startToolChoiceProxy>> {
+  return {
+    url: options.url,
+    kill: vi.fn(async () => {}),
+  };
+}
 
 function mockPgasServer(options: { boundPort: number }): PgasServer {
   return {
