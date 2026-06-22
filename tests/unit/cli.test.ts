@@ -89,6 +89,48 @@ describe('pgas-new CLI', () => {
     }
   });
 
+  it('prints a deprecation warning while preserving consumer template rendering', async () => {
+    for (const template of ['policy-drafting', 'web-scraper', 'social-media-agent']) {
+      const outDir = mkdtempSync(join(tmpdir(), `pgas-new-cli-deprecated-${template}-`));
+      try {
+        const result = await runCli([
+          'render-standalone',
+          '--slug',
+          template,
+          '--name',
+          template,
+          '--out',
+          outDir,
+          '--template',
+          template,
+        ]);
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('written');
+        expect(result.stderr).toContain(`⚠ --template ${template} is deprecated and will be removed in v3.0.`);
+        expect(result.stderr).toContain(
+          `The ${template} graduation program is preserved in docs/graduation-evidence/ for reference.`,
+        );
+        expect(result.stderr).toContain('Use `pgas-new design <slug>` to interactively design your own program.');
+        expect(result.stderr).toContain('(Phase 2 of the v3.0 plan: ships in v2.8.0.)');
+        expect(readFileSync(join(outDir, `src/programs/${template}/specs.yml`), 'utf8')).not.toContain('{{');
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('marks consumer templates as deprecated in help without deprecating the foundry template', async () => {
+    const result = await runCli(['help']);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('pgas-new-foundry');
+    expect(result.stdout).toContain('policy-drafting (deprecated)');
+    expect(result.stdout).toContain('web-scraper (deprecated)');
+    expect(result.stdout).toContain('social-media-agent (deprecated)');
+    expect(result.stdout).not.toContain('pgas-new-foundry (deprecated)');
+  });
+
   it('rejects unsafe slugs before rendering files', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pgas-new-cli-unsafe-'));
     const outDir = join(root, 'out');
