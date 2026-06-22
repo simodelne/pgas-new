@@ -49,7 +49,12 @@ function numberField(payload: Record<string, unknown>, key: string): number {
   return value;
 }
 
-function optionalJsonField(payload: Record<string, unknown>, structuredKey: string, jsonKey: string): unknown {
+function optionalJsonField(
+  payload: Record<string, unknown>,
+  structuredKey: string,
+  jsonKey: string,
+  options: { allowBracketedCommaList?: boolean } = {},
+): unknown {
   const structuredValue = payload[structuredKey];
   if (structuredValue !== undefined) return structuredValue;
 
@@ -57,7 +62,43 @@ function optionalJsonField(payload: Record<string, unknown>, structuredKey: stri
   if (typeof jsonValue !== 'string') {
     throw new Error(`missing JSON-string payload field: ${jsonKey}`);
   }
-  return JSON.parse(jsonValue) as unknown;
+  try {
+    return JSON.parse(jsonValue) as unknown;
+  } catch (error) {
+    if (!options.allowBracketedCommaList) throw error;
+    return parseBracketedCommaList(jsonValue);
+  }
+}
+
+function parseBracketedCommaList(value: string): string[] {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+    throw new Error('JSON parse failed and payload is not a bracketed comma-list');
+  }
+
+  // Degraded recovery for Section 10 Round 14 Qwen output like
+  // [triage_intake, root_cause_analysis]. Q5/Q6 object fields stay strict.
+  const inner = trimmed.slice(1, -1).trim();
+  if (inner.length === 0) return [];
+
+  return inner.split(',').map((rawItem) => {
+    const item = stripOptionalQuotes(rawItem.trim());
+    if (item.length === 0) {
+      throw new Error('JSON parse failed and bracketed comma-list contained an empty item');
+    }
+    return item;
+  });
+}
+
+function stripOptionalQuotes(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === '\'' && last === '\'')) {
+      return value.slice(1, -1).trim();
+    }
+  }
+  return value;
 }
 
 export const handlers: Record<string, ToolHandler> = {
@@ -130,14 +171,14 @@ export const handlers: Record<string, ToolHandler> = {
   async record_q3_stages(payload) {
     return {
       kind: 'pgas_new_q3_stages_recorded',
-      stages: optionalJsonField(payload, 'stages', 'stages_json'),
+      stages: optionalJsonField(payload, 'stages', 'stages_json', { allowBracketedCommaList: true }),
     };
   },
 
   async record_q4_transitions(payload) {
     return {
       kind: 'pgas_new_q4_transitions_recorded',
-      transitions: optionalJsonField(payload, 'transitions', 'transitions_json'),
+      transitions: optionalJsonField(payload, 'transitions', 'transitions_json', { allowBracketedCommaList: true }),
     };
   },
 

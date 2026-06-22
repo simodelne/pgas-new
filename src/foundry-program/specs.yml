@@ -404,33 +404,57 @@ action_map:
       - { op: MSet, path: intake.q2_recorded, value: true }
     channel: widget_output
   record_q3_stages:
-    description: "Capture Q3 (stages of work) as a JSON-string scalar in intake.stages_json."
+    description: "Capture Q3 (stage list -- the named modes the program transitions through)."
     arg_descriptions:
-      stages_json: "JSON string describing the ordered mode/stage list."
+      stages_json: |
+        A JSON-encoded array of stage name strings.
+        MUST be valid JSON parseable by JSON.parse.
+        Example: "[\"intake\", \"analysis\", \"complete\"]"
+        NOT a bare bracketed list like "[intake, analysis, complete]".
+        NOT a comma-separated string like "intake, analysis, complete".
+        The brackets and quotes are required.
     mutations:
       - { op: MSet, path: intake.stages_json, from_arg: stages_json }
       - { op: MSet, path: intake.q3_recorded, value: true }
     channel: widget_output
   record_q4_transitions:
-    description: "Capture Q4 (decision points and transitions) as a JSON-string scalar in intake.transitions_json."
+    description: "Capture Q4 (transition list -- how stages advance, branch, loop, or guard)."
     arg_descriptions:
-      transitions_json: "JSON string describing transitions, branches, loops, and guards."
+      transitions_json: |
+        A JSON-encoded array of transition objects.
+        MUST be valid JSON parseable by JSON.parse.
+        Example: "[{\"from\":\"intake\",\"to\":\"analysis\",\"guard_field\":\"intake.ready\"}]"
+        NOT a bare bracketed list like "[intake->analysis, analysis->complete]".
+        NOT a comma-separated string like "intake->analysis, analysis->complete".
+        The brackets, quotes, and object syntax are required.
     mutations:
       - { op: MSet, path: intake.transitions_json, from_arg: transitions_json }
       - { op: MSet, path: intake.q4_recorded, value: true }
     channel: widget_output
   record_q5_delegation:
-    description: "Capture Q5 (delegation design) as a JSON-string scalar in intake.delegation_json."
+    description: "Capture Q5 (delegation design -- whether and how work delegates)."
     arg_descriptions:
-      delegation_json: "JSON string describing delegation behavior, or an empty object if none."
+      delegation_json: |
+        A JSON-encoded delegation object, or {} if there is no delegation.
+        MUST be valid JSON parseable by JSON.parse.
+        Example: "{\"enabled\":false}"
+        NOT a bare bracketed list like "[none, human_review]".
+        NOT a comma-separated string like "none, human_review".
+        The braces and quotes are required for object fields.
     mutations:
       - { op: MSet, path: intake.delegation_json, from_arg: delegation_json }
       - { op: MSet, path: intake.q5_recorded, value: true }
     channel: widget_output
   record_q6_completion:
-    description: "Capture Q6 (completion criteria) as a JSON-string scalar in intake.completion_json."
+    description: "Capture Q6 (completion criteria -- terminal stage and completion guard)."
     arg_descriptions:
-      completion_json: "JSON string describing terminal stage and completion guard."
+      completion_json: |
+        A JSON-encoded completion object.
+        MUST be valid JSON parseable by JSON.parse.
+        Example: "{\"final_stage\":\"complete\",\"guard_field\":\"work.done\"}"
+        NOT a bare bracketed list like "[complete, work.done]".
+        NOT a comma-separated string like "complete, work.done".
+        The braces and quotes are required for object fields.
     mutations:
       - { op: MSet, path: intake.completion_json, from_arg: completion_json }
       - { op: MSet, path: intake.q6_recorded, value: true }
