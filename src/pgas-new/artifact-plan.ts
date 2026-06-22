@@ -97,6 +97,12 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
       artifact('handler', `src/programs/${slug}/handlers.ts`, 'Implement stubbed action handlers and attachment points.', 'branch_write', [
         'program-deterministic',
       ]),
+      artifact('handler', `src/programs/${slug}/handlers/index.ts`, 'Expose generated handlers from the handler directory.', 'branch_write', [
+        'program-deterministic',
+      ]),
+      artifact('handler', `src/programs/${slug}/handlers/_resolver.ts`, 'Resolve handler values from payload overrides or engine-injected domain state.', 'branch_write', [
+        'program-deterministic',
+      ]),
       artifact('tool', `src/programs/${slug}/tools.ts`, 'Declare semantic repo, git, verification, research, and session tool metadata.', 'branch_write', [
         'typecheck',
       ]),
@@ -150,6 +156,12 @@ export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifes
         'typecheck',
       ]),
       artifact('handler', `${programsDir}/${slug}/handlers.ts`, 'Implement stubbed program handlers for repo-owned integration.', 'branch_write', [
+        'program-deterministic',
+      ]),
+      artifact('handler', `${programsDir}/${slug}/handlers/index.ts`, 'Expose attached program handlers from the handler directory.', 'branch_write', [
+        'program-deterministic',
+      ]),
+      artifact('handler', `${programsDir}/${slug}/handlers/_resolver.ts`, 'Resolve handler values from payload overrides or engine-injected domain state.', 'branch_write', [
         'program-deterministic',
       ]),
       artifact('tool', `${programsDir}/${slug}/tools.ts`, 'Declare semantic tool metadata for the attached program.', 'branch_write', [

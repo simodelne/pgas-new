@@ -362,6 +362,15 @@ describe('template renderer', () => {
           'program.skip_dimensions',
         ]),
       );
+      expect(parsed.projection.branch_write.include).toEqual(
+        expect.arrayContaining([
+          'program.slug',
+          'program.name',
+          'program.target_dir',
+          'repo.target_kind',
+          'program.synthesis_complete',
+        ]),
+      );
       expect(parsed.schema).toMatchObject({
         'inputs.user_text': 'string',
         'inputs.user_decision': 'object',
@@ -426,6 +435,8 @@ describe('template renderer', () => {
         'programs/draft-policy/specs.yml',
         'programs/draft-policy/registration.ts',
         'programs/draft-policy/handlers.ts',
+        'programs/draft-policy/handlers/index.ts',
+        'programs/draft-policy/handlers/_resolver.ts',
         'programs/draft-policy/tools.ts',
         '.pgas/pgas-new/draft-policy/dossier.yml',
         '.pgas/pgas-new/draft-policy/artifacts.json',
@@ -521,6 +532,8 @@ describe('template renderer', () => {
         'programs/web-scraper/specs.yml',
         'programs/web-scraper/registration.ts',
         'programs/web-scraper/handlers.ts',
+        'programs/web-scraper/handlers/index.ts',
+        'programs/web-scraper/handlers/_resolver.ts',
         'programs/web-scraper/tools.ts',
         '.pgas/pgas-new/web-scraper/dossier.yml',
         '.pgas/pgas-new/web-scraper/artifacts.json',
@@ -940,6 +953,8 @@ describe('template renderer', () => {
         'programs/social-media-agent/specs.yml',
         'programs/social-media-agent/registration.ts',
         'programs/social-media-agent/handlers.ts',
+        'programs/social-media-agent/handlers/index.ts',
+        'programs/social-media-agent/handlers/_resolver.ts',
         'programs/social-media-agent/tools.ts',
         '.pgas/pgas-new/social-media-agent/dossier.yml',
         '.pgas/pgas-new/social-media-agent/artifacts.json',

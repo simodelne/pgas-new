@@ -23,6 +23,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   githubRepo?: string;
   template?: ProgramTemplate;
   mandate?: string;
+  synthesizedSpecYaml?: string;
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -30,6 +31,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   manifest: WiringManifest;
   template?: ProgramTemplate;
   mandate?: string;
+  synthesizedSpecYaml?: string;
 }
 
 export interface RenderResult {
@@ -42,6 +44,7 @@ interface TemplateSpec {
   tokens: readonly string[];
   root?: 'templates' | 'foundry';
   substitute?: boolean;
+  content?: string;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -60,6 +63,8 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'src/programs/{{SLUG}}/specs.yml': foundrySpec('specs.yml'),
   'src/programs/{{SLUG}}/registration.ts': foundrySpec('registration.ts'),
   'src/programs/{{SLUG}}/handlers.ts': foundrySpec('handlers.ts'),
+  'src/programs/{{SLUG}}/handlers/index.ts': spec('program/handlers-index.ts.tmpl', []),
+  'src/programs/{{SLUG}}/handlers/_resolver.ts': spec('program/handlers-resolver.ts.tmpl', []),
   'src/programs/{{SLUG}}/tools.ts': foundrySpec('tools.ts'),
   'tests/spec-load.test.ts': spec('tests/spec-load.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/control-plane.test.ts': spec('tests/control-plane.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
@@ -135,7 +140,7 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
   return renderPlan({
     plan,
     rootDir: options.outDir,
-    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, template),
+    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, template, options.synthesizedSpecYaml),
     tokens: tokensFor(options, plan),
   });
 }
@@ -149,7 +154,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
   return renderPlan({
     plan,
     rootDir: options.repoRoot,
-    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, template),
+    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, template, options.synthesizedSpecYaml),
     tokens: tokensFor(options, plan),
   });
 }
@@ -208,7 +213,7 @@ function renderPlan(options: {
       throw new Error(`no template for artifact path: ${artifact.path}`);
     }
 
-    const source = readFileSync(join(rootFor(templatePath), templatePath.file), 'utf8');
+    const source = templatePath.content ?? readFileSync(join(rootFor(templatePath), templatePath.file), 'utf8');
     const rendered = templatePath.substitute === false
       ? renderDirectSource(source)
       : renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
@@ -225,7 +230,17 @@ function templateForExistingArtifact(
   artifact: PlannedArtifact,
   slug: string,
   template: ProgramTemplate,
+  synthesizedSpecYaml?: string,
 ): TemplateSpec | undefined {
+  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSpecYaml);
+  if (synthesizedTemplate) {
+    return synthesizedTemplate;
+  }
+  const handlerDirectoryTemplate = templateForHandlerDirectoryArtifact(artifact, slug);
+  if (handlerDirectoryTemplate) {
+    return handlerDirectoryTemplate;
+  }
+
   if (template === 'policy-drafting') {
     return EXISTING_POLICY_TEMPLATE_BY_KIND[artifact.kind];
   }
@@ -269,7 +284,17 @@ function templateForStandaloneArtifact(
   artifact: PlannedArtifact,
   slug: string,
   template: ProgramTemplate,
+  synthesizedSpecYaml?: string,
 ): TemplateSpec | undefined {
+  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSpecYaml);
+  if (synthesizedTemplate) {
+    return synthesizedTemplate;
+  }
+  const handlerDirectoryTemplate = templateForHandlerDirectoryArtifact(artifact, slug);
+  if (handlerDirectoryTemplate) {
+    return handlerDirectoryTemplate;
+  }
+
   if (template !== 'pgas-new-foundry') {
     if (artifact.kind === 'registration') {
       return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
@@ -299,6 +324,12 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
   if (path === `src/programs/${slug}/handlers.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
   }
+  if (path === `src/programs/${slug}/handlers/index.ts`) {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers/index.ts'];
+  }
+  if (path === `src/programs/${slug}/handlers/_resolver.ts`) {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers/_resolver.ts'];
+  }
   if (path === `src/programs/${slug}/tools.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/tools.ts'];
   }
@@ -312,6 +343,43 @@ function spec(file: string, tokens: readonly string[]): TemplateSpec {
 
 function foundrySpec(file: string): TemplateSpec {
   return { file, tokens: [], root: 'foundry', substitute: false };
+}
+
+function inlineTemplate(content: string): TemplateSpec {
+  return { file: '', tokens: [], content, substitute: false };
+}
+
+function templateForSynthesizedArtifact(
+  artifact: PlannedArtifact,
+  slug: string,
+  synthesizedSpecYaml: string | undefined,
+): TemplateSpec | undefined {
+  if (!synthesizedSpecYaml) {
+    return undefined;
+  }
+  if (artifact.path.endsWith(`/${slug}/specs.yml`)) {
+    return inlineTemplate(synthesizedSpecYaml);
+  }
+  if (artifact.path.endsWith(`/${slug}/registration.ts`)) {
+    return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
+  }
+  if (artifact.path.endsWith(`/${slug}/handlers.ts`)) {
+    return spec('program/handlers-skeleton.ts.tmpl', []);
+  }
+  if (artifact.path.endsWith(`/${slug}/tools.ts`)) {
+    return spec('program/tools-skeleton.ts.tmpl', ['PASCAL_NAME']);
+  }
+  return undefined;
+}
+
+function templateForHandlerDirectoryArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
+  if (artifact.path.endsWith(`/${slug}/handlers/index.ts`)) {
+    return spec('program/handlers-index.ts.tmpl', []);
+  }
+  if (artifact.path.endsWith(`/${slug}/handlers/_resolver.ts`)) {
+    return spec('program/handlers-resolver.ts.tmpl', []);
+  }
+  return undefined;
 }
 
 function rootFor(template: TemplateSpec): string {

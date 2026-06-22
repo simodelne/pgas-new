@@ -1,6 +1,7 @@
 import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { load } from 'js-yaml';
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
+import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import type { WiringManifest } from '../pgas-new/wiring-manifest.js';
 import { synthesizeProgramSpecFromDomain } from './synthesizer.js';
 import { putSynthesizedArtifact, requireSynthesizedArtifact } from './synthesizer-store.js';
@@ -151,9 +152,33 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async write_scaffold_artifacts(payload) {
+    const sessionId = sessionIdFromPayload(payload);
+    const domain = domainFromPayload(payload);
+    const synthesized = requireSynthesizedArtifact(sessionId);
+    const program = {
+      slug: stringDomainField(domain, 'program.slug'),
+      name: stringDomainField(domain, 'program.name'),
+    };
+    const targetDir = stringDomainField(domain, 'program.target_dir');
+    const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
+    const result = targetKind === 'existing_repo'
+      ? renderExistingRepoAttachment({
+          ...program,
+          repoRoot: targetDir,
+          manifest: parseWiringManifestDomainField(domain),
+          synthesizedSpecYaml: synthesized.spec_yaml,
+        })
+      : renderStandaloneScaffold({
+          ...program,
+          outDir: targetDir,
+          synthesizedSpecYaml: synthesized.spec_yaml,
+        });
+
     return {
-      kind: 'artifact_write_requested',
-      payload,
+      kind: 'artifacts_written',
+      target: result.plan.target,
+      generated_paths: result.written,
+      synthesized_spec_sha256: synthesized.sha256,
     };
   },
 };

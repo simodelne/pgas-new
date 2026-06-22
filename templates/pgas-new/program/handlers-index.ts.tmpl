@@ -1,9 +1,5 @@
 import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
-import { resolveDomainValue, type HandlerPayload } from './handlers/_resolver.js';
-
-// The synthesizer emits this template as a handler directory:
-// - handlers/index.ts
-// - handlers/_resolver.ts
+import { resolveDomainValue, type HandlerPayload } from './_resolver.js';
 
 export const handlers: Record<string, ToolHandler> = {
   async begin_work(payload) {

@@ -194,7 +194,7 @@ projection:
     include: [program.slug, program.name, program.target_dir, program.synthesis_complete, artifact_plan.status, artifact_plan.approved, artifact_plan.write_authorized]
     exclude: []
   branch_write:
-    include: [artifacts.written, artifacts.generated_paths]
+    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, artifact_plan.status, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
     exclude: []
   static_verify:
     include: [graduation.static_verification, graduation.static_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
