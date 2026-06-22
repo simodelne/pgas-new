@@ -213,7 +213,31 @@ projection:
     exclude: []
 
 prompts:
-  intake_intelligence: "Capture mandate, notebook notes, and confirmed research scope."
+  intake_intelligence: |
+    This mode collects the program-design intake. You MUST drive the design
+    interview by calling the declared tools as tool calls -- NOT by emitting raw JSON mutations.
+
+    Per turn:
+    - Make exactly ONE terminal tool call from the mode's vocabulary.
+    - The arguments to each tool are structured per the tool's schema; emit
+      them as the tool's argument object, not as a `mutations` array.
+    - Use the canonical user-text/confirmation channel, or `request_user_action`
+      if it is available in the active vocabulary, when you need the user to
+      answer Q1-Q6.
+
+    Order of intake:
+    1. If `program.target_dir_confirmed` is false: call `record_program_target`
+       with `{slug, name, target_dir}` derived from the user's initial message
+       OR from the CLI-seeded domain (check `program.slug`, `program.name`,
+       `program.target_dir` if they are pre-set).
+    2. After target capture: call `choose_design_path` with `{choice: "default"}`
+       or `{choice: "design"}` based on what the user asked for.
+    3. If `choice = "default"`: call `apply_default_skeleton` immediately.
+    4. If `choice = "design"`: ask Q1-Q6 via user text/confirmation, then call
+       `record_program_intake` with the structured payload.
+    5. Finally call `confirm_design` to gate transition to architecture_design.
+
+    Do not pre-fill or batch multiple tool calls in one response. One tool call per round.
   repo_targeting: "Validate target mode and fixed .pgas/wiring.yml if attaching to an existing repo."
   architecture_design: "Run the deterministic program-spec synthesizer."
   scaffold_plan: "Create and approve the artifact plan before writes."
@@ -236,7 +260,7 @@ ingestion:
 
 action_map:
   record_program_target:
-    description: "Capture the user's program name, slug, and target output directory."
+    description: "Tool call for capturing program identity. Arguments must be string fields {slug, name, target_dir}; confirms program.target_dir_confirmed."
     mutations:
       - { op: MSet, path: program.slug, from_arg: slug }
       - { op: MSet, path: program.name, from_arg: name }
@@ -244,12 +268,12 @@ action_map:
       - { op: MSet, path: program.target_dir_confirmed, value: true }
     channel: widget_output
   choose_design_path:
-    description: "Record whether the user wants the design interview or the default skeleton."
+    description: "Tool call for selecting intake path after target capture. Argument {choice} must be the string 'default' or 'design'."
     mutations:
       - { op: MSet, path: program.design_path, from_arg: choice }
     channel: widget_output
   apply_default_skeleton:
-    description: "Populate intake.* JSON-string scalar fields with the default start->working->complete skeleton."
+    description: "Tool call with no required arguments. Populates intake.* JSON-string scalar fields with the default start->working->complete skeleton."
     mutations:
       - { op: MSet, path: intake.purpose, value: '' }
       - { op: MSet, path: intake.entry_channel, value: user_text }
@@ -260,7 +284,7 @@ action_map:
       - { op: MSet, path: intake.program_intake_recorded, value: true }
     channel: widget_output
   record_program_intake:
-    description: "Capture the user's Q1-Q6 design interview answers into governed JSON-string scalar state."
+    description: "Tool call for recording Q1-Q6 design answers. Arguments are purpose, entry_channel, stages_json, transitions_json, delegation_json, and completion_json as strings."
     mutations:
       - { op: MSet, path: intake.purpose, from_arg: purpose }
       - { op: MSet, path: intake.entry_channel, from_arg: entry_channel }
@@ -271,7 +295,7 @@ action_map:
       - { op: MSet, path: intake.program_intake_recorded, value: true }
     channel: widget_output
   confirm_design:
-    description: "User-confirm the proposed mode and transition list before architecture_design."
+    description: "Tool call after explicit user approval. Confirms the proposed mode and transition list before architecture_design."
     mutations:
       - { op: MSet, path: program.design_confirmed, value: true }
     channel: widget_output
