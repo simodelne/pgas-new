@@ -62,7 +62,9 @@ export async function startToolChoiceProxy(upstreamBaseUrl: string): Promise<Sta
 
 async function forwardRequest(upstream: URL, request: IncomingMessage, response: ServerResponse): Promise<void> {
   const requestBody = await readRequestBody(request);
-  const relativePath = stripProxyBasePath(request.url ?? '/');
+  const rawPath = request.url ?? '/';
+  debugLogIncoming(request.method, rawPath, copyForwardHeaders(request.headers), requestBody);
+  const relativePath = stripProxyBasePath(rawPath);
   const upstreamResponse = await forwardBufferedToolChoiceRequest(
     upstream,
     request.method,
@@ -91,6 +93,7 @@ async function forwardRequest(upstream: URL, request: IncomingMessage, response:
 export async function forwardToolChoiceProxyRequest(upstreamBaseUrl: string, request: Request): Promise<Response> {
   const parsedUrl = new URL(request.url);
   const requestBody = Buffer.from(await request.arrayBuffer());
+  debugLogIncoming(request.method, `${parsedUrl.pathname}${parsedUrl.search}`, copyWebHeaders(request.headers), requestBody);
   return forwardBufferedToolChoiceRequest(
     new URL(trimTrailingSlash(upstreamBaseUrl)),
     request.method,
@@ -112,6 +115,7 @@ async function forwardBufferedToolChoiceRequest(
   const body = shouldInjectToolChoice(method, relativePath)
     ? injectRequiredToolChoice(requestBody)
     : requestBody;
+  debugLogOutgoing(targetUrl, headers, body);
 
   return fetch(targetUrl, {
     method,
@@ -139,7 +143,9 @@ function injectRequiredToolChoice(body: Buffer): Buffer {
   if (!isJsonObject(payload)) return body;
   if (!Array.isArray(payload.tools) || payload.tools.length === 0) return body;
 
-  return Buffer.from(JSON.stringify({ ...payload, tool_choice: 'required' }));
+  const payloadWithoutToolChoice = { ...payload };
+  delete payloadWithoutToolChoice.tool_choice;
+  return Buffer.from(JSON.stringify({ tool_choice: 'required', ...payloadWithoutToolChoice }));
 }
 
 function resolveUpstreamUrl(upstream: URL, relativePath: string): URL {
@@ -199,6 +205,36 @@ function toFetchBody(body: Buffer): BodyInit | undefined {
   const buffer = new ArrayBuffer(body.byteLength);
   new Uint8Array(buffer).set(body);
   return buffer;
+}
+
+function debugLogIncoming(method: string | undefined, path: string, headers: Headers, body: Buffer): void {
+  if (!isProxyDebugEnabled()) return;
+  process.stderr.write(`[proxy] ${method ?? 'UNKNOWN'} ${path}\n`);
+  process.stderr.write(`[proxy] headers ${JSON.stringify(redactHeaders(headers))}\n`);
+  process.stderr.write(`[proxy] body ${previewBody(body)}\n`);
+}
+
+function debugLogOutgoing(targetUrl: URL, headers: Headers, body: Buffer): void {
+  if (!isProxyDebugEnabled()) return;
+  process.stderr.write(`[proxy] -> ${targetUrl.toString()}\n`);
+  process.stderr.write(`[proxy] -> headers ${JSON.stringify(redactHeaders(headers))}\n`);
+  process.stderr.write(`[proxy] -> body ${previewBody(body)}\n`);
+}
+
+function isProxyDebugEnabled(): boolean {
+  return process.env.PGAS_FOUNDRY_PROXY_DEBUG === '1';
+}
+
+function previewBody(body: Buffer): string {
+  return body.toString('utf8').slice(0, 500);
+}
+
+function redactHeaders(headers: Headers): Record<string, string> {
+  const redacted: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    redacted[key] = key.toLowerCase() === 'authorization' ? '[redacted]' : value;
+  });
+  return redacted;
 }
 
 function readRequestBody(request: IncomingMessage): Promise<Buffer> {

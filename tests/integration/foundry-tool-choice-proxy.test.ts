@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startFoundryServer, type StartedFoundryServer } from '../../src/foundry-server.js';
 
 const canOpenLoopbackListener = await canBindLoopbackListener();
@@ -8,6 +8,7 @@ describe('foundry tool-choice proxy integration', () => {
   const originalProvider = process.env.PGAS_PROVIDER;
   const originalEnableMockProvider = process.env.PGAS_ENABLE_MOCK_PROVIDER;
   const originalOpenAiBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
+  const originalProxyDebug = process.env.PGAS_FOUNDRY_PROXY_DEBUG;
   let foundryServer: StartedFoundryServer | null = null;
   let upstreamServer: { url: string; close(): Promise<void> } | null = null;
 
@@ -28,6 +29,8 @@ describe('foundry tool-choice proxy integration', () => {
     restoreEnv('PGAS_PROVIDER', originalProvider);
     restoreEnv('PGAS_ENABLE_MOCK_PROVIDER', originalEnableMockProvider);
     restoreEnv('PGAS_OPENAI_BASE_URL', originalOpenAiBaseUrl);
+    restoreEnv('PGAS_FOUNDRY_PROXY_DEBUG', originalProxyDebug);
+    vi.restoreAllMocks();
   });
 
   (canOpenLoopbackListener ? it : it.skip)('routes foundry OpenAI base URL through a proxy that sends required tool_choice upstream', async () => {
@@ -57,6 +60,36 @@ describe('foundry tool-choice proxy integration', () => {
         model: 'qwen36-27b',
         tool_choice: 'required',
       }),
+    ]);
+  });
+
+  (canOpenLoopbackListener ? it : it.skip)('keeps PGAS_OPENAI_BASE_URL on the proxy and logs a direct proxy hit when debug is enabled', async () => {
+    const capturedBodies: Array<Record<string, unknown>> = [];
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    upstreamServer = await startEchoUpstream(capturedBodies);
+    process.env.PGAS_FOUNDRY_PROXY_DEBUG = '1';
+    process.env.PGAS_OPENAI_BASE_URL = upstreamServer.url;
+
+    foundryServer = await startFoundryServer({ port: 0 });
+    const proxyUrl = process.env.PGAS_OPENAI_BASE_URL;
+
+    expect(proxyUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/u);
+    expect(proxyUrl).not.toBe(upstreamServer.url);
+    await fetch(`${proxyUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [{ role: 'user', content: 'Pick a tool.' }],
+        tools: [{ type: 'function', function: { name: 'record_program_target', parameters: { type: 'object' } } }],
+      }),
+    });
+
+    const output = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
+    expect(output).toContain('[proxy] POST /v1/chat/completions');
+    expect(output).toContain('[proxy] ->');
+    expect(capturedBodies).toEqual([
+      expect.objectContaining({ tool_choice: 'required' }),
     ]);
   });
 });
