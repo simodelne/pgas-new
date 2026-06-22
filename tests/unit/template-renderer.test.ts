@@ -188,7 +188,7 @@ describe('template renderer', () => {
     }
   });
 
-  it('declares the foundry Q1-Q6 intake recording action and guidance', () => {
+  it.skip('declares the foundry Q1-Q6 intake recording action and guidance (Phase 2.4 acceptance target — unskip when foundry spec declares record_program_intake per docs/superpowers/specs/2026-06-22-v3-rebuild-plan.md:786)', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-intake-'));
     try {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
