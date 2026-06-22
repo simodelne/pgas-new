@@ -1,7 +1,13 @@
 # v3.0 Design — Restore the REPL-driven phase walk
 
+> **STATUS: SUPERSEDED** by `2026-06-22-v3-rebuild-plan.md` (the load-bearing v3.0 plan)
+> and `2026-06-22-v3-trace-from-v1-original.md` (the v1→v3 trace). This document
+> framed v3 as a CLI alias `pgas-new design <slug>`; the actual decision (D1 in
+> the rebuild plan, owner-approved 2026-06-22) is bare `pgas-new` (no subcommand).
+> Kept for historical reference; do not use as an implementation guide.
+
 Date: 2026-06-22  
-Status: draft (for review)  
+Status: superseded
 Tracks: issue #35  
 Supersedes: the prior draft of this file at commit `b20f888` (mandate-string framing — wrong, kept in git history)
 

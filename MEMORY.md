@@ -11,12 +11,15 @@ Reintroducing any of the anti-patterns below is a governance violation and
 must be flagged before the change ships.
 
 ### SI-1 — pgas-new is an interactive PGAS-program design foundry
-The CLI must surface an interactive design phase as its primary entry point
-(`pgas-new design <slug>` from v2.8.0). The agent walks the user through the
-10 declared modes (`intake_intelligence → architecture_design → scaffold_plan
+The CLI must surface an interactive design phase as its primary entry point.
+Bare `pgas-new` (no subcommand) — and `pgas-new --slug <slug> --out <dir>` —
+opens the streaming REPL on the foundry program (rendered to
+`~/.pgas-new/foundry-v<version>/` on first run). The agent walks the user through
+the 10 declared modes (`intake_intelligence → architecture_design → scaffold_plan
 → branch_write → static_verify → live_verify → rebase_verify → pr_graduation`).
 The foundry IS a PGAS program; the CLI must talk to it through the streaming
-REPL we ship in `templates/pgas-new/standalone/src/repl/`, not bypass it.
+REPL we ship at `src/repl/` (factored from the template at
+`templates/pgas-new/standalone/src/repl/`), not bypass it.
 
 **Anti-pattern (do not reintroduce):** the CLI as a non-conversational one-shot
 file emitter that copies frozen graduation programs.

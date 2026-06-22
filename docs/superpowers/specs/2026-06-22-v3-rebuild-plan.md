@@ -1,570 +1,910 @@
-# v3.0 Rebuild Plan — Restore the agent-driven foundry
+# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 2)
 
 Date: 2026-06-22  
-Status: draft (to be Codex-validated before delegation)  
+Status: revision 2 (incorporates Codex validation findings + 6 open-question decisions); pending re-validation before delegation  
+Supersedes: revision 1 (commit `18b2626`)  
 Anchors:
-- v1 source: `commands/pgas-new-program.md` (recoverable from commit `3d832b5^`, working copy at `/tmp/v1-pgas-new-program.md`)
-- v1 architecture paper: `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (recoverable from `3d832b5^`)
+- v1 source: `commands/pgas-new-program.md` (recoverable from commit `3d832b5^`; copy at `/tmp/v1-pgas-new-program.md`)
+- v1 architecture paper: `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (recoverable from `3d832b5^`; copy at `/tmp/v1-arch.md`)
 - Current architecture doc: `docs/PGAS-NEW-ARCHITECTURE.md`
 - Trace: `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md`
 - Post-mortem: `docs/POST-MORTEM-2026-06-22-design-phase-drift.md`
 - Strategic invariants: `MEMORY.md` (SI-1 through SI-5)
+- Revision 1: commit `18b2626`
+- Codex validation: `.uat/codex-validate-rebuild-plan-report.md`
 
-## 0. Goal (Simone's own words, verbatim)
+## §0 Goal (Simone's own words, verbatim)
 
 > *"pgas-new was meant to be an agent for creating new pgas-engine consumers either as standalone repo or as programs within existing repos like simoneos built in accordance with a blueprint of file organization and governance and in accordance to a manifest."*
 
-Decomposed into six load-bearing claims:
+## §1 Resolved decisions (6 open questions, owner-approved)
 
-1. **Agent** — conversational, drives a session, walks the user through phases
-2. **Creates new pgas-engine consumers** — output is a runnable PGAS program against `@simodelne/pgas-server`
-3. **Standalone repo** — one output mode: a fresh repo
-4. **Programs within existing repos** — second output mode: drop a new program into an existing PGAS-consumer repo (e.g., simoneos)
-5. **Blueprint of file organization and governance** — fixed canonical layout the output always follows
-6. **Manifest** — declarative file (`.pgas/wiring.yml`) in the target repo describing where things go
+| # | Question | Decision |
+|---|---|---|
+| **D1** | Primary CLI invocation | **Bare `pgas-new`** opens the streaming REPL. No subcommand needed. `pgas-new --slug foo --out /tmp/bar` is equivalent with pre-filled inputs. `pgas-new design <slug>` is NOT in the v3.0 surface. |
+| **D2** | Legacy scripted subcommands | **Keep indefinitely at top level.** `render-standalone`, `render-attach`, `validate-manifest`, `plan-standalone`, `plan-attach`, `curator-request`, `session`, `version`, `help` all stay as top-level subcommands. Only the consumer-preset `--template <consumer>` flag values get removed in v3.0. |
+| **D3** | Synthesized-spec state namespace | **`program.synthesized_spec`** under existing `program.*`. No new top-level namespace. Adds `program.synthesized_spec`, `program.design_confirmed`, `program.plan_approved` to the existing fields in `PgasNewState`. |
+| **D4** | User confirmation steps before write | **Two confirms.** (1) End of `intake_intelligence`: agent echoes proposed mode list + transitions; user approves to enter `architecture_design`. (2) End of `scaffold_plan`: agent shows artifact-plan list; user approves to enter `branch_write`. |
+| **D5** | Foundry-program asset strategy | **First-run rendered to `~/.pgas-new/foundry-v<version>/`**, cached for subsequent invocations. `pgas-new` spawns a child server via `node --import tsx <workdir>/server.ts` on that rendered foundry. Render is idempotent + skipped if the working dir already exists for the current version. |
+| **D6** | Governance corrections #37/#38/#39 | **Prerequisite — implement before v3 work starts.** Land #37 (architecture-doc CI diff), #38 (PR-template Program Nature checkbox), and #39 (UAT intent-verification template) first. Every subsequent v3 PR flows through the new gates. |
 
-## 1. Non-goals
+## §2 Non-goals
 
 - A general coding assistant
 - A GUI / web UI
 - Multi-language program generation (TypeScript/Node only)
 - Public npm publication (GitHub Packages stays)
-- Removing the foundry's self-program template (`pgas-new-foundry`); it stays as the bootstrap path
+- Reviving v1's marker-injection mechanism (`.pgas/wiring.yml` manifest contract is the v2 replacement — documented design decision)
+- Implementing v1's `pgas-program-builder` Claude skill (replaced by the foundry's own `intake_intelligence` mode running on pgas-server)
 
-## 2. What the foundry is, after v3.0
+## §3 What the foundry is, after v3.0
 
-`pgas-new` is itself a **PGAS program** running on `@simodelne/pgas-server`. Its spec lives at `src/foundry-program/specs.yml` (not under `templates/`), declares 10 modes (`intake_intelligence → repo_targeting → architecture_design → scaffold_plan → branch_write → static_verify → live_verify → rebase_verify → pr_graduation → curator_request`), and its handlers do real work (file I/O, npm, git, PR opening).
+`pgas-new` is itself a **PGAS program** running on `@simodelne/pgas-server`. Its spec lives at `src/foundry-program/specs.yml` (not under `templates/`), declares 10 modes (`intake_intelligence → repo_targeting → architecture_design → scaffold_plan → branch_write → static_verify → live_verify → rebase_verify → pr_graduation → curator_request`), and its handlers do real work (file I/O, npm, git, PR opening, manifest loading, curator-request rendering).
 
-`pgas-new` invoked with **no arguments** (or with `--slug <slug>` / `--out <dir>`) spawns an embedded pgas-server child process loaded with the foundry program, hosts the streaming REPL in-process connected via HTTP+WS, opens a session, and the agent drives the conversation through the 10 modes. Single command. Single process.
+`pgas-new` invoked **with no arguments** (or with `--slug <slug>`, `--name <name>`, `--out <dir>`) spawns an embedded `@simodelne/pgas-server` child process loaded with the foundry program, hosts the streaming REPL in-process connected via HTTP+WS, opens a session against the foundry program (whose first mode is `intake_intelligence`), and the agent drives the conversation through the 10 modes. Single command. Single process. Two user confirmation gates (D4) before any files land on disk.
 
-Output: a fresh PGAS consumer (standalone repo or program-within-existing-repo per the manifest contract), conforming to the canonical blueprint, with the user's program design synthesized **deterministically** from their intake answers via mechanical rename+copy from a generic skeleton.
+Output: a fresh PGAS consumer (standalone repo per **standalone mode**, or program-within-existing-repo per **attach mode** governed by `.pgas/wiring.yml`), conforming to the canonical blueprint, with the user's program design synthesized **deterministically** from intake answers via mechanical rename+copy from a generic skeleton.
 
-## 3. Salvage list — files that stay exactly as-is
+## §4 Salvage list — files that stay, with disposition
 
-| Path | Lines | Why |
+(Codex I1 fix: changed from "exactly as-is" to per-file disposition.)
+
+| Path | Current lines | Disposition |
 |---|---|---|
-| `templates/pgas-new/standalone/package.json.tmpl` | 26 | Generic blueprint — package.json shape |
-| `templates/pgas-new/standalone/tsconfig.json.tmpl` | 14 | Generic blueprint |
-| `templates/pgas-new/standalone/src/server.ts.tmpl` | 9 | Generic blueprint — boots pgas-server with the user's program |
-| `templates/pgas-new/standalone/src/repl/index.ts.tmpl` | 432 | The streaming REPL for the GENERATED consumer (rendered scaffold ships its own copy). End-to-end verified through 6 UAT rounds. |
-| `templates/pgas-new/standalone/src/repl/renderer.ts.tmpl` | 90 | Same — verified |
-| `templates/pgas-new/standalone/.pgas/pgas-new/dossier.yml.tmpl` | — | Generic blueprint — intake dossier |
-| `templates/pgas-new/standalone/.pgas/pgas-new/artifacts.json.tmpl` | — | Generic blueprint — artifact manifest |
-| `templates/pgas-new/repo/.pgas/wiring.yml.tmpl` | 8 | The manifest blueprint |
-| `templates/pgas-new/tests/*.test.ts.tmpl` (5 files) | 140 | Generic born-with tests — spec-load, control-plane, deterministic, api-blackbox, live-provider |
-| `templates/pgas-new/audit/PGAS-NEW-GRADUATION.md.tmpl` | 13 | Generic graduation evidence stub |
-| `templates/pgas-new/consumer/artifacts.json.tmpl` | 10 | Generic artifact-manifest stub (consumer-side flag, used by both standalone + attach) |
-| `templates/pgas-new/curator/missing-wiring-request.md.tmpl` | 11 | Generic curator-request stub |
-| `templates/pgas-new/curator/registration-request.md.tmpl` | 19 | Generic curator-request stub |
-| `src/pgas-new/artifact-plan.ts` | 200 | Artifact-plan model + path safety |
-| `src/pgas-new/template-renderer.ts` | 330 | Template substitution + renderStandaloneScaffold + renderExistingRepoAttachment |
-| `src/pgas-new/wiring-manifest.ts` | 150 | Manifest schema + validator |
-| `src/pgas-new/existing-repo.ts` | — | Existing-repo attach prep |
-| `src/pgas-new/curator-request.ts` | — | Curator-request rendering |
-| `src/pgas-new/version.ts` | 50 | Engine version pin + banned-imports scanner |
-| `src/pgas-new/model.ts` | — | Foundry model state types |
-| `src/pgas-new/gates.ts` | — | Mode-gate logic |
-| `src/pgas-new/command-runner.ts` | — | Semantic command runner |
-| `src/pgas-new/control-plane.ts` | — | Control-plane vocabulary |
-| `src/pgas-new/verify.ts` | — | Verification ladder helpers |
-| `tests/unit/*` | ~2000 | All existing unit tests (90 currently green) |
-| `tests/plugin-manifest.test.sh` | 92 | Structural smoke test |
-| `tests/pgas-new-static.test.sh` | 60 | Static render+install+typecheck+test gate |
-| `docs/PGAS-NEW-ARCHITECTURE.md` | — | Architecture contract |
-| `docs/PGAS-NEW-LIVE-GRADUATION.md` | — | Live-graduation contract |
-| `docs/POST-MORTEM-2026-06-22-design-phase-drift.md` | — | Yesterday's post-mortem |
-| `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/*` | — | Evidence + regression corpus (already correctly demoted yesterday) |
-| `CLAUDE.md` (with v2.7.0 governance corrections A+B) | — | Governance — Program Nature, required reading |
-| `MEMORY.md` (with v2.7.0 SI-1..SI-5 invariants) | — | Strategic invariants |
-| `.github/workflows/ci.yml` | 67 | CI runner config |
-| `.gitignore`, `.claude-plugin/plugin.json`, `LICENSE`, `README.md` | — | Standard repo files |
+| `templates/pgas-new/standalone/package.json.tmpl` | 26 | Stay as-is. Generic blueprint. |
+| `templates/pgas-new/standalone/tsconfig.json.tmpl` | 14 | Stay as-is. |
+| `templates/pgas-new/standalone/src/server.ts.tmpl` | 9 | Stay as-is. Generic — boots pgas-server with user's program. |
+| `templates/pgas-new/standalone/src/repl/index.ts.tmpl` | 432 | **Stay for generated consumers; source-copy `src/repl/runner.ts` derives from it.** Generated scaffolds still ship this verbatim. |
+| `templates/pgas-new/standalone/src/repl/renderer.ts.tmpl` | 90 | Stay as-is. Source-copy at `src/repl/renderer.ts`. |
+| `templates/pgas-new/standalone/.pgas/pgas-new/dossier.yml.tmpl` | — | Stay as-is. Generic dossier blueprint. |
+| `templates/pgas-new/standalone/.pgas/pgas-new/artifacts.json.tmpl` | — | Stay as-is. |
+| `templates/pgas-new/repo/.pgas/wiring.yml.tmpl` | 8 | Stay as-is. Manifest blueprint. |
+| `templates/pgas-new/tests/*.test.ts.tmpl` (5 files) | 140 | Stay as-is. Generic born-with tests. |
+| `templates/pgas-new/audit/PGAS-NEW-GRADUATION.md.tmpl` | 13 | Stay as-is. |
+| `templates/pgas-new/consumer/artifacts.json.tmpl` | 10 | Stay as-is. |
+| `templates/pgas-new/curator/missing-wiring-request.md.tmpl` | 11 | Stay as-is. |
+| `templates/pgas-new/curator/registration-request.md.tmpl` | 19 | Stay as-is. |
+| `src/pgas-new/artifact-plan.ts` | ~200 | **Salvage with targeted edits.** Add new artifacts for `handlers/_resolver.ts` (FM1) and `prompts/` (when present). |
+| `src/pgas-new/template-renderer.ts` | ~330 | **Salvage with targeted edits.** Remove `STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE` and `EXISTING_*_TEMPLATE_BY_KIND` (Phase 4). Add `renderProgramSkeleton(spec, outDir)` that operates on the synthesized spec from state. |
+| `src/pgas-new/wiring-manifest.ts` | ~150 | Stay as-is. Manifest schema + validator. |
+| `src/pgas-new/existing-repo.ts` | — | Stay as-is. |
+| `src/pgas-new/curator-request.ts` | — | Stay as-is. |
+| `src/pgas-new/version.ts` | ~50 | Stay as-is. Engine pin + banned-imports scanner. |
+| `src/pgas-new/model.ts` | — | **Salvage with targeted edits.** Add `program.synthesized_spec`, `program.design_confirmed`, `program.plan_approved`, `program.skip_dimensions` to `PgasNewState`. |
+| `src/pgas-new/gates.ts` | — | Stay as-is. Add 2 new gate definitions (`design_confirmed`, `plan_approved`) — appended, not modified. |
+| `src/pgas-new/command-runner.ts` | — | Stay as-is. |
+| `src/pgas-new/control-plane.ts` | — | Stay as-is. |
+| `src/pgas-new/verify.ts` | — | Stay as-is. |
+| `src/index.ts` | ~30 (estimated) | **Salvage with targeted edits.** Re-export new foundry-server + repl-runner APIs. Remove deprecated preset types. |
+| `package.json` | 26 | **Salvage with targeted edits.** Add `@simodelne/pgas-server` to `dependencies` (currently empty; this is a structural change). Bump version. |
+| `package-lock.json` | — | Auto-updates. |
+| `tsconfig.json` | — | **Salvage with targeted edits if needed.** May need to include `src/foundry-program/*.yml` as an asset path for runtime resolution via `import.meta.url`. |
+| `tests/unit/template-renderer.test.ts` | ~860 | **Salvage with targeted edits.** Drop preset-routing tests. Add skeleton + synthesizer tests. The forward-looking test in the dirty working tree (`record_program_intake`) becomes Phase 2 acceptance. |
+| `tests/unit/cli.test.ts` | ~220 | **Salvage with targeted edits.** Drop the deprecated-preset-warning test (it tests behavior that goes away in v3.0). Add `cli-interactive.test.ts` (new file) for the bare-`pgas-new` entry path. |
+| `tests/unit/{artifact-plan,command-runner,control-plane,curator-request,existing-repo,gates,model,verify,version,wiring-manifest}.test.ts` | ~1300 | Stay as-is. |
+| `tests/static/public-imports.test.ts` (if present) | — | Stay as-is. |
+| `tests/vitest.config.ts` | — | Stay as-is. |
+| `tests/plugin-manifest.test.sh` | 92 | **Salvage with targeted edits.** Update version pin assertion. |
+| `tests/pgas-new-static.test.sh` | 60 | Stay as-is. Static render + install + typecheck + test gate. |
+| `docs/PGAS-NEW-ARCHITECTURE.md` | — | **Salvage with targeted edits.** Add §"CLI Surface" describing bare `pgas-new` entry. Already references the 10-mode flow correctly. |
+| `docs/PGAS-NEW-LIVE-GRADUATION.md` | — | Stay as-is. |
+| `docs/POST-MORTEM-2026-06-22-design-phase-drift.md` | — | Stay as-is. |
+| `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` | — | **Salvage with targeted edits.** Drop `apply_default_skeleton` in trace §12 (D-resolved: `choose_design_path` covers both record + populate per Codex I5). |
+| `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` | — | **Mark as superseded by this plan + the trace doc.** Add `> Status: superseded by 2026-06-22-v3-rebuild-plan.md` at the top. |
+| `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/*` | — | Stay as evidence + regression corpus. |
+| `CLAUDE.md` | — | **Salvage with targeted edits.** Replace `pgas-new design <slug>` references with `pgas-new` (D1). |
+| `MEMORY.md` | — | **Salvage with targeted edits.** Replace SI-1's `pgas-new design <slug>` with `pgas-new` (D1). |
+| `.github/workflows/ci.yml` | 67 | Stay as-is. |
+| `.github/PULL_REQUEST_TEMPLATE.md` | — | **Updated by governance prereq #38.** |
+| `.gitignore`, `.claude-plugin/plugin.json`, `LICENSE`, `README.md` | — | Stay as-is (README gets one-paragraph update in Phase 2). |
 
-**Salvage subtotal: ~4500 lines of working code + ~2000 lines of tests + docs.**
+**Salvage subtotal: ~3000 lines stay verbatim + ~1800 lines stay with targeted edits + ~2000 lines of tests stay.**
 
-## 4. Refactor list — files that move, rename, or get materially restructured
+## §5 Refactor list — files that move or get materially restructured
 
-### 4.1 The foundry's own program leaves the templates tree
+(Codex C5 / I11 fixes: include `src/index.ts`, package.json asset handling.)
 
-The current `templates/pgas-new/program/*` was misframed as "the generic program template." It is actually **the foundry's own self-program** (10 modes, foundry-specific actions like `design_architecture`, `plan_artifacts`, `write_scaffold_artifacts`, `npm_install`, etc.). It needs to leave the templates tree.
+### 5.1 The foundry's own program leaves the templates tree (Phase 1)
 
 | From | To | Notes |
 |---|---|---|
-| `templates/pgas-new/program/specs.yml.tmpl` | `src/foundry-program/specs.yml` | Drop `.tmpl` (no substitution — it's the foundry's runtime spec). Resolve any `{{TOKEN}}` to baked literals (`pgas-new` slug, `PgasNew` PASCAL_NAME, etc.). Keep the 10-mode structure. |
-| `templates/pgas-new/program/handlers.ts.tmpl` | `src/foundry-program/handlers.ts` | Same. Will be heavily expanded (currently 3 of 33 actions implemented as echo stubs; v3.0 implements all). |
-| `templates/pgas-new/program/tools.ts.tmpl` | `src/foundry-program/tools.ts` | Same. Currently all 33 tools registered as noopTool; v3.0 implements the ones that need real implementations (npm child_process, fs IO, git child_process, fetch). |
-| `templates/pgas-new/program/registration.ts.tmpl` | `src/foundry-program/registration.ts` | Same. |
+| `templates/pgas-new/program/specs.yml.tmpl` (342 lines) | `src/foundry-program/specs.yml` | Drop `.tmpl` (no substitution — foundry's runtime spec). Bake `pgas-new` slug / `PgasNew` PascalCase to literals. Adds the new actions, gates, and schema fields per §7 below. |
+| `templates/pgas-new/program/handlers.ts.tmpl` (24 lines) | `src/foundry-program/handlers.ts` | Heavy expansion to ~700 lines per §7. |
+| `templates/pgas-new/program/tools.ts.tmpl` (48 lines) | `src/foundry-program/tools.ts` | Expand the ~6 tools that need real impls (npm/git/gh/fetch); others stay as semantic-name registrations. |
+| `templates/pgas-new/program/registration.ts.tmpl` | `src/foundry-program/registration.ts` | Drop `.tmpl`. Standard PGAS program registration. |
+| Renderer wiring | Atomic with file moves (Codex I12) | `src/pgas-new/template-renderer.ts` Phase 1 commit moves the files AND updates the `--template pgas-new-foundry` rendering path to read from `src/foundry-program/` in the same commit. Tests pass after the single atomic commit. |
 
-### 4.2 The streaming REPL gets a sibling copy in `src/`
-
-The streaming REPL currently lives only in `templates/pgas-new/standalone/src/repl/` (it gets rendered into every generated scaffold). The foundry CLI itself also needs to use it (to drive the agent conversation against the embedded foundry server).
+### 5.2 The streaming REPL gets in-repo sibling copies (Phase 2)
 
 | Create | Source | Notes |
 |---|---|---|
-| `src/repl/runner.ts` | Refactor from `templates/pgas-new/standalone/src/repl/index.ts.tmpl` | Reusable streaming-REPL runtime callable from the CLI. Same SSE+WS logic, same control-plane handling, same queue/abort/textBusy guards. Token substitution stripped. |
-| `src/repl/renderer.ts` | Copy of `templates/pgas-new/standalone/src/repl/renderer.ts.tmpl` | Same. Box-drawing + spinner + chalk styling. |
+| `src/repl/runner.ts` | Refactor from `templates/pgas-new/standalone/src/repl/index.ts.tmpl` | Exports `runStreamingRepl(opts): Promise<ReplExitInfo>`. See §7.3 for full API. |
+| `src/repl/renderer.ts` | Copy of `templates/pgas-new/standalone/src/repl/renderer.ts.tmpl` | Same content, no token substitution. |
+| `src/repl/types.ts` | New | `ReplOptions`, `ReplExitInfo`, `ReplLogger`. |
 
-The template files stay where they are — generated scaffolds keep their own copy.
+### 5.3 CLI entry rewrite (Phase 2)
 
-### 4.3 The CLI entry point gets rewritten
+(Codex C1 / C4 / I8 fixes.)
 
-`src/cli.ts` (currently ~330 lines, all flag-parsing + render-dispatch) gets restructured:
+`src/cli.ts` entry switch is restructured. See §7.4 for the corrected classifier.
 
-- **Default entry path** (no args or `--slug ... --out ...` only): spawn embedded foundry server, host REPL, run the agent conversation. This is the new primary surface.
-- **Subcommand entry paths** (`version`, `help`, `validate-manifest`, `plan-standalone`, `render-standalone`, `plan-attach`, `render-attach`, `curator-request`, `session`): unchanged through v2.x — keep working for scripts and CI.
-- **`pgas-new render-foundry --out <dir>`**: new explicit self-bootstrap (renders the foundry's own program as a standalone scaffold; replaces `--template pgas-new-foundry`).
+### 5.4 Tests restructured
 
-### 4.4 Test files restructured
+(Codex F + G fixes.)
 
-`tests/unit/cli.test.ts` (currently 200+ lines, all subcommand tests) gets a peer:
-
-| Create | Notes |
+| Create / change | Purpose |
 |---|---|
-| `tests/unit/cli-interactive.test.ts` | Tests for the `pgas-new` (no args) entry path, design-path fork, intake recording, etc. Uses a deterministic LLM stub from `@simodelne/pgas-server/testing.js` so the conversation is reproducible. |
-| `tests/unit/foundry-program.test.ts` | Tests for `src/foundry-program/`: handler implementations, tool implementations, FM1–FM5 closure, etc. |
-| `tests/e2e/cli-design-session.test.sh` | End-to-end shell test: render foundry as a standalone scaffold, install, start, drive a full design session via stdin-piped REPL inputs, verify a fresh program is emitted. Companion to the Codex tmux-driven acceptance test described in §9. |
+| `tests/unit/cli-interactive.test.ts` (new) | Bare-`pgas-new` entry path; design-path fork; intake recording; name/slug derivation. Uses deterministic LLM stub. |
+| `tests/unit/foundry-program.test.ts` (new) | Foundry handlers (file IO, npm, git, gh) tested with mocks for side effects. |
+| `tests/unit/foundry-skeleton.test.ts` (new) | Skeleton loads through `loadSpecWithPatterns`; FM3 (system_mode_entry only on bootstrap); FM5 paths declared. |
+| `tests/unit/synthesize-program-spec.test.ts` (new) | Deterministic synthesizer; fixture intake → expected spec; no LLM call. |
+| `tests/integration/foundry-intake-flow.test.ts` (new) | In-process foundry program drive via `@simodelne/pgas-server/testing.js` `createTestHarness` with deterministic LLM stub. Asserts Q1–Q6 order, `record_program_intake` fires, both confirms gate transitions. |
+| `tests/integration/foundry-end-to-end.test.ts` (new) | Full session → emit + verify a generated program. |
+| `tests/architectural-invariants.test.ts` (new — issue #36) | Foundry-program spec exists; declares 10 modes; CLI has bare-entry path; consumer-preset enum empty (after Phase 4); architecture-doc references each CLI subcommand. |
+| `tests/e2e/cli-design-session.test.sh` (new) | Shell harness for Phase 3 end-to-end check (separate from the Codex tmux E2E in §10). |
 
-## 5. Delete list — files that go away (mostly already moved or scheduled)
+## §6 Delete list — files / surfaces that go away (Phase 4 v3.0.0)
 
-| Path | Reason | Status |
+(Codex D + I3 fixes: also delete stale tests/docs/warning text.)
+
+| Path / surface | When | Reason |
 |---|---|---|
-| The `policy-drafting | web-scraper | social-media-agent` values from the CLI's `ProgramTemplate` enum and the help text | Deprecated in v2.7.0; v3.0 removes | Already deprecated |
-| `STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE` map in `template-renderer.ts` + the three `EXISTING_*_TEMPLATE_BY_KIND` maps | The override mechanism's only purpose was routing the three consumer presets to their graduation programs | Remove when the flags are removed |
-| References to the foundry-self-as-a-template in `STANDALONE_TEMPLATE_BY_PATH` | The foundry's program is no longer a user-output template; it's the foundry's runtime program | Remove when `src/foundry-program/` exists |
-| `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/*.tmpl` files | They were template files for the deprecated flags; once the flags are removed and the regression corpus is set up against `MANDATE.md`s, the `.tmpl` files don't need to be loaded by the template-renderer anymore | Keep as evidence; un-wire from renderer |
+| `policy-drafting | web-scraper | social-media-agent` values in CLI's `ProgramTemplate` enum | Phase 4 | Deprecated in v2.7; removed in v3.0 |
+| `STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE` map + the three `EXISTING_*_TEMPLATE_BY_KIND` maps in `template-renderer.ts` | Phase 4 | Their only purpose was routing the three deprecated presets |
+| `consumerTemplateDeprecationWarning()` function + its invocations in `cli.ts` | Phase 4 | The deprecated flags are now removed; the warning is unreachable |
+| Tests in `tests/unit/cli.test.ts` covering deprecated-preset behavior | Phase 4 | The behavior is removed |
+| Tests in `tests/unit/template-renderer.test.ts` covering the three `EXISTING_*_TEMPLATE_BY_KIND` paths | Phase 4 | The maps are removed |
+| `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` | Phase 1 (during this work) | Superseded by this plan + trace doc. Marked at the top, not deleted. |
+| The `.tmpl` references in `template-renderer.ts` pointing into `docs/graduation-evidence/<name>/` | Phase 4 | Once the presets are removed, the evidence files stay on disk as evidence but the renderer no longer loads them |
+| `templates/pgas-new/program/{specs,handlers,tools,registration}.{yml,ts}.tmpl` | Phase 1 (moved, see §5.1) | Replaced by `src/foundry-program/` content + new skeleton in `templates/pgas-new/program/spec-skeleton.yml.tmpl` etc. |
 
-## 6. New surface — what gets built
+## §7 New surface — what gets built (file-level detail)
 
-### 6.1 `src/foundry-program/` — the foundry's runtime program
+### 7.1 `src/foundry-program/` — the foundry's runtime program
 
-The foundry is itself a PGAS program. This directory contains its spec + handlers + tools + registration. **Not a template — actual runtime code.**
+The foundry IS a PGAS program. This directory contains its spec + handlers + tools + registration. **Runtime code, not templates.**
 
-**`src/foundry-program/specs.yml`** (~342 lines, derived from the moved `program/specs.yml.tmpl`):
+#### 7.1.1 `src/foundry-program/specs.yml` (~400 lines, derived from existing 342-line template)
 
-Same 10 modes as today. Adds:
+Modes unchanged from the existing template. **New actions, schema, and gates per D3 (program.* namespace) + D4 (two confirms):**
 
-- New action `record_program_intake` (the Q1–Q6 capture; already speced in `tests/unit/template-renderer.test.ts` per the test added yesterday). Mutations: `intake.purpose`, `intake.entry_channel`, `intake.stages`, `intake.transitions`, `intake.delegation`, `intake.completion`, `intake.program_intake_recorded`.
-- New action `choose_design_path` with mutation `intake.design_path: 'design' | 'default'`. Default branch sets the 3-mode skeleton constants and `intake.program_intake_recorded = true` so the user doesn't have to answer Q1–Q6.
-- New action `confirm_design` — gated user_confirmation step. `intake_intelligence → architecture_design` transition requires `intake.design_confirmed = true`.
-- New action `synthesize_program_spec` in `architecture_design` mode (Phase 3 work). Reads `intake.*` from state, runs mechanical rename+copy against the skeleton, writes the result to `architecture.synthesized_spec`.
-- Schema entries for all new state fields.
-- Projection includes for all new fields.
-- Guidance for `intake_intelligence` covering: ask Q1–Q6 in order; use `request_user_action` with `intent='collect_program_intake'`; call `record_program_intake` with structured payload; don't re-ask what's already extracted; if user chose default path, skip the interview.
+**New actions added to `action_map`:**
 
-**`src/foundry-program/handlers.ts`** (currently 24 lines, expands to ~700 lines):
+```yaml
+choose_design_path:
+  description: "Record whether the user wants the interactive interview or the default 3-mode skeleton, and on 'default' pre-populate the skeleton constants so they don't have to answer Q1-Q6."
+  mutations:
+    - { op: MSet, path: program.design_path, from_arg: design_path }
+    # When design_path == 'default', the handler ALSO populates the skeleton constants
+    # via subsequent MSet mutations on intake.stages, intake.transitions, intake.completion.
+    # See handler implementation in §7.1.2.
+  channel: widget_output
 
-Implements every action declared in the spec's `vocabulary:` lists across all 10 modes. Concrete handlers for what each is supposed to do:
+record_program_intake:
+  description: "Capture the user's Q1-Q6 design interview answers into governed state."
+  mutations:
+    - { op: MSet, path: intake.purpose, from_arg: purpose }
+    - { op: MSet, path: intake.entry_channel, from_arg: entry_channel }
+    - { op: MSet, path: intake.stages, from_arg: stages }
+    - { op: MSet, path: intake.transitions, from_arg: transitions }
+    - { op: MSet, path: intake.delegation, from_arg: delegation }
+    - { op: MSet, path: intake.completion, from_arg: completion }
+    - { op: MSet, path: intake.program_intake_recorded, value: true }
+  channel: widget_output
 
-| Handler | Implementation |
-|---|---|
-| `record_user_note` | Record to state (already implemented as echo, stays similar) |
-| `pin_notebook_note` | Pin notebook key (state mutation only) |
-| `confirm_research_scope`, `record_user_requested_research` | Toggle state flags |
-| `web_research` | **Real implementation** — calls a research tool (fetch with allowlisted domains) and records results to state |
-| `select_repo_target`, `authorize_standalone_target`, `authorize_existing_repo_target` | State flags |
-| `load_wiring_manifest` | **Real implementation** — calls `loadWiringManifest()` from `src/pgas-new/wiring-manifest.ts` and writes the result to state |
-| `create_curator_request` | **Real implementation** — calls `prepareExistingRepoAttachment()` and writes the request artifact via `src/pgas-new/curator-request.ts` |
-| `design_architecture` | State mutation — records the user's architecture intent (mode list, transition list) to `architecture.*` |
-| `synthesize_program_spec` | **Real implementation** (Phase 3) — runs the mechanical rename+copy synthesizer |
-| `plan_artifacts` | **Real implementation** — calls `createStandaloneArtifactPlan` or `createExistingRepoArtifactPlan` from `src/pgas-new/artifact-plan.ts` |
-| `approve_artifact_plan` | State flag |
-| `write_scaffold_artifacts` | **Real implementation** — calls `renderStandaloneScaffold` or `renderExistingRepoAttachment` from `src/pgas-new/template-renderer.ts`. Uses the synthesized spec from state, not a frozen template. |
-| `git_status` | **Real implementation** — child_process `git status --short` on the target repo |
-| `npm_install` | **Real implementation** — child_process `npm install --no-audit --no-fund` in the target dir |
-| `npm_typecheck` | child_process `npm run typecheck` |
-| `npm_test` | child_process `npm test` |
-| `run_static_verification` | Wrap install+typecheck+test, record evidence |
-| `confirm_live_provider_intent` | User_confirmation step |
-| `run_api_blackbox_verification` | **Real implementation** — runs the generated `tests/api-blackbox.test.ts` against an in-process pgas-server with the generated program loaded |
-| `run_live_provider_verification` | **Real implementation** — runs the generated `tests/live-provider.test.ts` against a real LLM provider per user-confirmed env vars |
-| `git_rebase_latest` | child_process `git fetch && git rebase` |
-| `run_rebase_static_verification` | Re-run static after rebase |
-| `open_pull_request` | **Real implementation** — child_process `gh pr create` with the body assembled from `architecture.*` + `graduation.*` evidence |
-| `record_program_intake` | Already covered (records Q1–Q6 to state) |
-| `choose_design_path` | Sets `intake.design_path` and (on default) populates the skeleton constants |
-| `confirm_design` | Sets `intake.design_confirmed = true` |
+confirm_design:
+  description: "User-confirm the proposed mode/transition list before architecture_design runs synthesis. First of two confirm gates."
+  mutations:
+    - { op: MSet, path: program.design_confirmed, value: true }
+  channel: widget_output
 
-**`src/foundry-program/tools.ts`** (currently 48 lines all-noop, expands to ~400 lines):
+approve_plan:
+  description: "User-approve the artifact plan before branch_write runs. Second of two confirm gates."
+  mutations:
+    - { op: MSet, path: program.plan_approved, value: true }
+  channel: widget_output
 
-Tool implementations for actions that genuinely need a tool (the engine's `kind: 'local'` shape). Most semantic actions go through handlers; tools cover things that benefit from being declarative (e.g., `web_research`'s allowlist, `npm_*` env handling).
+synthesize_program_spec:
+  description: "Deterministically synthesize the user's program spec from intake.* using mechanical rename+copy from the skeleton. NOT an LLM emit — pure code."
+  mutations:
+    - { op: MSet, path: program.synthesized_spec, from_handler: synthesized_spec }
+    - { op: MSet, path: program.synthesis_complete, value: true }
+  channel: widget_output
+```
 
-**`src/foundry-program/registration.ts`** (~40 lines):
+**New preconditions:**
 
-Standard PGAS program registration: `createProgramAdapters`, `createToolRegistry`, `loadSpecWithPatterns`, `enableNotebook`. Exports `createPgasNewFoundryProgramEntry()`.
+- `intake_intelligence → architecture_design` transition gated on `program.design_confirmed = true`
+- `scaffold_plan → branch_write` transition gated on `program.plan_approved = true`
+- `record_program_intake` precondition: `intake.program_intake_recorded` is not true (idempotency)
+- `synthesize_program_spec` precondition: `intake.program_intake_recorded = true` AND `program.design_confirmed = true`
+- `confirm_design` preconditions:
+  - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
+  - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
+- `approve_plan` preconditions: same shape as `confirm_design`
 
-### 6.2 `templates/pgas-new/program/` — the new generic skeleton
+**Schema additions (D3 + Codex C2 fix for FM5):**
 
-Replaces the misframed contents (which moved to `src/foundry-program/`). Now contains a **truly generic 3-mode skeleton** that the foundry's `synthesize_program_spec` action operates on.
+```yaml
+schema:
+  # Existing fields kept
+  ...
+  # D3 — program.* namespace for synthesis
+  program.design_path: string                # 'design' | 'default'
+  program.design_confirmed: boolean
+  program.plan_approved: boolean
+  program.synthesized_spec: object
+  program.synthesis_complete: boolean
+  program.skip_dimensions: array             # Q1..Q6 skipped — used for fallback defaults
+  program.skip_dimensions.*: string
+  # Intake structured fields (matches user's existing test in tests/unit/template-renderer.test.ts)
+  intake.purpose: string
+  intake.entry_channel: string
+  intake.stages: array
+  intake.stages.*: object
+  intake.transitions: array
+  intake.transitions.*: object
+  intake.delegation: object
+  intake.completion: object
+  intake.completion.final_stage: string
+  intake.completion.guard_field: string
+  intake.program_intake_recorded: boolean
+  # FM5 — engine-owned schema paths (full set from v1 architecture paper)
+  inputs.query_result.kind: string
+  inputs.query_result.value_json: object
+  inputs.query_meta.source_path: string
+  inputs.query_meta.source_channel: string
+  inputs.query_meta.continuation_round: number
+  inputs.query_meta.scope_redirect: string
+  inputs.query_meta.message: string
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
+  governance.round_counter: number
+```
 
-| Path | Content |
-|---|---|
-| `templates/pgas-new/program/spec-skeleton.yml.tmpl` (~200 lines) | The canonical generic skeleton: 3 modes `start → working → complete`. `start` is the bootstrap mode (sole admitter of `system_mode_entry`, per FM3). `working` is the handler-result-driven mode (FM3-safe channel set). `complete` is the terminal mode. Standard `control_plane:` vocabulary. Engine-owned schema paths declared (`inputs.query_result.{kind,value_json}`, `inputs.query_meta.{source_path,source_channel,continuation_round,scope_redirect,message}`, per FM5). Action map carries: `record_user_note`, `pin_notebook_note`, `example_action` (placeholder the synthesizer renames), and standard session controls. |
-| `templates/pgas-new/program/handlers-skeleton.ts.tmpl` (~80 lines) | Minimal handlers for the skeleton actions. Ships `handlers/_resolver.ts` pattern (FM1). |
-| `templates/pgas-new/program/tools-skeleton.ts.tmpl` (~50 lines) | Tool registry shell. |
-| `templates/pgas-new/program/registration-skeleton.ts.tmpl` (~40 lines) | Standard registration shape. Ships the `createAdapters` override worked example (FM4). |
+**Projection includes for `intake_intelligence`:**
 
-The skeleton is **rendered + transformed** by `synthesize_program_spec`. The synthesizer:
+```yaml
+projection:
+  intake_intelligence:
+    include:
+      - inputs.user_text
+      - intake.mandate
+      - intake.purpose
+      - intake.entry_channel
+      - intake.stages
+      - intake.transitions
+      - intake.delegation
+      - intake.completion
+      - intake.program_intake_recorded
+      - program.design_path
+      - program.design_confirmed
+      - program.skip_dimensions
+      - notebook.entries
+      - notebook.pins
+```
 
-1. Reads `intake.stages`, `intake.transitions`, `intake.completion` from state.
-2. Loads `spec-skeleton.yml.tmpl`.
-3. Performs five mechanical operations (per v1 spec):
-   - **Mode renames** (Q3): `start` → first stage; `working` → middle stages (one per extra stage); `complete` → last stage.
-   - **Extra working stages** (Q3 > 3): for each middle stage, copy the `working` block, rename, chain transitions linearly.
-   - **Extra transitions** (Q4): add `from/to/trigger` rows for each branch / loop-back / bail-out, with optional `guard`.
-   - **Terminal + gate** (Q6): name the terminal mode after the user's final stage, gate the transition into it on the completion flag.
-   - **Prose** (Q1, Q2, Q5): fold purpose into preamble ROLE line, note entry channel + delegation in the README.
-4. Validates the output against the engine's spec loader (`@simodelne/pgas-server/testing.js`'s `loadSpecWithPatterns`).
-5. Writes to `architecture.synthesized_spec` in state.
+**Guidance for `intake_intelligence`:**
 
-**No LLM call in the synthesizer.** The LLM does judgment in `intake_intelligence` (asking questions, parsing free-text, deciding follow-ups); the synthesis is pure code.
+```yaml
+guidance:
+  intake_intelligence:
+    - "If program.design_path is not set, your first move is to ask the user whether they want to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton. Use request_user_action with intent='choose_design_path'. Then call choose_design_path with the user's answer."
+    - "If program.design_path == 'default': you're done — choose_design_path's handler populated the skeleton constants. Move to the confirm step."
+    - "If program.design_path == 'design' and intake.program_intake_recorded is not true: ask the 6 design questions IN ORDER, one at a time or in a small batch, with brief context for each. Order matters."
+    - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
+    - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
+    - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']."
+    - "Q4 Decision points — branches, loops, bail-outs; these become extra transitions, optionally with guards. Default if skipped: no extra transitions."
+    - "Q5 Delegation — does any stage delegate to a child session / another program? Default if skipped: 'none'."
+    - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
+    - "If the user replies 'skip' to any of Q1-Q6 (or any clearly equivalent intent), record the skip in program.skip_dimensions and use the dimension's default in the structured payload. Don't re-ask."
+    - "If the user replies 'reject' or 'change' or 'edit <text>' to a question, treat the prior answer as discarded and ask the question again. Don't proceed."
+    - "Once you have all 6 answers (or defaults for skipped dimensions), call record_program_intake with the structured payload."
+    - "After record_program_intake, echo back the synthesized mode list + transitions to the user — render via widget_output — and ask for confirmation via request_user_action with intent='confirm_design'. Wait for the user_confirmation trigger."
+    - "On user_confirmation with decision='approve', call confirm_design."
+    - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask the user which dimension they want to revise, re-run the relevant question, and re-emit the echo-back."
+    - "Don't re-ask anything you already extracted from the user's free-text introduction."
+```
 
-### 6.3 `src/foundry-server.ts` — embedded server lifecycle
+**Guidance for `scaffold_plan` (D4 second confirm):**
 
-| Item | Purpose |
-|---|---|
-| `spawnFoundryServer(opts)` | Spawn an embedded `@simodelne/pgas-server` child process. Loads `createPgasNewFoundryProgramEntry()`. Renders the foundry-program working dir to `~/.pgas-new/foundry-v<version>/` on first run (one-time cost, cached). Picks free port. Suppresses child stdout/stderr to a log file. Polls `/health` with timeout. Returns `{apiBase, wsBase, token, kill}`. |
-| LLM provider env passthrough | `PGAS_OPENAI_BASE_URL`, `PGAS_OPENAI_API_KEY`, `PGAS_OPENAI_MODEL`, `PGAS_GEMINI_*`, `PGAS_ANTHROPIC_*`, `PGAS_OLLAMA_*` — pass through to the child. |
-| SIGINT propagation | Parent SIGINT cleanly kills child. |
-| Crash handling | If child exits non-zero during startup, surface the tail of its log to the user with a clear message. |
+```yaml
+guidance:
+  scaffold_plan:
+    - "Call plan_artifacts to produce the artifact plan from program.synthesized_spec."
+    - "Echo the artifact-plan list (paths + purposes) to the user. Ask for approval via request_user_action with intent='approve_plan'."
+    - "On user_confirmation decision='approve', call approve_plan. Then the transition to branch_write fires."
+    - "On reject/edit: don't call approve_plan; ask which artifact the user wants changed; re-emit."
+```
 
-### 6.4 `src/cli.ts` rewrites the entry switch
+#### 7.1.2 `src/foundry-program/handlers.ts` (~700 lines)
 
-The first argv-classification step:
+Handler implementations for every action in the foundry's spec. Each handler has a documented contract: arg shape, side effects, state mutations the handler causes (separate from `mutations:` in spec), failure modes, secret-redaction.
+
+(Codex I9 fix — example contracts for the load-bearing handlers:)
 
 ```ts
-const isAgentEntry =
-  argv.length === 0 ||
-  (argv[0] && !argv[0].startsWith('-') && !KNOWN_SUBCOMMANDS.has(argv[0])) ||
-  argv.includes('--design');
+/**
+ * choose_design_path
+ *   args: { design_path: 'design' | 'default' }
+ *   side effects: none
+ *   state mutations: program.design_path (via spec mutations); IF 'default',
+ *     handler returns additional mutations to populate intake.* defaults:
+ *       intake.stages = [{slug:'start', is_bootstrap:true}, {slug:'working'}, {slug:'complete', is_terminal:true}]
+ *       intake.transitions = [{from:'start', to:'working', trigger:'auto'},
+ *                             {from:'working', to:'complete', trigger:'auto', guard_field:'work.example_ready', guard_value:true}]
+ *       intake.completion = { final_stage:'complete', guard_field:'work.example_ready' }
+ *       intake.purpose = '' (skip default per guidance)
+ *       intake.entry_channel = 'user_text'
+ *       intake.delegation = {}
+ *       intake.program_intake_recorded = true
+ *   failure modes: invalid design_path value — throw with clear error
+ *   secret redaction: n/a
+ */
 
-if (isAgentEntry && !argv.includes('--help') && !argv.includes('-h')) {
-  return runAgentSession(argv);
+/**
+ * synthesize_program_spec
+ *   args: {} (reads from state, not args)
+ *   side effects: filesystem read of templates/pgas-new/program/spec-skeleton.yml.tmpl
+ *   state reads: intake.*, program.slug, program.name
+ *   state mutations (via handler return → spec MSet): program.synthesized_spec (object),
+ *     program.synthesis_complete (boolean)
+ *   failure modes:
+ *     - skeleton file missing → throw
+ *     - validator (loadSpecWithPatterns) rejects synthesized spec → throw with validator output
+ *     - intake fields missing → throw with field list
+ *   secret redaction: n/a
+ *   determinism: pure function of intake.* + skeleton file. No LLM call. Same inputs → same outputs.
+ */
+
+/**
+ * write_scaffold_artifacts
+ *   args: { target_kind: 'standalone' | 'attach', out_dir: string }
+ *   side effects: writes files to out_dir per program.synthesized_spec
+ *   state reads: program.synthesized_spec, program.slug, program.name, repo.wiring_manifest
+ *   state mutations: artifacts.written (array of paths), artifacts.write_complete (boolean)
+ *   failure modes:
+ *     - target_kind === 'standalone' AND out_dir exists with collisions → throw with collision list
+ *     - target_kind === 'attach' AND wiring_manifest absent/invalid → throw, do NOT write
+ *     - any filesystem error → throw with path
+ *   secret redaction: out_dir paths are logged; no secrets expected in this surface
+ *   implementation: delegates to renderStandaloneScaffold or renderExistingRepoAttachment from src/pgas-new/template-renderer.ts
+ */
+
+/**
+ * npm_install
+ *   args: { cwd: string }
+ *   side effects: child_process npm install --no-audit --no-fund in cwd
+ *   state mutations: graduation.install_evidence_id (string)
+ *   timeout: 300_000 ms (5 minutes)
+ *   failure modes: non-zero exit → throw with stderr tail (first 200 chars)
+ *   secret redaction: filter NPM_TOKEN from logged env; never log .npmrc content
+ *   cwd safety: cwd must be inside program.target_dir (path traversal check)
+ */
+
+/**
+ * git_status / git_rebase_latest / open_pull_request
+ *   Similar contracts — see full doc in handler source
+ *   timeout: 60_000 ms for git_status; 300_000 for rebase; 120_000 for gh pr create
+ *   secret redaction: GITHUB_TOKEN never logged; gh's own auth output filtered
+ */
+```
+
+All 33+ actions get this level of contract documentation in the handler source (JSDoc).
+
+#### 7.1.3 `src/foundry-program/tools.ts` (~400 lines)
+
+Tool registry. Most semantic actions go through handlers; a few benefit from declarative tool wrappers:
+
+- `web_research` — `kind: 'local'` tool that calls fetch with an allowlist (configurable; default = empty meaning the foundry asks for explicit URL approval each time)
+- `npm_install` / `npm_typecheck` / `npm_test` — `kind: 'local'` with timeout + env scrubbing
+- `git_status` / `git_rebase_latest` — `kind: 'local'`
+- `open_pull_request` — `kind: 'local'` wrapping gh CLI
+- All other semantic actions — `kind: 'local'` with no-op tool fn that just returns args to the handler (handler does the work via the action_map mutation pipeline)
+
+#### 7.1.4 `src/foundry-program/registration.ts` (~40 lines)
+
+Standard PGAS program registration via the public engine surface. Exports `createPgasNewFoundryProgramEntry()`.
+
+### 7.2 `templates/pgas-new/program/` — the new generic skeleton
+
+Replaces the misframed contents that moved to `src/foundry-program/`. Now a truly **generic 3-mode skeleton** for the synthesizer to operate on.
+
+#### 7.2.1 `templates/pgas-new/program/spec-skeleton.yml.tmpl` (~250 lines)
+
+The canonical generic skeleton. Templated with `{{NAME}}`, `{{SLUG}}`, `{{PASCAL_NAME}}` for substitution by the synthesizer's emit step. Contents:
+
+- **3 modes:** `start` (bootstrap; sole admitter of `system_mode_entry`, per FM3) → `working` (handler-result-driven; FM3-safe channel set) → `complete` (terminal)
+- **Action map:** `record_user_note`, `pin_notebook_note`, `example_action` (placeholder the synthesizer renames per intake), session controls
+- **Standard channels:** `user_text`, `widget_output`, `system_mode_entry` (only on `start`)
+- **Control plane vocabulary:** standard 7-control set
+- **Schema:** full FM5 engine-owned path set (Codex C2 fix):
+  - `inputs.query_result.{kind,value_json}`
+  - `inputs.query_meta.{source_path,source_channel,continuation_round,scope_redirect,message}`
+  - `inputs.mode_entry.{mode,from_mode,entry_round}`
+  - `governance.round_counter`
+  - User-program domain fields: `work.example_ready` etc.
+- **Repair bound, fallback channel, projections, preamble** all parameterized but with sensible defaults
+
+#### 7.2.2 `templates/pgas-new/program/handlers-skeleton.ts.tmpl` (~120 lines)
+
+Minimal handler shells. Ships the **`handlers/_resolver.ts` pattern (FM1 closure)** — the synthesizer emits a directory structure under `<programs>/<slug>/handlers/` with:
+
+- `<programs>/<slug>/handlers/index.ts` — exports `handlers` record
+- `<programs>/<slug>/handlers/_resolver.ts` — payload-override-then-domain resolver
+
+(Codex C2 / FM1 fix: skeleton emits a **directory**, not a flat `handlers.ts`. Artifact plan updated accordingly in §4 (`artifact-plan.ts` edits).)
+
+#### 7.2.3 `templates/pgas-new/program/tools-skeleton.ts.tmpl` (~60 lines)
+
+Tool registry shell. Exports `register{{PASCAL_NAME}}Tools(registry)` that registers semantic actions.
+
+#### 7.2.4 `templates/pgas-new/program/registration-skeleton.ts.tmpl` (~50 lines)
+
+Standard registration shape — ships the `createAdapters` override worked example (FM4).
+
+### 7.3 `src/repl/runner.ts` API contract (Codex I8 fix)
+
+```ts
+export interface ReplOptions {
+  apiBase: string;                                  // e.g. http://localhost:4500
+  wsBase: string;                                   // e.g. ws://localhost:4500
+  token: string;                                    // dev-token in dev mode
+  program: string;                                  // e.g. 'pgas-new-foundry'
+  programDisplayName?: string;
+  initialDomain?: Record<string, unknown>;          // pre-fill state, e.g. { 'program.slug': 'foo' }
+  stdin?: NodeJS.ReadableStream;                    // default process.stdin (injectable for tests)
+  stdout?: NodeJS.WritableStream;                   // default process.stdout
+  logger?: (level: 'info'|'warn'|'error', msg: string) => void;
+  exitOnTerminal?: boolean;                         // default true; false for tests that want to inspect post-session state
+  abortSignal?: AbortSignal;                        // SIGINT propagation
+}
+
+export interface ReplExitInfo {
+  reason: 'session_terminal' | 'user_exit' | 'sigint' | 'error';
+  sessionId: string | null;
+  finalMode: string | null;
+  exitCode: number;
+}
+
+/**
+ * Runs a streaming REPL session against the given pgas-server.
+ * Returns a promise that resolves when the session ends (terminal mode, /exit, SIGINT, or error).
+ *
+ * Lifecycle:
+ *   1. Connect notification stream (WS), wait opened.
+ *   2. Verify auth + program registration via GET /programs.
+ *   3. Set up readline on stdin; start prompt loop.
+ *   4. On free text → trigger session (SSE stream).
+ *   5. On /command → dispatch to control_plane.
+ *   6. On `session_terminal` event OR user types `/exit` OR SIGINT received → shutdown + resolve.
+ *
+ * Errors during connection / programs.list / unrecoverable WS → reject with descriptive error.
+ *
+ * Does NOT call process.exit(). Returns ReplExitInfo with intended exit code.
+ * Caller (CLI entry) decides whether to exit the process.
+ */
+export async function runStreamingRepl(opts: ReplOptions): Promise<ReplExitInfo>;
+```
+
+The current template-version `index.ts.tmpl` is refactored to import from `runStreamingRepl` so generated scaffolds use the same code path as the foundry CLI.
+
+### 7.4 CLI rewrite — corrected classifier (Codex C1 + C4 fix)
+
+```ts
+const KNOWN_SUBCOMMANDS = new Set([
+  'help', 'version', 'session',
+  'plan-standalone', 'render-standalone',
+  'plan-attach', 'render-attach',
+  'validate-manifest', 'curator-request',
+  // Phase 1+: render-foundry as explicit self-bootstrap entry
+  'render-foundry',
+]);
+
+export async function runCli(argv: string[]): Promise<CliResult> {
+  // 1. Help short-circuits anywhere in argv
+  if (argv.includes('--help') || argv.includes('-h')) {
+    return ok(helpText());
+  }
+
+  // 2. Bare CLI (no args) → agent entry
+  if (argv.length === 0) {
+    return runAgentSession({});
+  }
+
+  // 3. First arg is a known subcommand → dispatch
+  if (KNOWN_SUBCOMMANDS.has(argv[0])) {
+    return dispatchSubcommand(argv);
+  }
+
+  // 4. First arg is a flag (--slug, --out, etc.) → agent entry with parsed options
+  if (argv[0].startsWith('-')) {
+    const parsed = parseAgentArgs(argv);  // recognizes --slug, --name, --out, --non-interactive, --provider
+    return runAgentSession(parsed);
+  }
+
+  // 5. First arg is a non-flag, non-subcommand → unknown command error
+  return fail(`unknown command: ${argv[0]}\nRun 'pgas-new --help' for usage.`, 2);
+}
+
+interface AgentArgs {
+  slug?: string;       // optional pre-fill; if absent, agent asks
+  name?: string;       // optional pre-fill; if absent, agent asks or derives from slug
+  outDir?: string;     // optional pre-fill; if absent, agent asks; if blank, defaults to ./<slug>
+  nonInteractive?: boolean;  // CI mode — errors if agent needs to ask anything
+  provider?: string;   // optional override; otherwise reads from env
+}
+
+async function runAgentSession(args: AgentArgs): Promise<CliResult> {
+  // 1. Validate slug if provided (kebab-case, no path traversal)
+  // 2. Validate provider env (one of PGAS_OPENAI_*, PGAS_GEMINI_*, etc. must be set)
+  //    If missing: in non-interactive mode error; in interactive mode print friendly message and exit 1
+  // 3. spawnFoundryServer() → { apiBase, wsBase, token, kill, logPath }
+  // 4. runStreamingRepl({ apiBase, wsBase, token, program: 'pgas-new-foundry',
+  //     initialDomain: { 'program.slug': args.slug, 'program.name': args.name, 'program.target_dir': args.outDir } })
+  // 5. On REPL exit, kill server, return { exitCode: replExitInfo.exitCode }.
 }
 ```
 
-`KNOWN_SUBCOMMANDS` is the existing set: `help`, `version`, `session`, `plan-standalone`, `render-standalone`, `validate-manifest`, `plan-attach`, `render-attach`, `curator-request`, plus the new `render-foundry`.
+**Program identity capture (Codex C4 fix):**
 
-`runAgentSession(argv)`:
+- `--slug <slug>`: kebab-case, validated upfront via `validateProgramIdentity`. If absent, the agent asks during `intake_intelligence` (first question after the design-path fork).
+- `--name <name>`: title-case display name. If absent and `--slug` provided, derive: `legal-fee-proposals` → `Legal Fee Proposals` (replace `-` with ` `, title-case each word). Agent confirms the derivation.
+- PascalCase identifier: derived from slug. `legal-fee-proposals` → `LegalFeeProposals`. Used for code-gen identifiers (e.g., `createLegalFeeProposalsProgramEntry`). Never user-facing.
+- `--out <dir>`: target directory. If absent, defaults to `./<slug>`. Agent confirms.
 
-1. Parse `--slug`, `--name`, `--out`, `--non-interactive` from argv.
-2. Print banner.
-3. `spawnFoundryServer()`.
-4. `runStreamingRepl({ apiBase, wsBase, token, program: 'pgas-new-foundry' })` from the new `src/repl/runner.ts`.
-5. The REPL opens a session against the foundry program. `intake.program_slug` and `intake.out_dir` are pre-set if the user passed `--slug` / `--out` (so the agent doesn't have to ask).
-6. The agent drives the conversation. When the session reaches `pr_graduation` (or terminal mode for non-PR flows), the foundry's `branch_write` has already written the user's program to `--out` (or to a default `./<slug>`).
-7. On user `/exit` or SIGINT: clean shutdown — kill the child, print "Bye."
+These rules are validated in `tests/unit/cli-interactive.test.ts`.
 
-### 6.5 New tests
+### 7.5 `src/foundry-server.ts` — embedded server lifecycle (Codex I7 fix)
 
-| Test | Purpose |
-|---|---|
-| `tests/unit/cli-interactive.test.ts` | `runCli([])` enters the agent entry path; `runCli(['version'])` etc unchanged; `--non-interactive` errors with clear message if intake needs questions. |
-| `tests/unit/foundry-program.test.ts` | Asserts foundry handlers actually do what they claim (file IO, npm child_process, etc., using mocks for the side effects). |
-| `tests/unit/foundry-skeleton.test.ts` | Asserts the new generic skeleton is FM3-safe (system_mode_entry only on bootstrap), FM5-complete (all engine-owned `inputs.query_*` paths declared), parses through `loadSpecWithPatterns`. |
-| `tests/unit/synthesize-program-spec.test.ts` | Deterministic — feed fixture intake into the synthesizer, assert output matches expected spec. No LLM call. |
-| `tests/integration/foundry-intake-flow.test.ts` | Drives the foundry program in-process via `@simodelne/pgas-server/testing.js`'s `createTestHarness` with a deterministic LLM stub. Asserts the Q1–Q6 interview runs, `record_program_intake` fires, `confirm_design` gates the transition. |
-| `tests/integration/foundry-end-to-end.test.ts` | Full design session against a fresh out-dir: intake → architecture_design → scaffold_plan → branch_write → static_verify. Asserts a working program is emitted that itself typechecks and passes its born-with tests. |
-| `tests/e2e/cli-design-session.test.sh` | Shell harness that runs `pgas-new` against a real (Qwen/local) provider, drives the REPL via stdin, asserts the rendered scaffold is real. |
-| `tests/architectural-invariants.test.ts` (correction C from yesterday's governance patch — issue #36) | Locks the v3 invariants in code: foundry-program spec exists, declares the 10 modes; CLI has `design`/agent entry; consumer-preset enum is empty; architecture doc references each CLI command. |
+```ts
+export interface SpawnedServer {
+  apiBase: string;          // http://localhost:<port>
+  wsBase: string;           // ws://localhost:<port>
+  token: string;            // 'dev-token' (devMode)
+  kill(): Promise<void>;    // SIGTERM, wait for exit, then SIGKILL after 5s
+  logPath: string;          // path to child's stdout/stderr log file
+}
 
-## 7. Phased delivery
+/**
+ * Spawn an embedded foundry server. Idempotent first-run render to workdir.
+ *
+ * Workdir resolution:
+ *   - default: ~/.pgas-new/foundry-v<PGAS_NEW_VERSION>/
+ *     where PGAS_NEW_VERSION is read from package.json
+ *   - override via PGAS_NEW_FOUNDRY_WORKDIR env
+ *
+ * First-run render:
+ *   1. If workdir does NOT exist:
+ *      a. mkdir -p <workdir>
+ *      b. Copy src/foundry-program/{specs.yml, handlers.ts, tools.ts, registration.ts}
+ *         and the entry server.ts shim to <workdir>/
+ *      c. Write a minimal package.json at <workdir>/ with @simodelne/pgas-server dep + tsx
+ *      d. Run `npm install --no-audit --no-fund --prefix <workdir>` (silent, log to <workdir>/install.log)
+ *      e. On install failure: throw with tail of install.log
+ *   2. If workdir EXISTS: skip render; verify <workdir>/node_modules exists; if not, run npm install.
+ *
+ * Spawn:
+ *   1. Pick free port via net.createServer() listen(0) + immediate close
+ *   2. child_process.spawn('node', ['--import', 'tsx', 'server.ts'], {
+ *        cwd: workdir,
+ *        env: {
+ *          ...process.env,                            // pass user's PGAS_OPENAI_*, etc.
+ *          PGAS_PORT: String(port),
+ *          PGAS_DEV_MODE: '1',
+ *          PGAS_LOG_LEVEL: 'warn',
+ *        },
+ *        stdio: ['ignore', logFd, logFd],             // pipe stdout/stderr to log file
+ *      })
+ *   3. Poll http://localhost:<port>/health every 200ms, timeout 15_000ms
+ *   4. On timeout OR child exit during startup: kill child, throw with tail of log
+ *
+ * Auth:
+ *   - devMode=1 → server accepts any token; we use 'dev-token'
+ *   - In non-dev: would need PGAS_CLI_TOKEN env; not supported in v3.0.0
+ *
+ * Log path:
+ *   <workdir>/foundry-server-<timestamp>.log
+ *   Keep last 5 logs; older ones rotated out.
+ *
+ * Secret redaction:
+ *   - The child server inherits process.env including provider API keys
+ *   - Log file is rotated and stored at <workdir>; never written to the user's
+ *     output directory or to git-tracked locations
+ *   - foundry-server.ts NEVER logs env values; only PGAS_PORT and PGAS_DEV_MODE
+ *   - On startup-error path: tail of log is included in thrown error — but
+ *     pgas-server's own startup log doesn't contain raw env values, only metadata
+ */
+export async function spawnFoundryServer(opts?: {
+  port?: number;
+  workdir?: string;
+}): Promise<SpawnedServer>;
+```
 
-### Phase 0 — Preparation (already landed yesterday, no work)
-- ✅ Graduation programs moved to `docs/graduation-evidence/`
-- ✅ MANDATE.md per graduation
-- ✅ `--template <consumer>` flags deprecated
-- ✅ Governance corrections A+B+F (CLAUDE.md Program Nature, expanded required reading, MEMORY.md Strategic Invariants)
-- ✅ Post-mortem committed
-- ✅ Trace doc committed
+### 7.6 `src/index.ts` updates (Codex I11 fix)
 
-### Phase 1 — Foundry-program relocation (no behavior change yet)
-1. Move `templates/pgas-new/program/{specs,handlers,tools,registration}.{yml,ts}.tmpl` → `src/foundry-program/{specs.yml,handlers.ts,tools.ts,registration.ts}`. Drop tokens (bake `pgas-new` / `PgasNew` literals).
-2. Update `src/pgas-new/template-renderer.ts` to load the foundry-self-program from `src/foundry-program/` when `--template pgas-new-foundry` is requested (still functional for backward compat — the deprecation handles future cleanup).
-3. Create `templates/pgas-new/program/{spec-skeleton.yml.tmpl,handlers-skeleton.ts.tmpl,tools-skeleton.ts.tmpl,registration-skeleton.ts.tmpl}` as the new generic skeleton.
-4. Tests: `tests/unit/foundry-skeleton.test.ts` (FM3, FM5, loads through engine) + adjust existing template-renderer tests.
+Re-export new public APIs:
 
-**Commits (Codex, one per logical step):**
-- `refactor(foundry): move foundry self-program from templates/ to src/foundry-program/`
-- `feat(skeleton): add templates/pgas-new/program/spec-skeleton.yml.tmpl (canonical 3-mode FM3/FM5-safe skeleton)`
-- `test: cover skeleton invariants + foundry-program relocation`
+```ts
+// New
+export { runStreamingRepl } from './repl/runner.js';
+export type { ReplOptions, ReplExitInfo } from './repl/types.js';
+export { spawnFoundryServer } from './foundry-server.js';
+export type { SpawnedServer } from './foundry-server.js';
+export { createPgasNewFoundryProgramEntry } from './foundry-program/registration.js';
 
-### Phase 2 — The agent (the conversation)
-1. Add `@simodelne/pgas-server` to foundry's `package.json` dependencies. **The CLI now depends on the engine at runtime, for the first time.**
-2. Create `src/repl/{runner,renderer}.ts` (refactor from template).
-3. Create `src/foundry-server.ts` (spawn lifecycle).
-4. Rewrite `src/cli.ts` entry switch: bare `pgas-new` → `runAgentSession`. Existing subcommands unchanged.
-5. Add `record_program_intake`, `choose_design_path`, `confirm_design` actions to `src/foundry-program/specs.yml`. Add schema. Add projection includes. Add intake_intelligence guidance.
-6. Implement those three handler stubs in `src/foundry-program/handlers.ts`.
-7. Tests: `cli-interactive.test.ts`, `foundry-intake-flow.test.ts`.
+// Existing, kept
+export { runCli } from './cli.js';
+// ... renderer + artifact-plan + manifest exports stay
+```
 
-**Acceptance:** running `pgas-new` against a real or stub LLM provider opens the REPL, the agent asks the choose-design-path question, the user answers, the conversation proceeds. At this phase the agent **can** walk through `intake_intelligence` but `architecture_design` onward is still mostly empty.
+## §8 Phased delivery
 
-**Commits:**
-- `feat(deps): foundry runtime now depends on @simodelne/pgas-server`
-- `refactor(repl): factor streaming REPL into src/repl/ for foundry CLI reuse`
-- `feat(server): src/foundry-server.ts — spawn embedded foundry-program server`
-- `feat(cli): pgas-new (no args) opens streaming REPL on the foundry program`
-- `feat(foundry-spec): record_program_intake + choose_design_path + confirm_design + Q1-Q6 guidance`
-- `feat(foundry-handlers): implement the three intake-side actions`
-- `test: cover CLI interactive entry + intake flow`
+### Phase 0 (already landed — see git log)
+- Graduation programs moved to `docs/graduation-evidence/`
+- `--template <consumer>` flags deprecated with warning
+- Governance corrections A+B+F landed (Program Nature, required reading, Strategic Invariants)
+- Post-mortem committed
+- Trace doc committed (revision 1)
+- This plan (revision 2) committed
 
-### Phase 3 — Synthesis + real handlers
-1. Implement `synthesize_program_spec` in `src/foundry-program/handlers.ts`. Mechanical rename + copy-block against the skeleton. Validate against `loadSpecWithPatterns`. Write to state.
-2. Wire `architecture_design` mode to call it (mode preconditions, transitions).
-3. Wire `scaffold_plan` to read `architecture.synthesized_spec` and call `createStandaloneArtifactPlan` / `createExistingRepoArtifactPlan`.
-4. Wire `branch_write` to call `renderStandaloneScaffold` / `renderExistingRepoAttachment` with the synthesized spec instead of a template.
-5. Implement the remaining handlers in `src/foundry-program/handlers.ts`: real `npm_install` / `npm_typecheck` / `npm_test`, real `git_status` / `git_rebase_latest`, real `open_pull_request`, real `load_wiring_manifest`, real `create_curator_request`, real `run_api_blackbox_verification`, real `run_live_provider_verification`, real `web_research`.
-6. Tests: `synthesize-program-spec.test.ts`, `foundry-program.test.ts`, `foundry-end-to-end.test.ts`.
-7. Tests: regression corpus — feed each `docs/graduation-evidence/<name>/MANDATE.md` into the synthesizer, assert structural equivalence with the frozen graduation spec.
+### Phase 0.5 — Governance prerequisites (D6, ~1–2 days)
 
-**Acceptance:** the agent can drive a full session end-to-end, emit a real working program, install + typecheck + test it. Verified by `foundry-end-to-end.test.ts`.
+Lands BEFORE Phase 1. Implements correction issues #37, #38, #39:
 
-**Commits:**
-- `feat(synthesis): synthesize_program_spec action — mechanical rename+copy from skeleton`
-- `feat(handlers): real handlers for plan_artifacts, write_scaffold_artifacts, npm_*, git_*, open_pull_request, load_wiring_manifest, web_research, run_*_verification`
-- `test: regression corpus against graduation MANDATE.md files`
-- `test: end-to-end design session emits a working program`
+1. **#37**: `.github/workflows/architecture-diff.yml` CI job. On PR vs main, computes `git diff <prior-release-tag> -- docs/PGAS-NEW-ARCHITECTURE.md`; if non-empty, requires the PR body to contain "## Architectural changes" section.
+2. **#38**: Updated `.github/PULL_REQUEST_TEMPLATE.md` with the Program Nature checkbox. Add `.github/PULL_REQUEST_TEMPLATE/re-platforming.md` variant for re-platforming PRs.
+3. **#39**: `.uat/uat-prompt-template.md` with the intent-verification block at the top.
+
+**Acceptance:** all three CI / template / prompt files exist, one test PR validates the new gates fire, README updated to document the contributor flow.
+
+### Phase 1 — Foundry-program relocation (atomic, Codex I12 fix)
+
+**Single commit that atomically:**
+
+1. Moves `templates/pgas-new/program/{specs.yml,handlers.ts,tools.ts,registration.ts}.tmpl` → `src/foundry-program/{specs.yml,handlers.ts,tools.ts,registration.ts}` (drop `.tmpl`, bake `pgas-new`/`PgasNew` literals).
+2. Updates `src/pgas-new/template-renderer.ts` to load the foundry-self-program from `src/foundry-program/` when `--template pgas-new-foundry` is requested.
+3. Creates `templates/pgas-new/program/{spec-skeleton,handlers-skeleton,tools-skeleton,registration-skeleton}.{yml,ts}.tmpl` as the new generic skeleton with full FM5 schema (Codex C2 fix).
+4. Updates `src/index.ts` to re-export `createPgasNewFoundryProgramEntry`.
+5. Adds `tests/unit/foundry-skeleton.test.ts` asserting skeleton FM3+FM5 invariants.
+6. Marks `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` as superseded.
+
+**Acceptance:** `npm test` clean. The foundry-program-as-template still renders correctly (existing tests pass). The new skeleton parses through engine validator.
+
+### Phase 2 — The agent surface (Codex I8 + I9 fix; ~1 week)
+
+Split into 6 ordered sub-commits, each atomic + green:
+
+**2.1** Add `@simodelne/pgas-server` to `package.json` dependencies; `npm install`; verify `node --import tsx` can load the foundry-program in-process via testing harness.  
+**2.2** Create `src/repl/{runner.ts,renderer.ts,types.ts}` (refactor from template). Add `tests/unit/repl-runner.test.ts` with injected stdin/stdout.  
+**2.3** Create `src/foundry-server.ts`. Add `tests/unit/foundry-server.test.ts` with mocked spawn (real spawn in integration test).  
+**2.4** Update `src/cli.ts` entry switch (corrected classifier per §7.4). Add `tests/unit/cli-interactive.test.ts` covering: bare entry, `--slug` only, `--out` only, `--non-interactive`, unknown command, all existing subcommands unchanged.  
+**2.5** Update foundry-program spec with new actions (`choose_design_path`, `record_program_intake`, `confirm_design`, `approve_plan`), schema, projection, guidance per §7.1.1.  
+**2.6** Implement the four intake-side handlers in `src/foundry-program/handlers.ts`. Add `tests/integration/foundry-intake-flow.test.ts`.
+
+**Acceptance:** running `pgas-new` against a deterministic LLM stub via the testing harness opens the REPL, runs the design-path fork, runs Q1–Q6 (or default), echoes back for confirm, gates the transition. The session reaches `architecture_design` mode with all intake state correctly populated. (Architecture-design + downstream is empty stubs at this phase.)
+
+### Phase 3 — Synthesis + real handlers (Codex I9 + F fix; ~1.5 weeks)
+
+Split into 5 ordered sub-commits, each atomic + green:
+
+**3.1** Implement `synthesize_program_spec` in `src/foundry-program/handlers.ts`. Mechanical rename+copy against `templates/pgas-new/program/spec-skeleton.yml.tmpl`. Validate via `loadSpecWithPatterns`. Add `tests/unit/synthesize-program-spec.test.ts` (deterministic, fixture intake → expected spec, no LLM).  
+**3.2** Wire `architecture_design` to call `synthesize_program_spec`. Wire `scaffold_plan` to read `program.synthesized_spec` and call `createStandaloneArtifactPlan` / `createExistingRepoArtifactPlan`.  
+**3.3** Wire `branch_write` to call `renderStandaloneScaffold` / `renderExistingRepoAttachment` with the synthesized spec. **Adds `handlers/_resolver.ts` to the artifact plan** (Codex C2 / FM1 fix).  
+**3.4** Implement remaining real handlers: `npm_install`, `npm_typecheck`, `npm_test`, `git_status`, `git_rebase_latest`, `open_pull_request`, `load_wiring_manifest`, `create_curator_request`, `run_api_blackbox_verification`, `run_live_provider_verification`, `web_research`. Each with documented contract per §7.1.2.  
+**3.5** Add the regression corpus: `tests/integration/synthesis-regression.test.ts` feeding each `docs/graduation-evidence/<name>/MANDATE.md` into the synthesizer, asserting structural equivalence with the frozen graduation spec. Add `tests/integration/foundry-end-to-end.test.ts` driving a full session.
+
+**Acceptance:** end-to-end test passes — fresh intake → synthesized spec → artifact plan → written files → npm install → typecheck → npm test all green inside the generated output dir. All FM1–FM5 closure tests pass.
 
 ### Phase 4 — Cleanup (breaking, v3.0.0 release)
-1. Remove `--template policy-drafting|web-scraper|social-media-agent` from the CLI's `ProgramTemplate` enum.
-2. Remove `STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE` and the three `EXISTING_*_TEMPLATE_BY_KIND` maps from `template-renderer.ts`.
-3. Un-wire the `.tmpl` files in `docs/graduation-evidence/<name>/` from the template-renderer (they stay on disk as evidence).
-4. Update README, architecture doc, all docs.
-5. Cut v3.0.0 release.
 
-**Commits:**
-- `feat(cli)!: remove deprecated --template <consumer> flags (v3.0 breaking)`
-- `docs: update README + architecture for v3.0 surface`
-- `release: pgas-new v3.0.0`
+1. Remove `policy-drafting|web-scraper|social-media-agent` from `ProgramTemplate` enum.
+2. Remove `STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE` + 3x `EXISTING_*_TEMPLATE_BY_KIND` maps.
+3. Remove `consumerTemplateDeprecationWarning()` + its invocations.
+4. Drop the stale tests asserting deprecated behavior.
+5. Update README + architecture doc.
+6. Cut v3.0.0 release.
 
-## 8. Acceptance criteria
+## §9 Acceptance criteria
 
-Each phase ships only when ALL its phase-specific tests pass AND the global invariants hold. The global invariants:
+Each phase gate: ALL phase-specific tests + global invariants.
 
-- `npm test` clean at every phase (typecheck + 21 manifest + N unit tests, growing each phase + 8 static)
-- No banned imports introduced in generated scaffolds
-- Foundry program loads via `loadSpecWithPatterns` without error at every phase
-- Each phase's commit list matches the plan; no out-of-scope commits
+**Definition-of-done for v3.0:**
 
-The **definition-of-done for v3.0 as a whole**:
+A fresh user runs `pgas-new` against a working LLM provider. After a 5–10 minute conversation, a directory on their disk contains a working PGAS consumer (server.ts + program/{specs,handlers/{index,_resolver},tools,registration}.ts + tests + manifest + dossier + audit doc), the consumer has been installed (`npm install`), typechecked, and its 5 born-with tests pass (with the live-provider test skipped per `PGAS_LIVE_PROVIDER` env). The user can `cd` into the directory and `npm run repl` to talk to the program they just designed.
 
-A fresh user runs `pgas-new` against a working LLM provider. They have a 5-minute conversation. At the end of it, a directory on their disk contains a working PGAS consumer (server.ts + program/{specs,handlers,tools}.ts + tests + manifest + dossier + audit doc), the consumer has been installed (`npm install`), typechecked, and its born-with tests pass. The user can `cd` into the directory and `npm run repl` to talk to the program they just designed.
+**Important**: a SKIP on the live-provider test counts as SKIP, not PASS. The E2E gate must distinguish them. (Codex H risk fix.)
 
-## 9. Codex E2E acceptance test (tmux-driven)
+## §10 Codex tmux-driven E2E acceptance test (Codex C3 + G fix)
 
-**This is the load-bearing acceptance gate that the prior 6 UAT rounds did not have.** Codex acts as the user, driving the CLI from a fresh tmux session via keystrokes. End-to-end. No mocks. Against the real Qwen vLLM at `100.100.74.6:8000`.
+The load-bearing acceptance gate. Codex acts as user, drives the CLI from a fresh tmux session via keystrokes. Against the real Qwen vLLM at `100.100.74.6:8000`, model `qwen36-27b`.
 
-### 9.1 Setup (Codex performs)
+**Preflight (Codex performs before each scenario):**
 
 ```bash
-# Codex opens a fresh tmux session named pgas-new-e2e-rebuild
-tmux new-session -d -s "pgas-new-e2e-rebuild" -n "user"
-
-# In the user window, Codex enters the foundry repo
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "cd /home/simone/pgas-new && git status" Enter
-
-# Codex confirms HEAD is on the rebuild branch with Phase 3 landed
+# Verify provider reachable
+curl -sf http://100.100.74.6:8000/v1/models | jq -r '.data[0].id'
+# Expected: qwen36-27b
 ```
 
-### 9.2 Scenario (Codex drives, acting as a brand-new user)
+**Scenario A — design path, standalone repo (incident triage)**
 
-**Scenario A: design a fresh program from scratch (interview path)**
+Same as revision 1, but verification adds:
+- Q1–Q6 were asked **in order** (verified by inspecting the session log's round_dispatch + llm_raw_response sequence)
+- `record_program_intake` action fired exactly once with all 7 mutations
+- `confirm_design` and `approve_plan` actions fired exactly once each
+- `synthesize_program_spec` action fired and `program.synthesized_spec` is populated in session world state
+- No LLM call inside the synthesizer (verified by looking at session log: `synthesize_program_spec` round has 0 llm_call events)
 
-```bash
-# Codex types the CLI command — like a user would
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "PGAS_OPENAI_BASE_URL=http://100.100.74.6:8000/v1 PGAS_OPENAI_API_KEY=none PGAS_OPENAI_MODEL=qwen36-27b pgas-new --out /tmp/pgas-new-e2e-rebuild-output" Enter
+**Scenario B — default skeleton path, standalone repo (minimal-test)**
 
-# Wait for the agent to greet
-# Codex looks for the "choose design path" prompt in the REPL output
-# Codex sends `design` (chooses the interview path)
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "design" Enter
+- User selects "default" at the design-path fork
+- Codex asserts `choose_design_path` handler populated `intake.stages` to the 3-mode default
+- Only the two confirms are asked (design echo-back of the default skeleton + plan approve)
+- Output uses `start → working → complete` mode names
 
-# Agent asks Q1 — Purpose
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "An agent that helps SimoneOS engineers triage incoming support tickets, classifying them by severity and routing to the right team." Enter
+**Scenario C — attach to existing pgas-consumer repo (audit-trail in fake-consumer)** (Codex C3 fix — replaced with runnable fixture)
 
-# Agent asks Q2 — Entry channel
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "user_text" Enter
-
-# Agent asks Q3 — Stages
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "triage, classification, routing, complete" Enter
-
-# Agent asks Q4 — Decision points
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "classification can loop back to triage if uncertain; routing can bail out to a human-review queue" Enter
-
-# Agent asks Q5 — Delegation
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "none" Enter
-
-# Agent asks Q6 — Completion
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "When the ticket has been routed to a team OR sent to human-review queue" Enter
-
-# Agent echoes back the proposed mode list + transitions for confirmation
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "approve" Enter
-
-# Agent proceeds: architecture_design → scaffold_plan → branch_write → static_verify
-# Codex watches for "Plan approved? [y/n]" — approves
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "y" Enter
-
-# Agent runs npm install, typecheck, test inside the output dir
-# Codex waits for completion (with reasonable timeout)
-```
-
-**Scenario B: design a fresh program with the default 3-mode skeleton (no interview)**
+Codex creates a real minimal PGAS consumer fixture:
 
 ```bash
-# Second invocation, default path
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "pgas-new --slug minimal-test --out /tmp/pgas-new-e2e-default-output" Enter
+mkdir -p /tmp/fake-consumer/.pgas /tmp/fake-consumer/programs /tmp/fake-consumer/audit /tmp/fake-consumer/.pgas/pgas-new
 
-# Agent asks choose-design-path — Codex picks default
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "default" Enter
-
-# Agent confirms the skeleton (just program name/slug, nothing else)
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "approve" Enter
-
-# Agent emits the 3-mode skeleton, runs static verify
-```
-
-**Scenario C: attach a new program to an existing pgas-consumer repo**
-
-```bash
-# Codex creates a throwaway repo with a valid .pgas/wiring.yml
-mkdir -p /tmp/fake-consumer/.pgas
-cat > /tmp/fake-consumer/.pgas/wiring.yml << 'EOF'
-schema_version: 1
-repo: { kind: existing_repo, package_manager: npm }
-pgas:
-  server_package: '@simodelne/pgas-server'
-  allowed_imports: [...]
-paths: { programs_dir: programs, audit_dir: audit, pgas_new_dir: .pgas/pgas-new }
-registration: { strategy: curator_request }
-verification:
-  commands: { install: 'npm install --no-audit --no-fund', typecheck: 'npm run typecheck', test: 'npm test' }
-curator: { github_owner: simodelne, github_repo: fake-consumer }
+cat > /tmp/fake-consumer/package.json << 'EOF'
+{
+  "name": "fake-consumer",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@simodelne/pgas-server": "^2.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "engines": { "node": ">=20" }
+}
 EOF
 
-# Codex runs the foundry against the fake consumer
-tmux send-keys -t "pgas-new-e2e-rebuild:user" \
-  "pgas-new --out /tmp/fake-consumer" Enter
+cat > /tmp/fake-consumer/tsconfig.json << 'EOF'
+{ "compilerOptions": { "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler", "strict": true, "esModuleInterop": true, "skipLibCheck": true, "allowImportingTsExtensions": false }, "include": ["programs/**/*"] }
+EOF
 
-# Codex picks default skeleton, names the program "audit-trail"
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "default" Enter
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "audit-trail" Enter
-tmux send-keys -t "pgas-new-e2e-rebuild:user" "approve" Enter
-
-# Agent emits the program into /tmp/fake-consumer/programs/audit-trail/
-# Agent files a curator-request artifact (registration.strategy=curator_request)
+cat > /tmp/fake-consumer/.pgas/wiring.yml << 'EOF'
+schema_version: 1
+repo:
+  kind: existing_repo
+  package_manager: npm
+pgas:
+  server_package: '@simodelne/pgas-server'
+  allowed_imports:
+    - '@simodelne/pgas-server/plugin.js'
+    - '@simodelne/pgas-server/create-server.js'
+    - '@simodelne/pgas-server/client.js'
+    - '@simodelne/pgas-server/channels/index.js'
+    - '@simodelne/pgas-server/routes/index.js'
+paths:
+  programs_dir: programs
+  audit_dir: audit
+  pgas_new_dir: .pgas/pgas-new
+registration:
+  strategy: curator_request
+verification:
+  commands:
+    install: 'npm install --no-audit --no-fund'
+    typecheck: 'npm run typecheck'
+    test: 'npm test'
+curator:
+  github_owner: simodelne
+  github_repo: fake-consumer
+EOF
 ```
 
-### 9.3 Verification (Codex performs after each scenario)
+Then drives `pgas-new --out /tmp/fake-consumer` through the agent, picks default skeleton, names the program "audit-trail".
 
-For each scenario:
+**Verification:**
+- Files written to `/tmp/fake-consumer/programs/audit-trail/` per the manifest's `paths.programs_dir`
+- Curator-request artifact written to `/tmp/fake-consumer/audit/PGAS-NEW-audit-trail.md` per `registration.strategy: curator_request`
+- `cd /tmp/fake-consumer && npm install && npm run typecheck` PASS (the consumer has package.json + tsconfig + deps now)
 
-1. `ls -la <output-dir>` — assert files match the blueprint.
-2. `cd <output-dir> && npm run typecheck` — assert exit code 0.
-3. `cd <output-dir> && npm test` — assert all 5 born-with tests pass.
-4. Open the rendered `src/programs/<slug>/specs.yml` and assert:
-   - Modes are the user's stage names (Scenario A) or `start/working/complete` (Scenario B and C default path).
-   - `system_mode_entry` channel declared only on bootstrap mode (FM3).
-   - Engine-owned `inputs.query_*` schema paths declared (FM5).
-   - Handlers ship a resolver (FM1).
-   - registration.ts ships the createAdapters override (FM4).
-5. Capture the full tmux session transcript to `.uat/e2e-rebuild-transcript-<scenario>.log`.
+**Scenario D — refusal: missing manifest (Codex I10 fix)**
 
-### 9.4 Reporting
+Codex runs `pgas-new --out /tmp/empty-dir-no-manifest`. Picks default skeleton. At `repo_targeting` the agent asks standalone-or-attach; Codex picks "attach". The foundry attempts to `load_wiring_manifest`. Manifest absent → handler emits `create_curator_request`. Verification: no files written under `/tmp/empty-dir-no-manifest/programs/`; a curator request artifact is emitted.
 
-Codex writes `.uat/codex-e2e-rebuild-report.md`:
+**Scenario E — refusal: invalid manifest**
 
-```markdown
-# v3.0 E2E Rebuild Report
+Codex writes an invalid `.pgas/wiring.yml` (e.g., missing required `paths` field) to a test repo. Foundry rejects with clear error. No writes.
 
-## Test environment
-- Date: <ISO>
-- Repo HEAD: <SHA>
-- LLM provider: Qwen3.6-27B via vLLM at http://100.100.74.6:8000
+**Scenario F — refusal: collision (Codex I10 fix)**
 
-## Scenario A: interview path (incident triage)
-- Result: PASS | FAIL
-- Tmux transcript: .uat/e2e-rebuild-transcript-scenario-a.log
-- Output dir: /tmp/pgas-new-e2e-rebuild-output
-- Modes synthesized: <list>
-- Transitions synthesized: <list>
-- npm typecheck: PASS | FAIL
-- npm test: <N> tests passed
-- FM closures: FM1 [PASS/FAIL], FM2 [...], FM3 [...], FM4 [...], FM5 [...]
+Codex runs `pgas-new --out /tmp/pgas-new-e2e-scenario-a-output` a second time (the dir already has files from scenario A). The foundry refuses to overwrite. No writes.
 
-## Scenario B: default skeleton (minimal-test)
-- Result: ...
+**Scenario G — skip / reject / edit (Codex I6 fix)**
 
-## Scenario C: attach to existing consumer (audit-trail in fake-consumer)
-- Result: ...
+Codex drives the design path. On Q4 (decision points), Codex types `skip`. On confirm_design, Codex types `reject` then asks to change Q3 (stages). Foundry re-asks Q3, re-emits the confirmation. Codex approves.
 
-## What works
-- ...
+**Scenario H — `/abort` during a running round**
 
-## What does not work
-- ...
+Codex drives the design path. While the LLM is responding to Q3, Codex types `/abort`. The session aborts cleanly; no partial state mutations.
 
-## Recommendation
-- READY TO MERGE | NEEDS FIXES | DO NOT MERGE
-```
+**Reporting:**
 
-## 10. Risks and mitigations
+`.uat/codex-e2e-rebuild-report.md` with verdict + per-scenario PASS/FAIL/SKIP (with SKIP explicitly distinct from PASS per §9) + transcript paths.
+
+## §11 Risks and mitigations
+
+(Codex H additions integrated.)
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Real LLM behaves unpredictably during E2E (asks unexpected questions, gets stuck in loops) | High | Deterministic LLM stub for unit/integration tests; E2E lives separately with retry budget; E2E only blocks the Phase 4 release, not earlier phases |
-| Synthesizer produces a spec that fails `loadSpecWithPatterns` | Medium | Validate inside the handler before write; have the agent's `confirm_design` step happen BEFORE synthesis so the user can revise; comprehensive unit tests on synthesizer with fixture inputs |
-| Foundry-program-as-PGAS embedded-server lifecycle is fragile (port conflicts, slow start, child crash) | Medium | Health-poll with timeout; suppress child output to log file; surface tail of log on crash; user can override port via env |
-| Child-process operations (npm, git, gh) fail with unhelpful errors | Medium | All child_process spawn wraps with timeout + clear error formatting; foundry's static_verify mode captures and surfaces errors in the REPL |
-| User on a different LLM provider hits a model that can't follow the foundry's spec (e.g., a small model fails Q1-Q6 structure) | Medium | Document tested models in README; the `confirm_design` step lets the user override the agent's interpretation manually |
-| Tests slow CI down significantly | Low | Phase 3's regression corpus uses deterministic LLM stub; only Phase 4's E2E test hits a real LLM and runs in a separate optional CI job |
-| User runs `pgas-new` without LLM provider env set | Medium | CLI detects missing provider env and prints a friendly error with the env var list; do not proceed |
+| LLM behaves unpredictably during E2E (asks unexpected questions, gets stuck in loops) | High | Deterministic LLM stub for unit/integration tests; E2E retries with budget; Phase 4 release gate requires all 8 scenarios PASS; SKIP ≠ PASS |
+| Synthesizer produces a spec that fails `loadSpecWithPatterns` | Medium | Validate inside handler; user has 2 confirm gates to revise before write; deterministic unit tests on synthesizer |
+| Foundry-server lifecycle is fragile (port conflicts, slow start, child crash) | Medium | Health-poll with timeout; log redirect; surface log tail on crash; user can override port via env |
+| Child-process operations (npm, git, gh) fail with unhelpful errors | Medium | All wraps include timeout + clear error formatting; secret redaction in error tail |
+| Small models can't follow the foundry spec | Medium | Document tested models in README; `confirm_design` lets user override agent's interpretation |
+| Tests slow CI down | Low | Phase 3's regression corpus uses LLM stub; only Phase 4 E2E hits real LLM; E2E in optional CI job |
+| User runs `pgas-new` without provider env | Medium | CLI detects + prints friendly error; exit 1 |
+| Governance drift from changing primary command without updating CLAUDE.md/MEMORY.md | High | **CLAUDE.md + MEMORY.md updates land in Phase 0.5 governance prerequisites, BEFORE Phase 1 — same commit as bare-`pgas-new` decision lands.** |
+| Secret leakage through child server logs or E2E transcripts | Medium | foundry-server.ts secret-redaction policy in §7.5; E2E transcripts captured to `.uat/` (gitignored); preflight greps transcripts for known token patterns |
+| String-level YAML edits break semantics | Medium | Synthesizer uses js-yaml parse → object operations → emit (not regex substitution) |
+| Engine API mismatch unverified locally | Medium | Phase 2 sub-2.1 verifies engine load via testing harness BEFORE any agent code is written |
+| Root package is private; release/package behavior unclear | Low | Plan stays private; foundry program rendered to `~/.pgas-new/foundry-v<version>/` on first run from source; no public publish |
+| SKIP-vs-PASS confusion | Medium | Explicit assertion in acceptance §9; E2E reporter distinguishes |
 
-## 11. Migration / rollout
+## §12 Migration / rollout
 
 | Version | Surface | Breaking? |
 |---|---|---|
-| v2.7.0 | Phase 1 lands (foundry-program relocation, skeleton creation, foundry-program loaded by `--template pgas-new-foundry`) | No |
-| v2.8.0 | Phase 2 lands (agent + intake + REPL). Deprecated `--template <consumer>` still works. | No |
-| v2.9.0 | Phase 3 lands (synthesis + real handlers + regression corpus). Deprecated flags still work. | No |
-| v3.0.0 | Phase 4 lands (remove deprecated flags). | Yes |
+| v2.7.0 | Governance prereqs #37/#38/#39 + Phase 1 (foundry-program relocation, skeleton creation) | No |
+| v2.8.0 | Phase 2 (agent + intake + REPL + bare-`pgas-new`). Deprecated `--template <consumer>` still works. | No |
+| v2.9.0 | Phase 3 (synthesis + real handlers + regression corpus). Deprecated flags still work. | No |
+| v3.0.0 | Phase 4 (remove deprecated flags). | Yes |
 
-Each minor release runs npm test + the Codex E2E test before tagging. The E2E test is the definition of done.
+Each minor release runs `npm test` + the Codex E2E (8 scenarios) before tagging.
 
-## 12. Implementation handoff to Codex
+## §13 Implementation handoff to Codex
 
-Codex receives:
-- This plan
-- The trace doc (`docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md`) [pending commit]
-- The post-mortem (`docs/POST-MORTEM-2026-06-22-design-phase-drift.md`)
-- The v1 source docs (recoverable from git history at `3d832b5^`)
-- The current architecture doc (`docs/PGAS-NEW-ARCHITECTURE.md`)
-- CLAUDE.md + MEMORY.md (governance, Program Nature, Strategic Invariants)
-- The branch: `feat/v3.0-rebuild`
+Reading order (matches `CLAUDE.md` required-reading; Codex I4 fix):
 
-Codex's mandate:
+1. `CLAUDE.md`
+2. `docs/PGAS-NEW-ARCHITECTURE.md`
+3. `MEMORY.md` (Strategic Invariants)
+4. `.remember/remember.md` if present
+5. This plan (`docs/superpowers/specs/2026-06-22-v3-rebuild-plan.md`)
+6. The trace doc (`docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md`)
+7. The post-mortem (`docs/POST-MORTEM-2026-06-22-design-phase-drift.md`)
+8. v1 source: `git show 3d832b5^:commands/pgas-new-program.md`
+9. v1 architecture: `git show 3d832b5^:audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md`
+10. Current code surface: `src/`, `templates/`, `tests/unit/`
 
-1. Read the v1 source docs first, the architecture doc second, the trace doc third, the post-mortem fourth, this plan fifth, CLAUDE.md and MEMORY.md sixth. **Before writing any code.**
-2. Implement Phase 1, run tests, commit per the per-phase commit list. Open a checkpoint comment in the report file at end of each phase.
-3. Implement Phase 2, run tests, commit, checkpoint.
-4. Implement Phase 3, run tests, commit, checkpoint.
-5. Run the Codex E2E test (§9), all three scenarios.
-6. Write `.uat/codex-e2e-rebuild-report.md`.
-7. Stop. Do not push. Do not open a PR. The human reviews the branch.
+Codex's mandate (when delegated):
 
-If Phase 4 (the breaking removals) is to land in the same Codex run: explicit second mandate authorization required before Codex starts it. Default is "stop after Phase 3 + E2E."
+1. Read above in order. Before writing any code.
+2. Implement Phase 0.5, run tests, commit. Checkpoint to `.uat/codex-impl-phase-checkpoints.md`.
+3. Implement Phase 1, atomic single commit per §8. Tests green. Checkpoint.
+4. Implement Phase 2, six sub-commits per §8. Tests green at each. Checkpoint.
+5. Implement Phase 3, five sub-commits per §8. Tests green at each. Checkpoint.
+6. Run the Codex tmux E2E test (§10), all 8 scenarios. Capture transcripts to `.uat/e2e-rebuild-transcript-scenario-{a..h}.log`.
+7. Write `.uat/codex-e2e-rebuild-report.md`.
+8. Stop. Do not push. Do not open a PR. Do not implement Phase 4 (Phase 4 requires explicit second mandate authorization).
 
-## 13. What this plan does NOT do
+## §14 What this plan does NOT do
 
-- Does not bring back v1's marker-injection mechanism (the v2 `.pgas/wiring.yml` manifest contract replaces it; documented design decision)
+- Does not bring back v1's marker-injection mechanism
 - Does not re-introduce per-domain consumer template presets
-- Does not change the engine boundary (still `@simodelne/pgas-server` public imports only)
+- Does not change the engine boundary (still public-only imports from `@simodelne/pgas-server`)
 - Does not add a GUI
 - Does not target non-TypeScript languages
-- Does not bundle the foundry program in the npm package (lives in source at `src/foundry-program/`; rendered to `~/.pgas-new/foundry-v<version>/` on first use)
-- Does not implement v1's `pgas-program-builder` skill (the design interview from v1's `commands/pgas-new-program.md` is the interview; the skill was a layer on top that v3 doesn't need)
+- Does not bundle the foundry program in the npm package (D5: lives in `src/foundry-program/`; rendered to `~/.pgas-new/foundry-v<version>/` on first use)
+- Does not implement v1's `pgas-program-builder` skill
+- Does not move legacy scripted subcommands under a `pgas-new ci` namespace (D2: they stay at top level)
+- Does not implement Phase 4 in the initial delegation (requires explicit second authorization)

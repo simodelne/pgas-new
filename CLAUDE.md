@@ -52,7 +52,7 @@ have been removed from the v2 branch. Do not recreate `commands/`,
 `templates/new-consumer/`, `templates/new-program/`, `templates/frontend/`,
 `skills/`, or `hooks/` unless the owner explicitly asks for a legacy restore.
 The interactive-design intent of those v1 surfaces is restored in v2.7.x via
-the streaming REPL + `pgas-new design` command, not by reviving the v1
+the streaming REPL + bare `pgas-new` (no-args) command, not by reviving the v1
 plugin surface.
 
 ## Engine Boundary
