@@ -24,7 +24,7 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, record_program_intake, confirm_design, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_q6_completion, record_program_intake_finalize, confirm_design, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       record_program_target:
@@ -34,12 +34,35 @@ modes:
         - { kind: FieldFalsy, path: program.design_path }
       apply_default_skeleton:
         - { kind: FieldEquals, path: program.design_path, value: default }
-        - { kind: FieldFalsy, path: intake.program_intake_recorded }
-      record_program_intake:
+        - { kind: FieldFalsy, path: intake.program_intake_finalized }
+      record_q1_purpose:
         - { kind: FieldEquals, path: program.design_path, value: design }
-        - { kind: FieldFalsy, path: intake.program_intake_recorded }
+        - { kind: FieldFalsy, path: intake.q1_recorded }
+      record_q2_entry_channel:
+        - { kind: FieldTruthy, path: intake.q1_recorded }
+        - { kind: FieldFalsy, path: intake.q2_recorded }
+      record_q3_stages:
+        - { kind: FieldTruthy, path: intake.q2_recorded }
+        - { kind: FieldFalsy, path: intake.q3_recorded }
+      record_q4_transitions:
+        - { kind: FieldTruthy, path: intake.q3_recorded }
+        - { kind: FieldFalsy, path: intake.q4_recorded }
+      record_q5_delegation:
+        - { kind: FieldTruthy, path: intake.q4_recorded }
+        - { kind: FieldFalsy, path: intake.q5_recorded }
+      record_q6_completion:
+        - { kind: FieldTruthy, path: intake.q5_recorded }
+        - { kind: FieldFalsy, path: intake.q6_recorded }
+      record_program_intake_finalize:
+        - { kind: FieldTruthy, path: intake.q1_recorded }
+        - { kind: FieldTruthy, path: intake.q2_recorded }
+        - { kind: FieldTruthy, path: intake.q3_recorded }
+        - { kind: FieldTruthy, path: intake.q4_recorded }
+        - { kind: FieldTruthy, path: intake.q5_recorded }
+        - { kind: FieldTruthy, path: intake.q6_recorded }
+        - { kind: FieldFalsy, path: intake.program_intake_finalized }
       confirm_design:
-        - { kind: FieldTruthy, path: intake.program_intake_recorded }
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
         - { kind: FieldTruthy, path: program.target_dir_confirmed }
         - { kind: FieldFalsy, path: program.design_confirmed }
         - { kind: TriggerType, triggerSet: [user_confirmation] }
@@ -168,12 +191,18 @@ projection:
       - intake.research_confirmed
       - intake.user_requested_research
       - intake.purpose
+      - intake.q1_recorded
       - intake.entry_channel
+      - intake.q2_recorded
       - intake.stages_json
+      - intake.q3_recorded
       - intake.transitions_json
+      - intake.q4_recorded
       - intake.delegation_json
+      - intake.q5_recorded
       - intake.completion_json
-      - intake.program_intake_recorded
+      - intake.q6_recorded
+      - intake.program_intake_finalized
       - program.slug
       - program.name
       - program.target_dir
@@ -228,9 +257,19 @@ prompts:
     - Process `inputs.user_text` and either ask the next question with the
       same non-terminal plain-text pattern, OR fire a terminal tool call when
       you have enough information.
-    - Specifically for Q1-Q6: ask ONE question per round; wait for the user's
-      answer; ask the next; continue until all six are collected; then fire
-      `record_program_intake` with the structured payload.
+    Design interview enforcement (Q1-Q6):
+    - The engine enforces strict left-to-right ordering via per-question
+      preconditions. You CANNOT skip ahead.
+    - For each question:
+      1. Emit the question text as a non-terminal response. The engine pauses.
+      2. The user's answer arrives via user_text on the next round.
+      3. Fire the corresponding `record_qN_<topic>` action with the user's
+         answer parsed into the declared `from_arg` field.
+      4. Move to the next question.
+    - After Q6 fires, immediately fire `record_program_intake_finalize`.
+    - Do NOT attempt to batch multiple answers into one action. Do NOT attempt
+      to fire `record_program_intake_finalize` before all six qN_recorded flags
+      are true -- the engine will reject it.
     - When you are ready to commit state: Make exactly ONE terminal tool call
       from the mode's vocabulary. The arguments to each tool are structured
       per the tool's schema; emit them as the tool's argument object, not as a
@@ -244,8 +283,9 @@ prompts:
     2. After target capture: call `choose_design_path` with `{choice: "default"}`
        or `{choice: "design"}` based on what the user asked for.
     3. If `choice = "default"`: call `apply_default_skeleton` immediately.
-    4. If `choice = "design"`: ask Q1-Q6 via user text/confirmation, then call
-       `record_program_intake` with the structured payload.
+    4. If `choice = "design"`: ask Q1-Q6 via user text/confirmation, recording
+       each answer with its corresponding Q-action, then call
+       `record_program_intake_finalize`.
     5. Finally call `confirm_design` to gate transition to architecture_design.
 
     Do not pre-fill or batch multiple tool calls in one response.
@@ -287,23 +327,59 @@ action_map:
     description: "Tool call with no required arguments. Populates intake.* JSON-string scalar fields with the default start->working->complete skeleton."
     mutations:
       - { op: MSet, path: intake.purpose, value: '' }
+      - { op: MSet, path: intake.q1_recorded, value: true }
       - { op: MSet, path: intake.entry_channel, value: user_text }
+      - { op: MSet, path: intake.q2_recorded, value: true }
       - { op: MSet, path: intake.stages_json, value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]' }
+      - { op: MSet, path: intake.q3_recorded, value: true }
       - { op: MSet, path: intake.transitions_json, value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]' }
+      - { op: MSet, path: intake.q4_recorded, value: true }
       - { op: MSet, path: intake.delegation_json, value: '{}' }
+      - { op: MSet, path: intake.q5_recorded, value: true }
       - { op: MSet, path: intake.completion_json, value: '{"final_stage":"complete","guard_field":"work.example_ready"}' }
-      - { op: MSet, path: intake.program_intake_recorded, value: true }
+      - { op: MSet, path: intake.q6_recorded, value: true }
+      - { op: MSet, path: intake.program_intake_finalized, value: true }
     channel: widget_output
-  record_program_intake:
-    description: "Capture the user's Q1-Q6 design interview answers into governed JSON-string scalar state."
+  record_q1_purpose:
+    description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does."
     mutations:
       - { op: MSet, path: intake.purpose, from_arg: purpose }
+      - { op: MSet, path: intake.q1_recorded, value: true }
+    channel: widget_output
+  record_q2_entry_channel:
+    description: "Capture Q2 (entry channel -- how does work arrive: user_text, webhook, scheduled tick, another program delegating)."
+    mutations:
       - { op: MSet, path: intake.entry_channel, from_arg: entry_channel }
+      - { op: MSet, path: intake.q2_recorded, value: true }
+    channel: widget_output
+  record_q3_stages:
+    description: "Capture Q3 (stages of work) as a JSON-string scalar in intake.stages_json."
+    mutations:
       - { op: MSet, path: intake.stages_json, from_arg: stages_json }
+      - { op: MSet, path: intake.q3_recorded, value: true }
+    channel: widget_output
+  record_q4_transitions:
+    description: "Capture Q4 (decision points and transitions) as a JSON-string scalar in intake.transitions_json."
+    mutations:
       - { op: MSet, path: intake.transitions_json, from_arg: transitions_json }
+      - { op: MSet, path: intake.q4_recorded, value: true }
+    channel: widget_output
+  record_q5_delegation:
+    description: "Capture Q5 (delegation design) as a JSON-string scalar in intake.delegation_json."
+    mutations:
       - { op: MSet, path: intake.delegation_json, from_arg: delegation_json }
+      - { op: MSet, path: intake.q5_recorded, value: true }
+    channel: widget_output
+  record_q6_completion:
+    description: "Capture Q6 (completion criteria) as a JSON-string scalar in intake.completion_json."
+    mutations:
       - { op: MSet, path: intake.completion_json, from_arg: completion_json }
-      - { op: MSet, path: intake.program_intake_recorded, value: true }
+      - { op: MSet, path: intake.q6_recorded, value: true }
+    channel: widget_output
+  record_program_intake_finalize:
+    description: "Final commit of the design interview once all 6 Q-answers are recorded. Idempotent. The LLM should call this immediately after record_q6_completion fires."
+    mutations:
+      - { op: MSet, path: intake.program_intake_finalized, value: true }
     channel: widget_output
   confirm_design:
     description: "Tool call after explicit user approval. Confirms the proposed mode and transition list before architecture_design."
@@ -438,12 +514,18 @@ schema:
   inputs.mode_entry.entry_round: number
   intake.mandate: string
   intake.purpose: string
+  intake.q1_recorded: boolean
   intake.entry_channel: string
+  intake.q2_recorded: boolean
   intake.stages_json: string
+  intake.q3_recorded: boolean
   intake.transitions_json: string
+  intake.q4_recorded: boolean
   intake.delegation_json: string
+  intake.q5_recorded: boolean
   intake.completion_json: string
-  intake.program_intake_recorded: boolean
+  intake.q6_recorded: boolean
+  intake.program_intake_finalized: boolean
   intake.research_confirmed: boolean
   intake.user_requested_research: boolean
   intake.research_allowed: boolean
@@ -501,8 +583,9 @@ guidance:
   intake_intelligence:
     - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If any of slug/name/target_dir is missing, ask exactly one missing-identity question as plain text and stop; the user's reply will arrive next round as inputs.user_text. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
     - "After record_program_target, if program.design_path is not set, ask in plain text whether the user wants to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton (intent='choose_design_path'), then stop. On the next user_text reply, call choose_design_path with choice='design' or choice='default'."
-    - "If program.design_path == 'default' and intake.program_intake_recorded is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
-    - "If program.design_path == 'design' and intake.program_intake_recorded is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Emit the question as plain text and stop; wait for the user's answer in inputs.user_text before asking the next question. Order matters."
+    - "If program.design_path == 'default' and intake.program_intake_finalized is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
+    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Emit the question text as a non-terminal response. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into the declared from_arg field. 4. Move to the next question. After Q6 fires, immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
+    - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Emit the question as plain text and stop; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
     - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']."
@@ -510,8 +593,8 @@ guidance:
     - "Q5 Delegation — does any stage delegate to a child session / another program? Default if skipped: 'none'."
     - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
     - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."
-    - "Once you have all 6 answers or defaults, call record_program_intake with purpose, entry_channel, stages_json, transitions_json, delegation_json, and completion_json. The *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
-    - "After intake is recorded via apply_default_skeleton OR record_program_intake, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
+    - "For Q3-Q6, the *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
+    - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
     - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask which dimension to revise, re-run the relevant step, and re-emit the echo-back."

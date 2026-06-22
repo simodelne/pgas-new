@@ -39,14 +39,25 @@ describe('foundry architecture_design to scaffold_plan flow', () => {
           target_dir: '/tmp/incident-triage',
         }),
         effect('choose_design_path', { choice: 'design' }),
-        effect('record_program_intake', {
+        effect('record_q1_purpose', {
           purpose: 'Route incoming incidents into a triage workflow.',
+        }),
+        effect('record_q2_entry_channel', {
           entry_channel: 'user_text',
+        }),
+        effect('record_q3_stages', {
           stages_json: JSON.stringify(stages),
+        }),
+        effect('record_q4_transitions', {
           transitions_json: JSON.stringify(transitions),
+        }),
+        effect('record_q5_delegation', {
           delegation_json: JSON.stringify({}),
+        }),
+        effect('record_q6_completion', {
           completion_json: JSON.stringify({ final_stage: 'resolved', guard_field: 'triage.summary_ready' }),
         }),
+        effect('record_program_intake_finalize', {}),
         effect('confirm_design', { approved: true }),
         effect('synthesize_program_spec', {}),
         effect('plan_artifacts', {}),
@@ -56,7 +67,13 @@ describe('foundry architecture_design to scaffold_plan flow', () => {
     try {
       await harness.trigger('Create an incident triage PGAS program.');
       await harness.trigger('I want to design it.');
-      await harness.trigger('Here are the six design answers.');
+      await harness.trigger('Route incoming incidents into a triage workflow.');
+      await harness.trigger('user_text');
+      await harness.trigger('intake, triage, resolved');
+      await harness.trigger('intake to triage, then triage to resolved.');
+      await harness.trigger('No delegation.');
+      await harness.trigger('Resolved when triage.summary_ready is true.');
+      await harness.trigger('Finalize intake.');
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
       await harness.trigger({ channel: 'system_mode_entry', payload: {} });
       await harness.trigger({ channel: 'system_mode_entry', payload: {} });

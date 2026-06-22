@@ -98,15 +98,52 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 
-  async record_program_intake(payload) {
+  async record_q1_purpose(payload) {
     return {
-      kind: 'pgas_new_intake_recorded',
+      kind: 'pgas_new_q1_purpose_recorded',
       purpose: stringField(payload, 'purpose'),
+    };
+  },
+
+  async record_q2_entry_channel(payload) {
+    return {
+      kind: 'pgas_new_q2_entry_channel_recorded',
       entry_channel: stringField(payload, 'entry_channel'),
+    };
+  },
+
+  async record_q3_stages(payload) {
+    return {
+      kind: 'pgas_new_q3_stages_recorded',
       stages: optionalJsonField(payload, 'stages', 'stages_json'),
+    };
+  },
+
+  async record_q4_transitions(payload) {
+    return {
+      kind: 'pgas_new_q4_transitions_recorded',
       transitions: optionalJsonField(payload, 'transitions', 'transitions_json'),
+    };
+  },
+
+  async record_q5_delegation(payload) {
+    return {
+      kind: 'pgas_new_q5_delegation_recorded',
       delegation: optionalJsonField(payload, 'delegation', 'delegation_json'),
+    };
+  },
+
+  async record_q6_completion(payload) {
+    return {
+      kind: 'pgas_new_q6_completion_recorded',
       completion: optionalJsonField(payload, 'completion', 'completion_json'),
+    };
+  },
+
+  async record_program_intake_finalize() {
+    return {
+      kind: 'pgas_new_intake_finalized',
+      finalized: true,
     };
   },
 
