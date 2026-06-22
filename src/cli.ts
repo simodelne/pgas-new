@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from './pgas-new/artifact-plan.js';
+import {
+  createExistingRepoArtifactPlan,
+  createStandaloneArtifactPlan,
+  validateProgramIdentity,
+} from './pgas-new/artifact-plan.js';
 import { prepareExistingRepoAttachment } from './pgas-new/existing-repo.js';
 import {
   renderExistingRepoAttachment,
@@ -11,6 +15,8 @@ import {
 import { loadWiringManifest } from './pgas-new/wiring-manifest.js';
 import { PGAS_SERVER_PACKAGE, PGAS_SERVER_VERSION } from './pgas-new/version.js';
 import { isPgasNewSessionControl } from './pgas-new/control-plane.js';
+import { startFoundryServer } from './foundry-server.js';
+import { runRepl } from './repl/runner.js';
 
 export interface CliResult {
   exitCode: number;
@@ -23,10 +29,37 @@ interface ParsedOptions {
   [key: string]: string | string[];
 }
 
+interface AgentArgs {
+  slug?: string;
+  name?: string;
+  outDir?: string;
+  nonInteractive?: boolean;
+}
+
+const KNOWN_SUBCOMMANDS = new Set([
+  'help',
+  'version',
+  'session',
+  'plan-standalone',
+  'render-standalone',
+  'validate-manifest',
+  'plan-attach',
+  'render-attach',
+  'curator-request',
+]);
+
 export async function runCli(argv: string[]): Promise<CliResult> {
   try {
-    if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    if (argv.includes('--help') || argv.includes('-h')) {
       return ok(helpText());
+    }
+
+    if (argv.length === 0) {
+      return runAgentSession({});
+    }
+
+    if (!KNOWN_SUBCOMMANDS.has(argv[0]) && argv[0]?.startsWith('-')) {
+      return runAgentSession(parseAgentArgs(argv));
     }
 
     const parsed = parseArgs(argv);
@@ -56,6 +89,21 @@ export async function runCli(argv: string[]): Promise<CliResult> {
     }
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error), 1);
+  }
+}
+
+async function runAgentSession(args: AgentArgs): Promise<CliResult> {
+  const server = await startFoundryServer({});
+  try {
+    const replExit = await runRepl({
+      baseUrl: server.url,
+      slug: 'pgas-new',
+      initialDomain: initialDomainFromAgentArgs(args),
+      nonInteractive: args.nonInteractive,
+    });
+    return { exitCode: replExit.exitCode, stdout: '', stderr: '' };
+  } finally {
+    await server.kill();
   }
 }
 
@@ -212,6 +260,74 @@ function parseArgs(argv: string[]): ParsedOptions {
   }
 
   return parsed;
+}
+
+function parseAgentArgs(argv: string[]): AgentArgs {
+  const parsed: AgentArgs = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const [rawKey, inlineValue] = token.startsWith('--') ? token.slice(2).split('=', 2) : ['', undefined];
+    if (!rawKey) {
+      throw new Error(`unknown command: ${token}`);
+    }
+
+    const readValue = (): string => {
+      if (inlineValue !== undefined) return inlineValue;
+      const next = argv[index + 1];
+      if (!next || next.startsWith('--')) {
+        throw new Error(`missing value for --${rawKey}`);
+      }
+      index += 1;
+      return next;
+    };
+
+    switch (rawKey) {
+      case 'slug':
+        parsed.slug = readValue();
+        break;
+      case 'name':
+        parsed.name = readValue();
+        break;
+      case 'out':
+        parsed.outDir = readValue();
+        break;
+      case 'non-interactive': {
+        const value = inlineValue ?? (argv[index + 1] && !argv[index + 1].startsWith('--') ? argv[++index] : 'true');
+        parsed.nonInteractive = value !== 'false';
+        break;
+      }
+      default:
+        throw new Error(`unknown flag: --${rawKey}`);
+    }
+  }
+
+  if (parsed.slug) {
+    validateProgramIdentity({ slug: parsed.slug, name: parsed.name ?? deriveNameFromSlug(parsed.slug) });
+  }
+
+  return parsed;
+}
+
+function initialDomainFromAgentArgs(args: AgentArgs): Record<string, unknown> {
+  const domain: Record<string, unknown> = {};
+  if (args.slug) {
+    domain['program.slug'] = args.slug;
+    domain['program.name'] = args.name ?? deriveNameFromSlug(args.slug);
+  } else if (args.name) {
+    domain['program.name'] = args.name;
+  }
+  if (args.outDir) {
+    domain['program.target_dir'] = args.outDir;
+  }
+  return domain;
+}
+
+function deriveNameFromSlug(slug: string): string {
+  return slug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+    .join(' ');
 }
 
 function programOptions(options: ParsedOptions): {

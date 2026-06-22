@@ -11,6 +11,7 @@ export interface ReplOptions {
   program?: string;
   programDisplayName?: string;
   initialDomain?: Record<string, unknown>;
+  nonInteractive?: boolean;
   exitOnTerminal?: boolean;
   abortSignal?: AbortSignal;
 }
