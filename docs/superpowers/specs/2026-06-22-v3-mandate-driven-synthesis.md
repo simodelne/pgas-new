@@ -32,14 +32,83 @@ Restore the v1 intent on the v2.x foundation. The user gets back the REPL conver
 
 ## How v3.0 works (end-to-end)
 
+The user runs **`pgas-new`** with no arguments. Like running `claude` or `codex` — the REPL opens immediately and the agent drives the conversation:
+
 ```
-$ pgas-new design legal-fee-proposals
+$ pgas-new
+
+  pgas-new — PGAS program design foundry
+  starting design session...
+
+● Connected  mode: intake_intelligence
+
+agent ▸ What do you want this program to do? Describe it freely; I'll
+        ask follow-ups to fill in the gaps.
+
+› I want an agent that drafts incident postmortems for SimoneOS.
+  It should pull from the incident timeline, ask the on-call for
+  any missing context, and produce a structured doc...
+
+  ⠸ reading context… asking follow-ups…
+
+agent ▸ Got it. Two follow-ups:
+        1. How does work arrive — a user message kicking off a new
+           incident, a webhook from an alerting system, or both?
+        2. What are the distinct stages this work moves through?
+           (e.g. intake → reconstruction → draft → review → publish)
+
+› ...
+
+[agent walks through Q1–Q6 of the v1 interview; records to state]
+
+→ mode: architecture_design
+  ⠸ synthesizing program spec…
+
+agent ▸ Here's the program I'd build for you:
+  ┌─ proposed spec ────────────────────────────────────────────┐
+  │ modes: intake → reconstruction → draft → review → publish  │
+  │ channels: user_text, user_confirmation, widget_output      │
+  │ schema fields: incident.id, incident.timeline, draft.body  │
+  │ ...                                                        │
+  └────────────────────────────────────────────────────────────┘
+  Approve? [y/n/edit]
+
+› y
+
+→ mode: scaffold_plan      [Plan presented; user approves]
+→ mode: branch_write       [Files written to ./incident-postmortems/]
+→ mode: static_verify      [npm install, typecheck, tests — all green]
+→ mode: pr_graduation      [Optional: open the PR]
+
+✓ Done. Your program is at ./incident-postmortems/.
 ```
 
-1. CLI renders the `pgas-new-foundry` template to a temporary working dir.
-2. CLI starts the rendered foundry's embedded server against the configured LLM provider.
-3. CLI starts the rendered foundry's streaming REPL (the one we shipped in v2.5.x).
-4. The foundry program runs. Its first mode is `intake_intelligence`.
+**That's the entire UX.** Single command. Single process. Real LLM. Real engine. Real artifacts on disk at the end.
+
+### How the CLI implements this
+
+`pgas-new` with no args (or with optional `--slug <slug> --out <dir>`):
+
+1. CLI spawns an **embedded foundry server** in a child process. The server runs the foundry's own PGAS program (the spec at `templates/pgas-new/program/specs.yml.tmpl`, rendered + pre-bundled into the npm package at build time). The child's stdout/stderr is suppressed (or routed to a log file).
+2. CLI waits for the child server's `/health` to respond.
+3. CLI runs the **streaming REPL** we already ship (`templates/pgas-new/standalone/src/repl/{index,renderer}.ts`) in-process, connected to the child server via HTTP + WS.
+4. The REPL opens a session against the foundry program. The session's first mode is `intake_intelligence`. The agent runs under the foundry's spec, asks Q1–Q6 + follow-ups, records to governed state.
+5. Each mode advances when its exit gate is met. The REPL prints mode banners (`→ mode: architecture_design`), spinner phases (`reading context…`, `synthesizing…`), and action results (the proposed spec, the artifact plan, the verify ladder output).
+6. When the user reaches `pr_graduation` (or types `/exit`), CLI kills the child server cleanly and exits.
+
+### Subcommand surface (post-v3.0)
+
+```
+pgas-new                                  # primary: interactive design session
+pgas-new --slug <slug> --out <dir>        # primary with pre-set slug/out
+pgas-new --non-interactive --slug ...     # CI/scripted (errors if intake needs questions)
+pgas-new version                          # one-shot, no REPL
+pgas-new validate-manifest --repo <repo>  # one-shot, no REPL
+pgas-new render-foundry --out <dir>       # one-shot self-bootstrap (replaces --template pgas-new-foundry)
+pgas-new --help                           # one-shot
+```
+
+`render-standalone` / `render-attach` / `plan-standalone` / `plan-attach` / `curator-request` are removed from the CLI surface in v3.0; their behavior is internalized into the foundry's `scaffold_plan` and `branch_write` modes. Programmatic users can still drive the foundry via the same HTTP+WS API that the REPL uses.
 
 Now the **agent walks the user through phases**, asking questions in the REPL, recording answers as governed state. Each mode advances when its exit gate is met. The user types, the agent responds, the spinner shows live SSE phases, mode banners print when modes change. **This is exactly what the v1 slash command did, but in a real REPL against a real engine.**
 
@@ -130,9 +199,17 @@ The LLM does **judgment** in `intake_intelligence` (asking questions, follow-ups
 - Keep the `--template policy-drafting|web-scraper|social-media-agent` CLI flag working but mark deprecated in `--help`. Print a warning when used.
 
 **v2.8.0** (additive, conversation):
-- Add `pgas-new design <slug> [--name "..."]` CLI command. Renders `pgas-new-foundry` to a temp dir, starts its server + REPL, the user goes through the modes interactively. At `branch_write`, the foundry writes the synthesized program to the user's `--out` dir (or PWD).
-- Add a `record_intake` action variant in the foundry's spec that captures Q1–Q6 to `intake.purpose`, `intake.entry_channel`, `intake.stages`, `intake.transitions`, `intake.delegation`, `intake.completion`.
-- Old `--template` flags still work.
+- `pgas-new` with **no arguments** opens the REPL directly (like `claude` or `codex`). The CLI:
+  1. Spawns an embedded foundry server as a child process (the foundry's PGAS program rendered into a stable per-installation working dir, e.g. `~/.pgas-new/foundry/`, on first run; bundled in the npm package so no on-first-run install penalty).
+  2. Waits for child server's `/health`.
+  3. Connects the streaming REPL (in-process) to the child server via HTTP+WS.
+  4. Opens a foundry session against the foundry program (whose first mode is `intake_intelligence`).
+  5. The agent drives the conversation. When the user reaches `pr_graduation` or types `/exit`, CLI kills the child cleanly.
+- Optional flags: `--slug <slug>` (pre-fills the slug so the agent doesn't have to ask), `--out <dir>` (target dir for `branch_write`, defaults to `./<slug>` from intake), `--non-interactive` (CI mode — errors if the agent needs to ask anything).
+- Add `record_program_intake` action to the foundry's spec that captures Q1–Q6 to `intake.purpose`, `intake.entry_channel`, `intake.stages`, `intake.transitions`, `intake.delegation`, `intake.completion`.
+- Add guidance to `intake_intelligence` mode instructing the LLM to run the 6-question interview when `intake.program_intake_recorded` is false.
+- Old `--template <consumer>` flags still work (deprecated since v2.7.0); the bare `pgas-new` REPL is the new primary surface.
+- Old subcommands (`plan-standalone`, `render-standalone`, `validate-manifest`, `plan-attach`, `render-attach`, `curator-request`) still work for scripted use.
 
 **v2.9.0** (additive, synthesis):
 - Implement `synthesize_program_spec` action in the foundry's handler (per §3).
@@ -142,7 +219,9 @@ The LLM does **judgment** in `intake_intelligence` (asking questions, follow-ups
 - Add deterministic regression tests: feed each graduation `MANDATE.md` into the synthesis flow (with a deterministic LLM stub for the intake conversation) and assert the output matches the frozen graduation spec within a structural-equivalence margin.
 
 **v3.0.0** (breaking, cleanup):
-- Delete `--template policy-drafting|web-scraper|social-media-agent`. Print error suggesting `pgas-new design <slug>`.
+- Delete `--template policy-drafting|web-scraper|social-media-agent`. Print error suggesting `pgas-new` (no args).
+- Move the scripted subcommands (`plan-standalone`, `render-standalone`, `plan-attach`, `render-attach`, `validate-manifest`, `curator-request`) behind a `pgas-new ci ...` namespace OR remove them entirely (the foundry's HTTP+WS API is the supported scripting interface).
+- `pgas-new render-foundry --out <dir>` becomes the only remaining one-shot render command (replaces `--template pgas-new-foundry`).
 - Delete `templates/pgas-new/consumer/`.
 - `--template pgas-new-foundry` stays as the bootstrap path.
 - Update README, architecture doc, all docs. Cut v3.0 release.
