@@ -9,6 +9,18 @@
 - [ ] Re-platforming
 - [ ] Architecture change
 
+## Behavior preservation evidence
+
+List each pre-platform user-facing surface and how this PR preserves it.
+
+| Pre-platform surface | Preservation evidence |
+| --- | --- |
+|  |  |
+
+## Architectural changes
+
+<!-- Required if docs/PGAS-NEW-ARCHITECTURE.md changed; write "none" if unchanged. -->
+
 ## Test plan
 
 - [ ] `npm test`
