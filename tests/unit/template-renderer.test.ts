@@ -233,6 +233,7 @@ describe('template renderer', () => {
           'record_program_target',
           'choose_design_path',
           'apply_default_skeleton',
+          'ask_design_question',
           ...qActionNames,
           'record_program_intake_finalize',
           'confirm_design',
@@ -357,6 +358,11 @@ describe('template renderer', () => {
         { op: 'MSet', path: 'intake.q6_recorded', value: true },
         { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
       ]);
+      expect(parsed.action_map.ask_design_question).toMatchObject({
+        description: 'Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round\'s inputs.user_text carries the answer.',
+        channel: 'widget_output',
+      });
+      expect(parsed.action_map.ask_design_question.mutations).toEqual([]);
       expect(parsed.action_map.record_q1_purpose).toMatchObject({
         description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does.",
         channel: 'widget_output',
@@ -500,9 +506,10 @@ describe('template renderer', () => {
       expect(parsed.guidance.intake_intelligence).toEqual(
         expect.arrayContaining([
           expect.stringContaining('program.target_dir_confirmed is not true'),
-          expect.stringContaining("intent='choose_design_path'"),
+          expect.stringContaining('call choose_design_path'),
           expect.stringContaining('call apply_default_skeleton'),
           expect.stringContaining('Design interview enforcement (Q1-Q6)'),
+          expect.stringContaining('ask_design_question with question_number'),
           expect.stringContaining('record_qN_<topic>'),
           expect.stringContaining('record_program_intake_finalize'),
           expect.stringContaining('Do NOT attempt to batch multiple answers into one action'),

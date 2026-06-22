@@ -41,6 +41,14 @@ function stringField(payload: Record<string, unknown>, key: string): string {
   return value;
 }
 
+function numberField(payload: Record<string, unknown>, key: string): number {
+  const value = payload[key];
+  if (typeof value !== 'number') {
+    throw new Error(`missing number payload field: ${key}`);
+  }
+  return value;
+}
+
 function optionalJsonField(payload: Record<string, unknown>, structuredKey: string, jsonKey: string): unknown {
   const structuredValue = payload[structuredKey];
   if (structuredValue !== undefined) return structuredValue;
@@ -94,6 +102,14 @@ export const handlers: Record<string, ToolHandler> = {
       kind: 'pgas_new_default_skeleton_applied',
       stages: cloneJson(defaultStages),
       transitions: cloneJson(defaultTransitions),
+    };
+  },
+
+  async ask_design_question(payload) {
+    return {
+      kind: 'ask_design_question',
+      question_number: numberField(payload, 'question_number'),
+      question_text: stringField(payload, 'question_text'),
     };
   },
 

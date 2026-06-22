@@ -4,6 +4,7 @@ const semanticTools = [
   'record_program_target',
   'choose_design_path',
   'apply_default_skeleton',
+  'ask_design_question',
   'record_q1_purpose',
   'record_q2_entry_channel',
   'record_q3_stages',

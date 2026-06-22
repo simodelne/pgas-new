@@ -10,6 +10,7 @@ const intakeToolNames = [
   'record_program_target',
   'choose_design_path',
   'apply_default_skeleton',
+  'ask_design_question',
   'record_q1_purpose',
   'record_q2_entry_channel',
   'record_q3_stages',
@@ -162,13 +163,10 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
   };
 }
 
-function questionPause(question: string): TestHarnessAuthorResponse {
-  // The installed JSON test harness requires an EffectAction to materialize a
-  // round; session_help is a no-op output action that models a non-mutating
-  // question pause without recording intake.
-  return effect('session_help', {
-    input_type: 'question',
-    question,
+function questionPause(questionNumber: number, questionText: string): TestHarnessAuthorResponse {
+  return effect('ask_design_question', {
+    question_number: questionNumber,
+    question_text: questionText,
   });
 }
 
@@ -241,6 +239,14 @@ describe('foundry intake flow', () => {
       stages: defaultStages,
       transitions: defaultTransitions,
     });
+    await expect(handlers.ask_design_question({
+      question_number: 1,
+      question_text: questionByRound[0],
+    })).resolves.toEqual({
+      kind: 'ask_design_question',
+      question_number: 1,
+      question_text: questionByRound[0],
+    });
     await expect(handlers.record_q1_purpose({ purpose: 'Route incidents into a triage workflow.' })).resolves.toEqual({
       kind: 'pgas_new_q1_purpose_recorded',
       purpose: 'Route incidents into a triage workflow.',
@@ -299,7 +305,7 @@ describe('foundry intake flow', () => {
       }),
       effect('choose_design_path', { choice: 'design' }),
       ...qActionCases.flatMap((actionCase, index) => [
-        questionPause(questionByRound[index] as string),
+        questionPause(index + 1, questionByRound[index] as string),
         effect(actionCase.action, actionCase.payload),
       ]),
       effect('record_program_intake_finalize', {}),
@@ -325,7 +331,11 @@ describe('foundry intake flow', () => {
         expect(questionSnapshot.domain[currentFlag as string]).not.toBe(true);
         expect(questionSnapshot.lastResult).toMatchObject({
           kind: 'EffectAction',
-          name: 'session_help',
+          name: 'ask_design_question',
+          payload: {
+            question_number: i + 1,
+            question_text: questionByRound[i],
+          },
         });
 
         await harness.trigger(answerByRound[i] as string);

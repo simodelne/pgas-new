@@ -14,6 +14,12 @@ export interface StartedFoundryServer {
 const DEFAULT_HOSTNAME = '127.0.0.1';
 const PROGRAM_NAME = 'pgas-new';
 
+export function ensureOpenAiJsonResponseFormatDisabled(): void {
+  if (process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT === undefined) {
+    process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = '1';
+  }
+}
+
 export async function startFoundryServer(options: FoundryServerOptions = {}): Promise<StartedFoundryServer> {
   const requestedPort = resolvePort(options);
   const hostname = options.hostname ?? DEFAULT_HOSTNAME;
@@ -25,9 +31,7 @@ export async function startFoundryServer(options: FoundryServerOptions = {}): Pr
    * native tool_calls. Default it off for foundry launches while honoring an
    * explicit override such as =0 for diagnostics.
    */
-  if (process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT === undefined) {
-    process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = '1';
-  }
+  ensureOpenAiJsonResponseFormatDisabled();
 
   const server = await createPgasServer({
     programs: [{ name: PROGRAM_NAME, entry: createPgasNewFoundryProgramEntry() }],

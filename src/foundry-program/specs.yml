@@ -25,7 +25,7 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_q6_completion, record_program_intake_finalize, confirm_design, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_q6_completion, record_program_intake_finalize, confirm_design, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       record_program_target:
@@ -254,10 +254,13 @@ prompts:
       use the spec's `from` + `_arg: <name>` syntax as a literal argument
       key -- that mapping marker is internal spec syntax describing how the
       engine maps your tool argument named `<name>` to a state path.
-    - When you need to ASK the user something (not commit state), emit
-      plain natural-language text in the message content WITHOUT any
-      tool_call. The engine will pause and the next round will deliver
-      the user's reply via inputs.user_text.
+    - Every round must emit exactly one NATIVE OpenAI tool_call from the
+      current mode vocabulary. Do not output free-form question text as
+      assistant message content; the engine parses uncalled content as an
+      invalid empty-name action.
+    - To ask Q1-Q6, call `ask_design_question` with `question_number` (1..6)
+      and `question_text`. The engine pauses the round; the user's typed
+      reply arrives next round via inputs.user_text.
     - One tool_call per round.
 
     This mode collects the program-design intake. You MUST drive the design
@@ -265,20 +268,16 @@ prompts:
     to commit governed state -- NOT by emitting raw JSON mutations.
 
     Per turn:
-    - When you need user input to make progress (for example, the user has
-      not yet stated the program's target_dir, or you need their Q1 answer),
-      do NOT emit a terminal tool call. Instead, emit your question as plain
-      text in your response and stop. The engine will pause the round and
-      route the user's next typed reply through the `user_text` channel; your
-      next round will see it as `inputs.user_text`.
-    - Process `inputs.user_text` and either ask the next question with the
-      same non-terminal plain-text pattern, OR fire a terminal tool call when
-      you have enough information.
+    - Process `inputs.user_text` and either call `ask_design_question` for
+      the next Q1-Q6 design-interview question, OR fire the single terminal
+      tool call that commits the governed state you have enough information
+      to record.
     Design interview enforcement (Q1-Q6):
     - The engine enforces strict left-to-right ordering via per-question
       preconditions. You CANNOT skip ahead.
     - For each question:
-      1. Emit the question text as a non-terminal response. The engine pauses.
+      1. Call `ask_design_question` with `question_number` and
+         `question_text`. The engine pauses.
       2. The user's answer arrives via user_text on the next round.
       3. Fire the corresponding `record_qN_<topic>` action with the user's
          answer parsed into that action's named argument.
@@ -300,8 +299,8 @@ prompts:
     2. After target capture: call `choose_design_path` with `{choice: "default"}`
        or `{choice: "design"}` based on what the user asked for.
     3. If `choice = "default"`: call `apply_default_skeleton` immediately.
-    4. If `choice = "design"`: ask Q1-Q6 via user text/confirmation, recording
-       each answer with its corresponding Q-action, then call
+    4. If `choice = "design"`: ask Q1-Q6 by calling `ask_design_question`,
+       recording each answer with its corresponding Q-action, then call
        `record_program_intake_finalize`.
     5. Finally call `confirm_design` to gate transition to architecture_design.
 
@@ -319,10 +318,9 @@ prompts:
       use the spec's `from` + `_arg: <name>` syntax as a literal argument
       key -- that mapping marker is internal spec syntax describing how the
       engine maps your tool argument named `<name>` to a state path.
-    - When you need to ASK the user something (not commit state), emit
-      plain natural-language text in the message content WITHOUT any
-      tool_call. The engine will pause and the next round will deliver
-      the user's reply via inputs.user_text.
+    - Every round must emit exactly one NATIVE OpenAI tool_call from the
+      current mode vocabulary. Do not output free-form prose without a
+      tool_call; the engine parses uncalled content as an invalid action.
     - One tool_call per round.
 
     Create and approve the artifact plan before writes.
@@ -379,6 +377,13 @@ action_map:
       - { op: MSet, path: intake.completion_json, value: '{"final_stage":"complete","guard_field":"work.example_ready"}' }
       - { op: MSet, path: intake.q6_recorded, value: true }
       - { op: MSet, path: intake.program_intake_finalized, value: true }
+    channel: widget_output
+  ask_design_question:
+    description: "Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round's inputs.user_text carries the answer."
+    arg_descriptions:
+      question_number: "Which Q is being asked (1-6)."
+      question_text: "The question prompt to display to the user."
+    mutations: []
     channel: widget_output
   record_q1_purpose:
     description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does."
@@ -636,11 +641,12 @@ fallback:
 
 guidance:
   intake_intelligence:
-    - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If any of slug/name/target_dir is missing, ask exactly one missing-identity question as plain text and stop; the user's reply will arrive next round as inputs.user_text. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
-    - "After record_program_target, if program.design_path is not set, ask in plain text whether the user wants to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton (intent='choose_design_path'), then stop. On the next user_text reply, call choose_design_path with choice='design' or choice='default'."
+    - "Every round must emit exactly one native tool_call from the current mode vocabulary. Do NOT output free-form question text as assistant message content; the engine parses uncalled content as an invalid empty-name action."
+    - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
+    - "After record_program_target, if program.design_path is not set, call choose_design_path with choice='design' when the user asked to design the program or choice='default' when the user asked for the default skeleton."
     - "If program.design_path == 'default' and intake.program_intake_finalized is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
-    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Emit the question text as a non-terminal response. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into that action's named argument. 4. Move to the next question. After Q6 fires, immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
-    - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Emit the question as plain text and stop; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
+    - "Design interview enforcement (Q1-Q6): The engine enforces strict left-to-right ordering via per-question preconditions. You CANNOT skip ahead. For each question: 1. Call ask_design_question with question_number (1..6) and question_text. The engine pauses. 2. The user's answer arrives via user_text on the next round. 3. Fire the corresponding record_qN_<topic> action with the user's answer parsed into that action's named argument. 4. Move to the next question. After Q6 fires, immediately fire record_program_intake_finalize. Do NOT attempt to batch multiple answers into one action. Do NOT attempt to fire record_program_intake_finalize before all six qN_recorded flags are true -- the engine will reject it."
+    - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Call ask_design_question for the question round; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
     - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']."

@@ -22,15 +22,20 @@ describe('foundry intake tool-call protocol guidance', () => {
       'calling the declared tools as tool calls',
       'NOT by emitting raw JSON mutations',
       'Make exactly ONE terminal tool call',
+      'ask_design_question',
+      'question_number',
+      'next round via inputs.user_text',
       '{slug, name, target_dir}',
       'One tool call per round',
     ];
     let missingPromptClauses: string[] = [];
+    let capturedPrompt = '';
 
     const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
       programName: 'pgas-new',
       defaultChannel: 'user_text',
       author: ({ prompt }) => {
+        capturedPrompt = prompt;
         missingPromptClauses = requiredPromptClauses.filter((clause) => !prompt.includes(clause));
 
         return effect('record_program_target', {
@@ -46,6 +51,7 @@ describe('foundry intake tool-call protocol guidance', () => {
       const snapshot = await harness.snapshot();
 
       expect(missingPromptClauses).toEqual([]);
+      expect(capturedPrompt).not.toContain('plain natural-language text');
       expect(snapshot.domain['program.slug']).toBe('foo');
       expect(snapshot.domain['program.name']).toBe('Foo');
       expect(snapshot.domain['program.target_dir']).toBe('/tmp/foo');
@@ -56,13 +62,19 @@ describe('foundry intake tool-call protocol guidance', () => {
   });
 
   it('uses native tool_calls schemas without leaking from_arg into the prompt', async () => {
-    const captured: { prompt?: string; toolNames: string[]; targetTool?: Record<string, unknown> } = {
+    const captured: {
+      prompt?: string;
+      toolNames: string[];
+      targetTool?: Record<string, unknown>;
+      questionTool?: Record<string, unknown>;
+    } = {
       toolNames: [],
     };
     const server = await createUnifiedServer(async (messages, tools) => {
       captured.prompt = messages.map((message) => message.content ?? '').join('\n');
       captured.toolNames = tools.map((tool) => tool.function.name);
       captured.targetTool = tools.find((tool) => tool.function.name === 'record_program_target')?.function.parameters;
+      captured.questionTool = tools.find((tool) => tool.function.name === 'ask_design_question')?.function.parameters;
 
       return {
         tool_calls: [{
@@ -95,6 +107,13 @@ describe('foundry intake tool-call protocol guidance', () => {
 
       expect(captured.prompt).not.toContain('from_arg');
       expect(captured.toolNames).toContain('record_program_target');
+      expect(captured.toolNames).toContain('ask_design_question');
+      expect(captured.questionTool).toMatchObject({
+        type: 'object',
+        properties: {
+          message: expect.objectContaining({ type: 'string' }),
+        },
+      });
       expect(captured.targetTool).toMatchObject({
         type: 'object',
         properties: {
