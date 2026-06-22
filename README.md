@@ -18,6 +18,12 @@ Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`.
 - [PGAS-new architecture](./docs/PGAS-NEW-ARCHITECTURE.md)
 - [Live graduation procedure](./docs/PGAS-NEW-LIVE-GRADUATION.md)
 
+## Governance
+
+Architecture changes must update [docs/PGAS-NEW-ARCHITECTURE.md](./docs/PGAS-NEW-ARCHITECTURE.md) in the same PR. The architecture-diff CI gate enforces this on pull requests against `main` by requiring a `## Architectural changes` PR-body section whenever that doc differs from the latest release tag.
+
+Re-platforming PRs should use the re-platforming pull request template and include behavior preservation evidence for each pre-platform user-facing surface. UAT prompts must start with the intent-verification block documented in [docs/UAT-PROMPT-TEMPLATE.md](./docs/UAT-PROMPT-TEMPLATE.md).
+
 ## Commands
 
 ```bash
