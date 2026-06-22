@@ -188,6 +188,80 @@ describe('template renderer', () => {
     }
   });
 
+  it('declares the foundry Q1-Q6 intake recording action and guidance', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-intake-'));
+    try {
+      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
+
+      const specText = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
+      const handlers = readFileSync(join(outDir, 'src/programs/pgas-new/handlers.ts'), 'utf8');
+      const tools = readFileSync(join(outDir, 'src/programs/pgas-new/tools.ts'), 'utf8');
+      const parsed = load(specText) as {
+        modes: Record<string, { vocabulary: string[] }>;
+        projection: Record<string, { include: string[] }>;
+        action_map: Record<string, {
+          description: string;
+          channel: string;
+          mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
+        }>;
+        schema: Record<string, string>;
+        guidance: Record<string, string[]>;
+      };
+
+      expect(parsed.modes.intake_intelligence.vocabulary).toContain('record_program_intake');
+      expect(parsed.action_map.record_program_intake).toMatchObject({
+        description: "Capture the user's Q1-Q6 design interview answers into governed state.",
+        channel: 'widget_output',
+      });
+      expect(parsed.action_map.record_program_intake.mutations).toEqual([
+        { op: 'MSet', path: 'intake.purpose', from_arg: 'purpose' },
+        { op: 'MSet', path: 'intake.entry_channel', from_arg: 'entry_channel' },
+        { op: 'MSet', path: 'intake.stages', from_arg: 'stages' },
+        { op: 'MSet', path: 'intake.transitions', from_arg: 'transitions' },
+        { op: 'MSet', path: 'intake.delegation', from_arg: 'delegation' },
+        { op: 'MSet', path: 'intake.completion', from_arg: 'completion' },
+        { op: 'MSet', path: 'intake.program_intake_recorded', value: true },
+      ]);
+      expect(parsed.projection.intake_intelligence.include).toEqual(
+        expect.arrayContaining([
+          'intake.purpose',
+          'intake.entry_channel',
+          'intake.stages',
+          'intake.transitions',
+          'intake.delegation',
+          'intake.completion',
+          'intake.program_intake_recorded',
+        ]),
+      );
+      expect(parsed.schema).toMatchObject({
+        'intake.purpose': 'string',
+        'intake.entry_channel': 'string',
+        'intake.stages': 'array',
+        'intake.stages.*': 'object',
+        'intake.transitions': 'array',
+        'intake.transitions.*': 'object',
+        'intake.delegation': 'object',
+        'intake.completion': 'object',
+        'intake.completion.final_stage': 'string',
+        'intake.completion.guard_field': 'string',
+        'intake.program_intake_recorded': 'boolean',
+      });
+      expect(parsed.guidance.intake_intelligence).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('ask the 6 design questions in order'),
+          expect.stringContaining("request_user_action with intent='collect_program_intake'"),
+          expect.stringContaining('call `record_program_intake` with the structured payload'),
+          expect.stringContaining("Don't re-ask anything you already extracted"),
+        ]),
+      );
+      expect(handlers).toContain('async record_program_intake(payload)');
+      expect(handlers).toContain("kind: 'pgas_new_intake_recorded'");
+      expect(tools).toContain("'record_program_intake'");
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders policy-drafting artifacts into manifest paths for existing repo attachments', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-policy-'));
     try {
