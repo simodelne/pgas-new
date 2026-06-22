@@ -45,6 +45,24 @@ const designTransitions = [
 const designDelegation = { strategy: 'none' };
 const designCompletion = { final_stage: 'done', guard_field: 'work.summary_ready' };
 
+const questionByRound = [
+  'Q1 Purpose -- one sentence on what the program does.',
+  'Q2 Entry channel -- how does work arrive?',
+  'Q3 Stages of work -- name the stages in order.',
+  'Q4 Decision points -- branches, loops, or bail-outs?',
+  'Q5 Delegation -- does any stage delegate?',
+  'Q6 Completion criteria -- how do you know it is done?',
+];
+
+const answerByRound = [
+  'to triage incidents from PagerDuty',
+  'PagerDuty webhooks',
+  'intake, triage, resolution',
+  'loop from triage back to intake when details are incomplete',
+  'no child-session delegation',
+  'final stage resolution with guard incident_resolved',
+];
+
 function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
   return {
     actions: [
@@ -56,6 +74,16 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
       },
     ],
   };
+}
+
+function questionPause(question: string): TestHarnessAuthorResponse {
+  // The installed JSON test harness requires an EffectAction to materialize a
+  // round; session_help is a no-op output action that models a non-mutating
+  // question pause without recording intake.
+  return effect('session_help', {
+    input_type: 'question',
+    question,
+  });
 }
 
 async function driveIntakeFork(choice: 'design' | 'default') {
@@ -160,6 +188,83 @@ describe('foundry intake flow', () => {
     expect(snapshot.domain['program.design_confirmed']).toBe(true);
     expect(snapshot.domain['intake.stages_json']).toBe(JSON.stringify(designStages));
     expect(snapshot.domain['intake.transitions_json']).toBe(JSON.stringify(designTransitions));
+  });
+
+  it('waits through one-question-per-round intake prompts before recording Q1-Q6', async () => {
+    const authorResponses: TestHarnessAuthorResponse[] = [
+      effect('record_program_target', {
+        slug: 'incident-triage',
+        name: 'Incident Triage',
+        target_dir: '/tmp/incident-triage',
+      }),
+      effect('choose_design_path', { choice: 'design' }),
+      ...questionByRound.map(questionPause),
+      effect('record_program_intake', {
+        purpose: answerByRound[0],
+        entry_channel: 'webhook',
+        stages_json: JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          { slug: 'triage' },
+          { slug: 'resolution', is_terminal: true },
+        ]),
+        transitions_json: JSON.stringify([
+          { from: 'intake', to: 'triage', trigger: 'incident_received' },
+          {
+            from: 'triage',
+            to: 'intake',
+            trigger: 'details_incomplete',
+            guard_field: 'work.details_incomplete',
+            guard_value: true,
+          },
+          {
+            from: 'triage',
+            to: 'resolution',
+            trigger: 'incident_resolved',
+            guard_field: 'incident_resolved',
+            guard_value: true,
+          },
+        ]),
+        delegation_json: JSON.stringify({ strategy: 'none' }),
+        completion_json: JSON.stringify({ final_stage: 'resolution', guard_field: 'incident_resolved' }),
+      }),
+    ];
+
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses,
+    });
+
+    try {
+      await harness.trigger('Create an incident triage PGAS program.');
+      await harness.trigger('I want to design it.');
+
+      for (let i = 0; i < questionByRound.length; i += 1) {
+        await harness.trigger(i === 0 ? 'Ask the first intake question.' : answerByRound[i - 1]);
+        const questionSnapshot = await harness.snapshot();
+
+        expect(questionSnapshot.mode).toBe('intake_intelligence');
+        expect(questionSnapshot.domain['intake.program_intake_recorded']).not.toBe(true);
+        expect(questionSnapshot.lastResult).toMatchObject({
+          kind: 'EffectAction',
+          name: 'session_help',
+        });
+      }
+
+      await harness.trigger(answerByRound[5]);
+      const snapshot = await harness.snapshot();
+
+      expect(snapshot.mode).toBe('intake_intelligence');
+      expect(snapshot.domain['program.design_path']).toBe('design');
+      expect(snapshot.domain['intake.program_intake_recorded']).toBe(true);
+      expect(snapshot.domain['intake.purpose']).toBe(answerByRound[0]);
+      expect(snapshot.domain['intake.entry_channel']).toBe('webhook');
+      expect(snapshot.domain['intake.completion_json']).toBe(
+        JSON.stringify({ final_stage: 'resolution', guard_field: 'incident_resolved' }),
+      );
+    } finally {
+      await harness.close();
+    }
   });
 
   it('drives the default skeleton fork to architecture_design', async () => {

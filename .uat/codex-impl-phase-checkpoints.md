@@ -126,3 +126,17 @@
 - Verification: `npx vitest run --config tests/vitest.config.ts tests/unit/foundry-server.test.ts tests/integration/foundry-server-live.test.ts` PASS on 2026-06-22; `npm run typecheck` PASS on 2026-06-22; `npm test` PASS on 2026-06-22.
 - Root cause: §10 round 3 Scenario A reached the first live E2E server launch and failed with `spawn pgas-server ENOENT`; the installed `@simodelne/pgas-server@2.13.1` package has no `bin` entry and exposes only ES-module API entrypoints.
 - Notes: `startFoundryServer({})` now constructs the foundry entry in-process, starts `createPgasServer` directly, returns the bound port from `server.start()`, and maps `kill()` to `server.close()`. Unit coverage now mocks `createPgasServer`; the live integration smoke starts the real in-process engine and checks `/health` plus shutdown when the host permits loopback listeners.
+
+## Phase 3.12 - REPL approval/rejection controls
+
+- Commit: BLOCKED. `.git` is mounted read-only, so `git add`/`git commit` cannot create `.git/index.lock`. Intended commit: `fix(v3): Phase 3.12 — REPL /approve and /reject controls for user_confirmation channel (caught by §10)`.
+- Verification: `npx vitest run --config tests/vitest.config.ts tests/unit/repl-controls.test.ts` PASS on 2026-06-22; `npm run typecheck` PASS on 2026-06-22; `npx vitest run --config tests/vitest.config.ts tests/integration/foundry-intake-flow.test.ts tests/unit/repl-runner.test.ts` PASS on 2026-06-22; `npm test` PASS on 2026-06-22.
+- Root cause: §10 round 4 Scenario A typed `approve`, which the REPL routed as `user_text`; `confirm_design` requires a `user_confirmation` trigger, so GKPrecondition failed until the repair bound tripped.
+- Notes: `/approve` and `/reject` now route through `runTrigger(..., 'user_confirmation', { decision, instruction? })`; plain text remains `user_text`, `/abort` still uses `client.controls.invoke`, and foundry guidance now tells the LLM to request slash controls for D4 confirmations instead of accepting plain text approval replies.
+
+## Phase 3.13 - Intake question prompt contract
+
+- Commit: this commit (`fix(v3): Phase 3.13 — remove request_user_action hallucination from foundry guidance (caught by §10)`)
+- Verification: `npx vitest run --config tests/vitest.config.ts tests/integration/foundry-tool-call-protocol.test.ts tests/integration/foundry-intake-flow.test.ts` PASS on 2026-06-22; `npm test` PASS on 2026-06-22 with 28 Vitest files / 170 tests passed and generated scaffold install/test SKIP because `NPM_TOKEN` is not explicitly set.
+- Root cause: §10 round 5 Scenario A followed a prompt that referenced `request_user_action`; the action is absent from the installed `@simodelne/pgas-server@2.13.1` bundle and from the foundry `intake_intelligence` vocabulary, so GKType rejected it until repair fallback.
+- Notes: `intake_intelligence` now distinguishes question rounds from commit rounds: ask missing identity/design/Q1-Q6 questions as plain text and stop, consume the next `inputs.user_text`, and call `record_program_intake` only after all six answers/defaults are collected. The intake integration now covers six question rounds before the final intake record.

@@ -215,15 +215,26 @@ projection:
 prompts:
   intake_intelligence: |
     This mode collects the program-design intake. You MUST drive the design
-    interview by calling the declared tools as tool calls -- NOT by emitting raw JSON mutations.
+    interview by calling the declared tools as tool calls when you are ready
+    to commit governed state -- NOT by emitting raw JSON mutations.
 
     Per turn:
-    - Make exactly ONE terminal tool call from the mode's vocabulary.
-    - The arguments to each tool are structured per the tool's schema; emit
-      them as the tool's argument object, not as a `mutations` array.
-    - Use the canonical user-text/confirmation channel, or `request_user_action`
-      if it is available in the active vocabulary, when you need the user to
-      answer Q1-Q6.
+    - When you need user input to make progress (for example, the user has
+      not yet stated the program's target_dir, or you need their Q1 answer),
+      do NOT emit a terminal tool call. Instead, emit your question as plain
+      text in your response and stop. The engine will pause the round and
+      route the user's next typed reply through the `user_text` channel; your
+      next round will see it as `inputs.user_text`.
+    - Process `inputs.user_text` and either ask the next question with the
+      same non-terminal plain-text pattern, OR fire a terminal tool call when
+      you have enough information.
+    - Specifically for Q1-Q6: ask ONE question per round; wait for the user's
+      answer; ask the next; continue until all six are collected; then fire
+      `record_program_intake` with the structured payload.
+    - When you are ready to commit state: Make exactly ONE terminal tool call
+      from the mode's vocabulary. The arguments to each tool are structured
+      per the tool's schema; emit them as the tool's argument object, not as a
+      `mutations` array. One tool call per round when committing.
 
     Order of intake:
     1. If `program.target_dir_confirmed` is false: call `record_program_target`
@@ -237,7 +248,7 @@ prompts:
        `record_program_intake` with the structured payload.
     5. Finally call `confirm_design` to gate transition to architecture_design.
 
-    Do not pre-fill or batch multiple tool calls in one response. One tool call per round.
+    Do not pre-fill or batch multiple tool calls in one response.
   repo_targeting: "Validate target mode and fixed .pgas/wiring.yml if attaching to an existing repo."
   architecture_design: "Run the deterministic program-spec synthesizer."
   scaffold_plan: "Create and approve the artifact plan before writes."
@@ -488,10 +499,10 @@ fallback:
 
 guidance:
   intake_intelligence:
-    - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If any of slug/name/target_dir is missing, ask the user via request_user_action with intent='collect_program_identity'. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. Echo back the proposed slug/name/target_dir for confirmation, then call record_program_target with slug, name, and target_dir."
-    - "After record_program_target, if program.design_path is not set, ask the user whether they want to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton. Use request_user_action with intent='choose_design_path'. Then call choose_design_path with choice='design' or choice='default'."
+    - "If program.target_dir_confirmed is not true: first capture program identity. The CLI may have pre-filled program.slug, program.name, or program.target_dir via initialDomain. If any of slug/name/target_dir is missing, ask exactly one missing-identity question as plain text and stop; the user's reply will arrive next round as inputs.user_text. If slug is provided but name is missing, derive name as title-case of slug. If target_dir is blank, default to './<slug>'. When slug/name/target_dir are known, call record_program_target with slug, name, and target_dir."
+    - "After record_program_target, if program.design_path is not set, ask in plain text whether the user wants to design the program now (~6 quick questions) or take the default 3-mode start->working->complete skeleton (intent='choose_design_path'), then stop. On the next user_text reply, call choose_design_path with choice='design' or choice='default'."
     - "If program.design_path == 'default' and intake.program_intake_recorded is not true: immediately call apply_default_skeleton. Do NOT ask Q1-Q6."
-    - "If program.design_path == 'design' and intake.program_intake_recorded is not true: ask the 6 design questions IN ORDER, one at a time or in a small batch, with brief context for each. Order matters."
+    - "If program.design_path == 'design' and intake.program_intake_recorded is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Emit the question as plain text and stop; wait for the user's answer in inputs.user_text before asking the next question. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
     - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']."
@@ -500,14 +511,14 @@ guidance:
     - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
     - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."
     - "Once you have all 6 answers or defaults, call record_program_intake with purpose, entry_channel, stages_json, transitions_json, delegation_json, and completion_json. The *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
-    - "After intake is recorded via apply_default_skeleton OR record_program_intake, echo back the proposed mode list + transitions + target_dir to the user and ask for confirmation via request_user_action with intent='confirm_design'. Wait for the user_confirmation trigger."
+    - "After intake is recorded via apply_default_skeleton OR record_program_intake, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
     - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask which dimension to revise, re-run the relevant step, and re-emit the echo-back."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
   scaffold_plan:
     - "Call plan_artifacts to produce the artifact plan from the synthesized spec in in-process transit. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
-    - "Echo the artifact-plan list (paths + purposes) to the user. Ask for approval via request_user_action with intent='approve_artifact_plan'."
+    - "Echo the artifact-plan list (paths + purposes) to the user as plain text and instruct them to type /approve or /reject."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation decision='approve', call approve_artifact_plan. Then the transition to branch_write fires."
     - "On reject/edit: don't call approve_artifact_plan; ask which artifact the user wants changed; re-emit."
