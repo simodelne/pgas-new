@@ -140,3 +140,10 @@
 - Verification: `npx vitest run --config tests/vitest.config.ts tests/integration/foundry-tool-call-protocol.test.ts tests/integration/foundry-intake-flow.test.ts` PASS on 2026-06-22; `npm test` PASS on 2026-06-22 with 28 Vitest files / 170 tests passed and generated scaffold install/test SKIP because `NPM_TOKEN` is not explicitly set.
 - Root cause: §10 round 5 Scenario A followed a prompt that referenced `request_user_action`; the action is absent from the installed `@simodelne/pgas-server@2.13.1` bundle and from the foundry `intake_intelligence` vocabulary, so GKType rejected it until repair fallback.
 - Notes: `intake_intelligence` now distinguishes question rounds from commit rounds: ask missing identity/design/Q1-Q6 questions as plain text and stop, consume the next `inputs.user_text`, and call `record_program_intake` only after all six answers/defaults are collected. The intake integration now covers six question rounds before the final intake record.
+
+## Phase 3.15 - Synthesizer unconditional transitions
+
+- Commit: this commit (`fix(v3): Phase 3.15 — synthesizer accepts unconditional transitions (caught by §10)`)
+- Verification: `npm run test:unit -- tests/unit/synthesize-program-spec.test.ts` PASS on 2026-06-22; `npm run test:unit -- tests/integration/synthesis-regression.test.ts` PASS on 2026-06-22; `npm run typecheck` PASS on 2026-06-22; `npm test` PASS on 2026-06-22 with 28 Vitest files / 173 tests passed and generated scaffold install/test SKIP because `NPM_TOKEN` is not explicitly set.
+- Root cause: §10 Round 7 reached `synthesize_program_spec`, but `apply_default_skeleton` writes an unconditional `start -> working` transition while the synthesizer threw on any missing `guard_field`.
+- Notes: Transitions without `guard_field` now emit no `guard` clause, guarded transitions retain `FieldTruthy`, and transitions into `completion.final_stage` still derive their guard from `completion.guard_field`. Missing completion guards and missing incoming completion transitions remain hard synthesizer errors. Per instruction, §10 was not rerun.

@@ -101,6 +101,60 @@ describe('synthesize_program_spec handler', () => {
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 
+  it('emits mixed guarded and unguarded transitions and parses them through the engine loader', async () => {
+    const sessionId = 'session-mixed-transition-guards';
+    clearSynthesizedArtifact(sessionId);
+
+    await handlers.synthesize_program_spec({
+      sessionId,
+      domain: domain({
+        'intake.stages_json': JSON.stringify([
+          { slug: 'alpha', is_bootstrap: true },
+          { slug: 'beta' },
+          { slug: 'charlie' },
+          { slug: 'delta' },
+          { slug: 'terminal', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'alpha', to: 'beta', trigger: 'auto' },
+          { from: 'beta', to: 'charlie', trigger: 'done', guard_field: 'beta.done' },
+          { from: 'charlie', to: 'delta', trigger: 'auto', guard_field: '' },
+          { from: 'delta', to: 'terminal', trigger: 'complete', guard_field: 'delta.ready' },
+        ]),
+        'intake.completion_json': JSON.stringify({
+          final_stage: 'terminal',
+          guard_field: 'completion.ready',
+        }),
+      }),
+    });
+
+    const artifact = getSynthesizedArtifact(sessionId);
+    const parsed = load(artifact?.spec_yaml ?? '') as {
+      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+    };
+
+    expect(parsed.modes.alpha.transitions).toEqual([{ target: 'beta' }]);
+    expect(parsed.modes.beta.transitions).toEqual([
+      { target: 'charlie', guard: { kind: 'FieldTruthy', path: 'beta.done' } },
+    ]);
+    expect(parsed.modes.charlie.transitions).toEqual([{ target: 'delta' }]);
+    expect(parsed.modes.delta.transitions).toEqual([
+      { target: 'terminal', guard: { kind: 'FieldTruthy', path: 'completion.ready' } },
+    ]);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
+  it('rejects completion without a completion guard field', async () => {
+    await expect(
+      handlers.synthesize_program_spec({
+        sessionId: 'session-missing-completion-guard',
+        domain: domain({
+          'intake.completion_json': JSON.stringify({ final_stage: 'resolved' }),
+        }),
+      }),
+    ).rejects.toThrow(/completion.*guard_field/u);
+  });
+
   it('rejects intake with fewer than 3 stages', async () => {
     for (const stageList of [[], [{ slug: 'intake' }], [{ slug: 'intake' }, { slug: 'resolved' }]]) {
       await expect(

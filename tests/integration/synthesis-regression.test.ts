@@ -70,8 +70,8 @@ interface IntakeTransition {
   from: string;
   to: string;
   trigger: string;
-  guard_field: string;
-  guard_value: boolean | string;
+  guard_field?: string;
+  guard_value?: boolean | string;
 }
 
 interface Completion {
@@ -208,16 +208,17 @@ function parseMandate(path: string): MandateIntake {
 
   const transitions = section(text, 'Q4 Decision points')
     .split(/\r?\n/u)
-    .map((line) => line.match(/^\s*-\s+(.+?)\s+(?:→|->)\s+(.+?)\s+when\s+([a-zA-Z0-9_.-]+)\s*=\s*(.+?)\s*$/u))
+    .map((line) => line.match(/^\s*-\s+(.+?)\s+(?:→|->)\s+(.+?)(?:\s+when\s+([a-zA-Z0-9_.-]+)\s*=\s*(.+?))?\s*$/u))
     .filter((match): match is RegExpMatchArray => Boolean(match))
     .map((match) => {
-      const guardValue = parseGuardValue(match[4] ?? '');
+      const guardField = match[3]?.trim();
+      const guardValue = match[4] === undefined ? undefined : parseGuardValue(match[4]);
       return {
         from: slugNorm(match[1] ?? ''),
         to: slugNorm(match[2] ?? ''),
-        trigger: `${slugNorm(match[3] ?? 'ready')}_${String(guardValue)}`,
-        guard_field: match[3] ?? '',
-        guard_value: guardValue,
+        trigger: guardField ? `${slugNorm(guardField)}_${String(guardValue)}` : 'auto',
+        ...(guardField ? { guard_field: guardField } : {}),
+        ...(guardValue !== undefined ? { guard_value: guardValue } : {}),
       };
     });
 

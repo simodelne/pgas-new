@@ -66,6 +66,7 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   if (!terminalModes.includes(completion.final_stage)) {
     throw new Error(`completion.final_stage must be terminal (no outgoing transitions); got ${completion.final_stage}`);
   }
+  assertCompletionTransition(transitions, completion);
   const terminalModeSet = new Set(terminalModes);
   const intermediateModes = modeNames.filter((modeName) => modeName !== firstMode && !terminalModeSet.has(modeName));
   const firstWorkMode = transitions.find((transition) => transition.from === firstMode)?.to ?? intermediateModes[0];
@@ -233,11 +234,14 @@ function applyTransitions(
     }
     const fromMode = recordField(modes, transition.from);
     const modeTransitions = Array.isArray(fromMode.transitions) ? fromMode.transitions : [];
-    const guardField = guardFieldForTransition(transition, completion);
-    modeTransitions.push({
-      target: transition.to,
-      guard: transition.guard ?? guardFromField(guardField),
-    });
+    const guard = transition.to === completion.final_stage
+      ? guardFromField(completion.guard_field)
+      : transition.guard ?? guardFromField(transition.guard_field);
+    const emittedTransition: { target: string; guard?: Record<string, unknown> } = { target: transition.to };
+    if (guard) {
+      emittedTransition.guard = guard;
+    }
+    modeTransitions.push(emittedTransition);
     fromMode.transitions = modeTransitions;
   }
 }
@@ -253,14 +257,19 @@ function guardFieldsBySourceMode(transitions: IntakeTransition[], completion: Co
 }
 
 function guardFieldForTransition(transition: IntakeTransition, completion: Completion): string | undefined {
-  return transition.to === completion.final_stage ? completion.guard_field : transition.guard_field;
+  return normalizeGuardField(transition.to === completion.final_stage ? completion.guard_field : transition.guard_field);
 }
 
-function guardFromField(field: string | undefined): Record<string, unknown> {
-  if (!field) {
-    throw new Error('transition guard_field is required for synthesized transitions');
-  }
-  return { kind: 'FieldTruthy', path: field };
+function guardFromField(field: string | undefined): Record<string, unknown> | undefined {
+  const normalized = normalizeGuardField(field);
+  if (!normalized) return undefined;
+  return { kind: 'FieldTruthy', path: normalized };
+}
+
+function normalizeGuardField(field: string | undefined): string | undefined {
+  if (typeof field !== 'string') return undefined;
+  const trimmed = field.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function guidanceFor(modeNames: string[], delegation: Record<string, unknown>): Record<string, string[]> {
@@ -312,7 +321,8 @@ function assertTransitions(transitions: IntakeTransition[]): void {
       typeof transition.from !== 'string' ||
       transition.from.length === 0 ||
       typeof transition.to !== 'string' ||
-      transition.to.length === 0
+      transition.to.length === 0 ||
+      (transition.guard_field !== undefined && typeof transition.guard_field !== 'string')
     ) {
       throw new Error('each transition must declare non-empty from and to fields');
     }
@@ -323,11 +333,17 @@ function assertCompletion(completion: Completion): void {
   if (
     !completion ||
     typeof completion.final_stage !== 'string' ||
-    completion.final_stage.length === 0 ||
+    completion.final_stage.trim().length === 0 ||
     typeof completion.guard_field !== 'string' ||
-    completion.guard_field.length === 0
+    completion.guard_field.trim().length === 0
   ) {
-    throw new Error('intake.completion_json must decode to { final_stage, guard_field }');
+    throw new Error('intake.completion_json must decode to { final_stage, guard_field }; completion.guard_field is required');
+  }
+}
+
+function assertCompletionTransition(transitions: IntakeTransition[], completion: Completion): void {
+  if (!transitions.some((transition) => transition.to === completion.final_stage)) {
+    throw new Error(`completion.final_stage must have an incoming transition guarded by completion.guard_field; got ${completion.final_stage}`);
   }
 }
 
