@@ -319,6 +319,8 @@ describe('template renderer', () => {
         'inputs.user_decision',
         'inputs.user_decision.decision',
         'inputs.user_decision.instruction',
+        'inputs.user_decision.note_mode',
+        'inputs.user_decision.timestamp',
       ]);
       expect(parsed.projection.intake_intelligence.include).toEqual(
         expect.arrayContaining([
@@ -326,6 +328,8 @@ describe('template renderer', () => {
           'inputs.user_decision',
           'inputs.user_decision.decision',
           'inputs.user_decision.instruction',
+          'inputs.user_decision.note_mode',
+          'inputs.user_decision.timestamp',
           'intake.purpose',
           'intake.entry_channel',
           'intake.stages_json',
@@ -347,6 +351,8 @@ describe('template renderer', () => {
         'inputs.user_decision': 'object',
         'inputs.user_decision.decision': 'string',
         'inputs.user_decision.instruction': 'string',
+        'inputs.user_decision.note_mode': 'string',
+        'inputs.user_decision.timestamp': 'string',
         'program.design_path': 'string',
         'program.design_confirmed': 'boolean',
         'program.synthesized_spec': 'object',

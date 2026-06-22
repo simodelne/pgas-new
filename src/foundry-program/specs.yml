@@ -158,6 +158,8 @@ projection:
       - inputs.user_decision
       - inputs.user_decision.decision
       - inputs.user_decision.instruction
+      - inputs.user_decision.note_mode
+      - inputs.user_decision.timestamp
       - intake.mandate
       - intake.research_allowed
       - intake.research_confirmed
@@ -217,11 +219,13 @@ prompts:
   curator_request: "Prepare a curator request for missing repo wiring."
 
 ingestion:
-  user_text: [intake.mandate, inputs.user_text]
+  user_text: [inputs.user_text]
   user_confirmation:
     - inputs.user_decision
     - inputs.user_decision.decision
     - inputs.user_decision.instruction
+    - inputs.user_decision.note_mode
+    - inputs.user_decision.timestamp
   system_mode_entry: [inputs.mode_entry]
 
 action_map:
@@ -377,6 +381,8 @@ schema:
   inputs.user_decision: object
   inputs.user_decision.decision: string
   inputs.user_decision.instruction: string
+  inputs.user_decision.note_mode: string
+  inputs.user_decision.timestamp: string
   inputs.mode_entry: object
   inputs.mode_entry.mode: string
   inputs.mode_entry.from_mode: string

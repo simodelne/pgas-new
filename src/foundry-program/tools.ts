@@ -1,6 +1,11 @@
 import type { ToolImpl, ToolRegistry } from '@simodelne/pgas-server/plugin.js';
 
 const semanticTools = [
+  'record_program_target',
+  'choose_design_path',
+  'apply_default_skeleton',
+  'record_program_intake',
+  'confirm_design',
   'repo_read_file',
   'repo_list_files',
   'record_user_note',
