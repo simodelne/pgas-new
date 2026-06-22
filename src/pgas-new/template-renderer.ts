@@ -66,32 +66,35 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'audit/PGAS-NEW-GRADUATION.md': spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
+// The three graduation programs are frozen regression evidence, not active
+// scaffold templates. They intentionally resolve from docs/graduation-evidence
+// while the generic artifact manifest remains under templates/pgas-new/consumer.
 const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
-  spec: spec('consumer/policy/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  spec: spec('../../docs/graduation-evidence/policy-drafting/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
   registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  handler: spec('consumer/policy/handlers.ts.tmpl', []),
-  tool: spec('consumer/policy/tools.ts.tmpl', ['PASCAL_NAME']),
-  dossier: spec('consumer/policy/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  handler: spec('../../docs/graduation-evidence/policy-drafting/handlers.ts.tmpl', []),
+  tool: spec('../../docs/graduation-evidence/policy-drafting/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('../../docs/graduation-evidence/policy-drafting/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
   audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
 const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
-  spec: spec('consumer/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  spec: spec('../../docs/graduation-evidence/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
   registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  handler: spec('consumer/web-scraper/handlers.ts.tmpl', []),
-  tool: spec('consumer/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
-  dossier: spec('consumer/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  handler: spec('../../docs/graduation-evidence/web-scraper/handlers.ts.tmpl', []),
+  tool: spec('../../docs/graduation-evidence/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('../../docs/graduation-evidence/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
   audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
 const EXISTING_SOCIAL_MEDIA_AGENT_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
-  spec: spec('consumer/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+  spec: spec('../../docs/graduation-evidence/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
   registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  handler: spec('consumer/social-media-agent/handlers.ts.tmpl', []),
-  tool: spec('consumer/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
-  dossier: spec('consumer/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+  handler: spec('../../docs/graduation-evidence/social-media-agent/handlers.ts.tmpl', []),
+  tool: spec('../../docs/graduation-evidence/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
+  dossier: spec('../../docs/graduation-evidence/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
   audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
@@ -101,22 +104,22 @@ const STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE: Record<
   Partial<Record<PlannedArtifact['kind'], TemplateSpec>>
 > = {
   'policy-drafting': {
-    spec: spec('consumer/policy/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-    handler: spec('consumer/policy/handlers.ts.tmpl', []),
-    tool: spec('consumer/policy/tools.ts.tmpl', ['PASCAL_NAME']),
-    dossier: spec('consumer/policy/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+    spec: spec('../../docs/graduation-evidence/policy-drafting/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+    handler: spec('../../docs/graduation-evidence/policy-drafting/handlers.ts.tmpl', []),
+    tool: spec('../../docs/graduation-evidence/policy-drafting/tools.ts.tmpl', ['PASCAL_NAME']),
+    dossier: spec('../../docs/graduation-evidence/policy-drafting/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   },
   'web-scraper': {
-    spec: spec('consumer/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-    handler: spec('consumer/web-scraper/handlers.ts.tmpl', []),
-    tool: spec('consumer/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
-    dossier: spec('consumer/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+    spec: spec('../../docs/graduation-evidence/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+    handler: spec('../../docs/graduation-evidence/web-scraper/handlers.ts.tmpl', []),
+    tool: spec('../../docs/graduation-evidence/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
+    dossier: spec('../../docs/graduation-evidence/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   },
   'social-media-agent': {
-    spec: spec('consumer/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-    handler: spec('consumer/social-media-agent/handlers.ts.tmpl', []),
-    tool: spec('consumer/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
-    dossier: spec('consumer/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
+    spec: spec('../../docs/graduation-evidence/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
+    handler: spec('../../docs/graduation-evidence/social-media-agent/handlers.ts.tmpl', []),
+    tool: spec('../../docs/graduation-evidence/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
+    dossier: spec('../../docs/graduation-evidence/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
   },
 };
 
