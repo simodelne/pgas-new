@@ -1,8 +1,8 @@
-# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 3)
+# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 6)
 
 Date: 2026-06-22  
-Status: revision 3 (addresses Codex r2 verdict "APPROVED WITH MINOR FIXES"); ready for delegation when re-validated  
-Supersedes: revision 2 (commit `679e114`)  
+Status: revision 6 (addresses Codex r5 verdict NEEDS REVISION — uses existing `approve_artifact_plan` action + `artifact_plan.approved` field instead of fabricating duplicates); pending re-validation  
+Supersedes: revisions 2 (`679e114`) / 3 (`bfd4064`) / 4 (`d187135`) / 5 (`ffc865c`)  
 Anchors:
 - v1 source: `commands/pgas-new-program.md` (recoverable from commit `3d832b5^`)
 - v1 architecture paper: `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (recoverable from `3d832b5^`)
@@ -31,7 +31,7 @@ Anchors:
 |---|---|---|
 | **D1** | Primary CLI invocation | **Bare `pgas-new`** opens the streaming REPL. No subcommand needed. `pgas-new --slug foo --out /tmp/bar` is equivalent with pre-filled inputs. `pgas-new design <slug>` is NOT in the v3.0 surface. |
 | **D2** | Legacy scripted subcommands | **Keep indefinitely at top level.** `render-standalone`, `render-attach`, `validate-manifest`, `plan-standalone`, `plan-attach`, `curator-request`, `session`, `version`, `help` all stay as top-level subcommands. Only the consumer-preset `--template <consumer>` flag values get removed in v3.0. |
-| **D3** | Synthesized-spec state namespace | **`program.synthesized_spec`** under existing `program.*`. No new top-level namespace. Adds `program.synthesized_spec`, `program.design_confirmed`, `program.plan_approved` to the existing fields in `PgasNewState`. |
+| **D3** | Synthesized-spec state namespace | **`program.synthesized_spec`** under existing `program.*`. No new top-level namespace. Adds `program.synthesized_spec`, `program.design_confirmed`, `artifact_plan.approved` to the existing fields in `PgasNewState`. |
 | **D4** | User confirmation steps before write | **Two confirms.** (1) End of `intake_intelligence`: agent echoes proposed mode list + transitions; user approves to enter `architecture_design`. (2) End of `scaffold_plan`: agent shows artifact-plan list; user approves to enter `branch_write`. |
 | **D5** | Foundry-program asset strategy | **First-run rendered to `~/.pgas-new/foundry-v<version>/`**, cached for subsequent invocations. `pgas-new` spawns a child server via `node --import tsx <workdir>/server.ts` on that rendered foundry. Render is idempotent + skipped if the working dir already exists for the current version. |
 | **D6** | Governance corrections #37/#38/#39 | **Prerequisite — implement before v3 work starts.** Land #37 (architecture-doc CI diff), #38 (PR-template Program Nature checkbox), and #39 (UAT intent-verification template) first. Every subsequent v3 PR flows through the new gates. |
@@ -78,7 +78,7 @@ Output: a fresh PGAS consumer (standalone repo per **standalone mode**, or progr
 | `src/pgas-new/existing-repo.ts` | — | Stay as-is. |
 | `src/pgas-new/curator-request.ts` | — | Stay as-is. |
 | `src/pgas-new/version.ts` | ~50 | Stay as-is. Engine pin + banned-imports scanner. |
-| `src/pgas-new/model.ts` | — | **Salvage with targeted edits.** Add `program.synthesized_spec`, `program.design_confirmed`, `program.plan_approved`, `program.skip_dimensions` to `PgasNewState`. |
+| `src/pgas-new/model.ts` | — | **Salvage with targeted edits.** Add `program.synthesized_spec`, `program.design_confirmed`, `artifact_plan.approved`, `program.skip_dimensions` to `PgasNewState`. |
 | `src/pgas-new/gates.ts` | — | Stay as-is. Add 2 new gate definitions (`design_confirmed`, `plan_approved`) — appended, not modified. |
 | `src/pgas-new/command-runner.ts` | — | Stay as-is. |
 | `src/pgas-new/control-plane.ts` | — | Stay as-is. |
@@ -97,7 +97,7 @@ Output: a fresh PGAS consumer (standalone repo per **standalone mode**, or progr
 | `docs/PGAS-NEW-ARCHITECTURE.md` | — | **Salvage with targeted edits.** Add §"CLI Surface" describing bare `pgas-new` entry. Already references the 10-mode flow correctly. |
 | `docs/PGAS-NEW-LIVE-GRADUATION.md` | — | Stay as-is. |
 | `docs/POST-MORTEM-2026-06-22-design-phase-drift.md` | — | Stay as-is. |
-| `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` | — | **Salvage with targeted edits.** Trace updated in r3 commit to use `program.design_path` (not `intake.design_path`), `program.synthesized_spec` (not `architecture.synthesized_spec`), `confirm_design` (not `confirm_architecture`), and the two-action `choose_design_path` + `apply_default_skeleton` flow (matches rebuild plan §7.1.1 N5 decision). |
+| `docs/superpowers/specs/2026-06-22-v3-trace-from-v1-original.md` | — | **Salvage with targeted edits.** Trace updated in r3+ commits to use the canonical state-field names from this plan's §7.1.1 (under `program.*` namespace), the `confirm_design` action name, and the two-action `choose_design_path` + `apply_default_skeleton` flow (matches §7.1.1 N5 decision). |
 | `docs/superpowers/specs/2026-06-22-v3-mandate-driven-synthesis.md` | — | **Mark as superseded by this plan + the trace doc.** Add `> Status: superseded by 2026-06-22-v3-rebuild-plan.md` at the top. |
 | `docs/graduation-evidence/{policy-drafting,web-scraper,social-media-agent}/*` | — | Stay as evidence + regression corpus. |
 | `docs/superpowers/plans/*` (existing implementation plans from prior work, e.g. `2026-06-21-streaming-repl.md`) | — | Stay as historical reference. Do not load by tooling. (Codex r2 N-minor.) |
@@ -234,11 +234,10 @@ confirm_design:
     - { op: MSet, path: program.design_confirmed, value: true }
   channel: widget_output
 
-approve_plan:
-  description: "User-approve the artifact plan before branch_write runs. Second of two confirm gates."
-  mutations:
-    - { op: MSet, path: program.plan_approved, value: true }
-  channel: widget_output
+# approve_artifact_plan: this action ALREADY EXISTS in the current foundry spec
+# (see templates/pgas-new/program/specs.yml.tmpl lines 237-241). v3 keeps it as
+# the D4 second confirm. v3 only ADDS the idempotency precondition below — the
+# existing mutations are unchanged: status='approved', approved=true, write_authorized=true.
 
 synthesize_program_spec:
   description: "Deterministically synthesize the user's program spec from intake.* using mechanical rename+copy from the skeleton. NOT an LLM emit — pure code."
@@ -251,7 +250,7 @@ synthesize_program_spec:
 **New preconditions:**
 
 - `intake_intelligence → architecture_design` transition gated on `program.design_confirmed = true`
-- `scaffold_plan → branch_write` transition gated on `program.plan_approved = true`
+- `scaffold_plan → branch_write` transition gated on `artifact_plan.approved = true`
 - `record_program_target` precondition: `program.target_dir_confirmed` is not true (Codex R3-I1 fix: was incorrectly gated on `intake.program_intake_recorded = true`, which deadlocked — target capture must happen BEFORE intake)
 - `choose_design_path` precondition: `program.target_dir_confirmed = true` AND `program.design_path` is not set (target identity must be captured before design-path is asked)
 - `apply_default_skeleton` precondition: `{ kind: FieldEquals, path: program.design_path, value: 'default' }` AND `intake.program_intake_recorded` is not true
@@ -262,10 +261,10 @@ synthesize_program_spec:
   - `{ kind: FieldFalsy, path: program.design_confirmed }` (Codex R4-I2 idempotency fix — refuses a second call)
   - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
   - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
-- `approve_plan` precondition list:
-  - `{ kind: FieldTruthy, path: program.synthesis_complete }` (artifact-plan only meaningful after synthesis)
-  - `{ kind: FieldTruthy, path: artifact_plan.approved_for_user }` (or equivalent — depends on existing artifact-plan state model; the foundry's existing `gates.ts` already enforces this)
-  - `{ kind: FieldFalsy, path: program.plan_approved }` (Codex R4-I2 idempotency fix)
+- `approve_artifact_plan` precondition list (note: this action already exists in the current foundry spec — see `templates/pgas-new/program/specs.yml.tmpl` lines 232–241; v3 keeps the existing action and adds the idempotency guard):
+  - `{ kind: FieldTruthy, path: program.synthesis_complete }` (artifact-plan only meaningful after synthesis runs)
+  - `{ kind: FieldEquals, path: artifact_plan.status, value: 'draft' }` (the existing `plan_artifacts` action sets this to `'draft'`; the action is only legal once the plan has been drafted — Codex R5-I1 fix using the real field instead of the invented `approved_for_user`)
+  - `{ kind: FieldFalsy, path: artifact_plan.approved }` (Codex R4-I2 idempotency fix — refuses a second call; `artifact_plan.approved` is the existing model field)
   - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
   - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
 - `synthesize_program_spec` precondition: `program.design_confirmed = true` (synthesis runs in `architecture_design` mode after intake is confirmed)
@@ -274,12 +273,13 @@ synthesize_program_spec:
 
 ```yaml
 schema:
-  # Existing fields kept
+  # Existing fields kept — including artifact_plan.status / artifact_plan.approved /
+  # artifact_plan.write_authorized, which v3 keeps and uses for the D4 second confirm
+  # via the existing approve_artifact_plan action (no new artifact_plan.* fields needed)
   ...
   # D3 — program.* namespace for synthesis (Codex N1: target_dir governed state)
   program.design_path: string                # 'design' | 'default'
   program.design_confirmed: boolean
-  program.plan_approved: boolean
   program.synthesized_spec: object
   program.synthesis_complete: boolean
   program.target_dir: string                 # absolute path or kebab-slug default './<slug>'
@@ -376,9 +376,9 @@ guidance:
 guidance:
   scaffold_plan:
     - "Call plan_artifacts to produce the artifact plan from program.synthesized_spec."
-    - "Echo the artifact-plan list (paths + purposes) to the user. Ask for approval via request_user_action with intent='approve_plan'."
-    - "On user_confirmation decision='approve', call approve_plan. Then the transition to branch_write fires."
-    - "On reject/edit: don't call approve_plan; ask which artifact the user wants changed; re-emit."
+    - "Echo the artifact-plan list (paths + purposes) to the user. Ask for approval via request_user_action with intent='approve_artifact_plan'."
+    - "On user_confirmation decision='approve', call approve_artifact_plan. Then the transition to branch_write fires."
+    - "On reject/edit: don't call approve_artifact_plan; ask which artifact the user wants changed; re-emit."
 ```
 
 #### 7.1.2 `src/foundry-program/handlers.ts` (~700 lines)
@@ -777,8 +777,8 @@ Split into 5 ordered sub-commits, each atomic + green (was 6 sub-commits in r2; 
 **2.1** Create `src/repl/{runner.ts,renderer.ts,types.ts}` (refactor from template). Add `tests/unit/repl-runner.test.ts` with injected stdin/stdout.  
 **2.2** Create `src/foundry-server.ts`. Add `tests/unit/foundry-server.test.ts` with mocked spawn (real spawn in integration test).  
 **2.3** Update `src/cli.ts` entry switch (corrected classifier per §7.4). Add `tests/unit/cli-interactive.test.ts` covering: bare entry, `--slug` only, `--out` only, `--non-interactive`, unknown command, all existing subcommands unchanged.  
-**2.4** Update foundry-program spec with new actions (`choose_design_path`, `apply_default_skeleton`, `record_program_target`, `record_program_intake`, `confirm_design`, `approve_plan`), schema, projection, guidance per §7.1.1 (N1 + N5 — six new actions, not four).  
-**2.5** Implement the six intake-side handlers in `src/foundry-program/handlers.ts`. Add `tests/integration/foundry-intake-flow.test.ts`.
+**2.4** Update foundry-program spec with five NEW actions (`choose_design_path`, `apply_default_skeleton`, `record_program_target`, `record_program_intake`, `confirm_design`) plus the idempotency precondition added to the EXISTING `approve_artifact_plan` action. Schema, projection, guidance updates per §7.1.1.  
+**2.5** Implement the five new intake-side handlers (`choose_design_path`, `apply_default_skeleton`, `record_program_target`, `record_program_intake`, `confirm_design`) in `src/foundry-program/handlers.ts`. The existing `approve_artifact_plan` handler stays; only its spec preconditions are amended in 2.4. Add `tests/integration/foundry-intake-flow.test.ts`.
 
 **Acceptance:** running `pgas-new` against a deterministic LLM stub via the testing harness opens the REPL, runs the design-path fork, runs Q1–Q6 (or default), echoes back for confirm, gates the transition. The session reaches `architecture_design` mode with all intake state correctly populated. (Architecture-design + downstream is empty stubs at this phase.)
 
@@ -831,7 +831,7 @@ Same as revision 1, but verification adds:
 - `record_program_target` action fired with the user's name/slug/target_dir
 - Q1–Q6 were asked **in order** (verified by inspecting the session log's round_dispatch + llm_raw_response sequence)
 - `record_program_intake` action fired exactly once with all 7 mutations
-- `confirm_design` and `approve_plan` actions fired exactly once each
+- `confirm_design` and `approve_artifact_plan` actions fired exactly once each
 - `synthesize_program_spec` action fired and `program.synthesized_spec` is populated in session world state
 - **(Codex N4 fix)** The synthesizer handler itself made no LLM/network call — asserted by inspecting the action result for the handler-emitted marker `{kind: 'mechanical_synthesis', no_llm_call: true, ...}`. The PGAS round around the action *will* contain LLM calls (the LLM picks the action and observes the result); the invariant is that the HANDLER is pure. Verified at two layers: (1) the marker in session log, (2) unit-test of `synthesize_program_spec` handler that runs without any engine harness at all (`tests/unit/synthesize-program-spec.test.ts`).
 
