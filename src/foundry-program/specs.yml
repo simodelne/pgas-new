@@ -284,7 +284,7 @@ action_map:
       - { op: MSet, path: intake.program_intake_recorded, value: true }
     channel: widget_output
   record_program_intake:
-    description: "Tool call for recording Q1-Q6 design answers. Arguments are purpose, entry_channel, stages_json, transitions_json, delegation_json, and completion_json as strings."
+    description: "Capture the user's Q1-Q6 design interview answers into governed JSON-string scalar state."
     mutations:
       - { op: MSet, path: intake.purpose, from_arg: purpose }
       - { op: MSet, path: intake.entry_channel, from_arg: entry_channel }
