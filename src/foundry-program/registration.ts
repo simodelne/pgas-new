@@ -130,17 +130,18 @@ function isAutoContinueEffect(payload: unknown): payload is { kind: 'EffectActio
     return false;
   }
   if (name === 'select_repo_target') {
-    return selectedExistingRepoTarget((payload as { payload?: unknown }).payload);
+    return selectedContinuableRepoTarget((payload as { payload?: unknown }).payload);
   }
   return AUTO_CONTINUE_ACTIONS.has(name);
 }
 
-function selectedExistingRepoTarget(payload: unknown): boolean {
+function selectedContinuableRepoTarget(payload: unknown): boolean {
+  const targetKind = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as { target_kind?: unknown }).target_kind
+    : undefined;
   return (
-    !!payload &&
-    typeof payload === 'object' &&
-    !Array.isArray(payload) &&
-    (payload as { target_kind?: unknown }).target_kind === 'existing_repo'
+    targetKind === 'existing_repo' ||
+    targetKind === 'standalone_repo'
   );
 }
 

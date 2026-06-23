@@ -154,6 +154,62 @@ describe('foundry repo_targeting continuation flow', () => {
       await harness.close();
     }
   });
+
+  it('auto-continues standalone target selection into standalone authorization', async () => {
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses: [
+        effect('record_program_target', {
+          slug: 'incident-triage',
+          name: 'Incident Triage',
+          target_dir: '/tmp/incident-triage',
+        }),
+        effect('choose_design_path', { choice: 'default' }),
+        effect('apply_default_skeleton', {}),
+        effect('confirm_design', { approved: true }),
+        effect('select_repo_target', { target_kind: 'standalone_repo' }),
+        effect('authorize_standalone_target', {}),
+        effect('synthesize_program_spec', {}),
+        effect('plan_artifacts', {}),
+      ],
+    });
+
+    try {
+      await harness.trigger('Create an incident triage PGAS program.');
+      await harness.trigger('Use the default skeleton.');
+      await harness.trigger('Apply the default.');
+      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) => candidate.mode === 'scaffold_plan' && candidate.domain['artifact_plan.status'] === 'draft',
+        'standalone target selection continuation to artifact planning',
+      );
+      const rounds = terminalRounds(snapshot.rounds);
+
+      expect(rounds.map((round) => round.name)).toEqual(
+        expect.arrayContaining([
+          'select_repo_target',
+          'authorize_standalone_target',
+          'synthesize_program_spec',
+          'plan_artifacts',
+        ]),
+      );
+      expect(rounds.find((round) => round.name === 'select_repo_target')?.trigger).toBe('system_mode_entry');
+      expect(rounds.find((round) => round.name === 'authorize_standalone_target')?.trigger).toBe(
+        'system_mode_entry',
+      );
+      expect(rounds.find((round) => round.name === 'authorize_standalone_target')?.proposedMode).toBe(
+        'architecture_design',
+      );
+      expect(snapshot.domain['repo.target_kind']).toBe('standalone_repo');
+      expect(snapshot.domain['repo.write_authorized']).toBe(true);
+      expect(snapshot.domain['program.synthesis_complete']).toBe(true);
+    } finally {
+      await harness.close();
+    }
+  });
 });
 
 function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
