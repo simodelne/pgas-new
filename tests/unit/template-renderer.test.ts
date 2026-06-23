@@ -49,6 +49,20 @@ describe('template renderer', () => {
     expect(renderTemplate('hello {{NAME}}', { NAME: 'pgas-new' })).toBe('hello pgas-new');
   });
 
+  it('rejects removed consumer template names at runtime', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-removed-template-'));
+    try {
+      expect(() => renderStandaloneScaffold({
+        outDir,
+        slug: 'draft-policy',
+        name: 'Draft Policy',
+        template: 'policy-drafting' as never,
+      })).toThrow(/invalid --template: policy-drafting/);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to overwrite existing planned artifacts in outDir', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-overwrite-'));
     try {
@@ -580,7 +594,7 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders policy-drafting artifacts into manifest paths for existing repo attachments', () => {
+  it.skip('renders policy-drafting artifacts into manifest paths for existing repo attachments', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-policy-'));
     try {
       const result = renderExistingRepoAttachment({
@@ -588,7 +602,7 @@ describe('template renderer', () => {
         manifest: VALID_MANIFEST,
         slug: 'draft-policy',
         name: 'Draft Policy',
-        template: 'policy-drafting',
+        template: 'policy-drafting' as never,
         mandate:
           'risk-based policy drafting; intake policy objectives/type/org/risk appetite/resources/audience/jurisdiction; outline approval before section-by-section drafting; Word + HTML rendering; editing/revision like SimoneOS contract draft',
       });
@@ -678,7 +692,7 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders web-scraper artifacts with hard network guardrails encoded in the spec, tools, and handlers', () => {
+  it.skip('renders web-scraper artifacts with hard network guardrails encoded in the spec, tools, and handlers', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-web-scraper-'));
     try {
       const result = renderExistingRepoAttachment({
@@ -686,7 +700,7 @@ describe('template renderer', () => {
         manifest: VALID_MANIFEST,
         slug: 'web-scraper',
         name: 'Web Scraper',
-        template: 'web-scraper',
+        template: 'web-scraper' as never,
         mandate: 'Ethical legal corpus scraper with HARD network guardrails',
       });
 
@@ -823,14 +837,14 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders the social-media-agent program in a standalone scaffold via --template', () => {
+  it.skip('renders the social-media-agent program in a standalone scaffold via --template', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-sma-'));
     try {
       const result = renderStandaloneScaffold({
         outDir,
         slug: 'social-media-agent',
         name: 'Social Media Agent',
-        template: 'social-media-agent',
+        template: 'social-media-agent' as never,
         mandate:
           'Manage a demo social media account via mocked web navigation only; never log into a real account; never post to a real account; explicit human approval before every publish.',
       });
@@ -1069,7 +1083,7 @@ describe('template renderer', () => {
   });
 
   it('declares the internal system_mode_entry continuation channel in generated specs', () => {
-    for (const template of ['pgas-new-foundry', 'policy-drafting', 'web-scraper', 'social-media-agent'] as const) {
+    for (const template of ['pgas-new-foundry'] as const) {
       const outDir = mkdtempSync(join(tmpdir(), `pgas-new-mode-entry-${template}-`));
       try {
         renderStandaloneScaffold({
@@ -1099,7 +1113,7 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders social-media-agent artifacts via render-attach with mock-only guardrails', () => {
+  it.skip('renders social-media-agent artifacts via render-attach with mock-only guardrails', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-sma-'));
     try {
       const result = renderExistingRepoAttachment({
@@ -1107,7 +1121,7 @@ describe('template renderer', () => {
         manifest: VALID_MANIFEST,
         slug: 'social-media-agent',
         name: 'Social Media Agent',
-        template: 'social-media-agent',
+        template: 'social-media-agent' as never,
         mandate: 'Demo-only social media account agent operating through a mocked browser adapter with explicit human approval gates before every publish.',
       });
 
@@ -1135,14 +1149,14 @@ describe('template renderer', () => {
     }
   });
 
-  it('enforces social-media-agent safety gates H1-H4 + M5 from issue #30', () => {
+  it.skip('enforces social-media-agent safety gates H1-H4 + M5 from issue #30', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-sma-safety-'));
     try {
       renderStandaloneScaffold({
         outDir,
         slug: 'sma',
         name: 'SMA',
-        template: 'social-media-agent',
+        template: 'social-media-agent' as never,
       });
 
       const spec = readFileSync(join(outDir, 'src/programs/sma/specs.yml'), 'utf8');
@@ -1320,14 +1334,14 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders policy-drafting program in a standalone scaffold via --template', () => {
+  it.skip('renders policy-drafting program in a standalone scaffold via --template', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-pd-'));
     try {
       const result = renderStandaloneScaffold({
         outDir,
         slug: 'draft-policy',
         name: 'Draft Policy',
-        template: 'policy-drafting',
+        template: 'policy-drafting' as never,
         mandate: 'Risk-based policy drafting for SimoneOS.',
       });
 
@@ -1349,14 +1363,14 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders web-scraper program in a standalone scaffold via --template', () => {
+  it.skip('renders web-scraper program in a standalone scaffold via --template', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-ws-'));
     try {
       const result = renderStandaloneScaffold({
         outDir,
         slug: 'web-scraper',
         name: 'Web Scraper',
-        template: 'web-scraper',
+        template: 'web-scraper' as never,
         mandate: 'Ethical corpus scraper with hard network guardrails.',
       });
 
