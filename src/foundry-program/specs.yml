@@ -911,6 +911,140 @@ control_plane:
           channel: user_text
           payload: "$args.query"
           mode: async
+    approve_artifact_plan:
+      title: Approve current gate
+      aliases: ["/approve"]
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: approve
+          mode: async
+      presentation:
+        priority: primary
+    reject_design_and_revise_q1:
+      title: Reject and revise Q1
+      aliases: ["/reject-q1"]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q2:
+      title: Reject and revise Q2
+      aliases: ["/reject-q2"]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q3:
+      title: Reject and revise Q3
+      aliases: ["/reject-q3"]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q4:
+      title: Reject and revise Q4
+      aliases: ["/reject-q4"]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q5:
+      title: Reject and revise Q5
+      aliases: ["/reject-q5"]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
+    reject_design_and_revise_q6:
+      title: Reject and revise Q6
+      aliases: ["/reject-q6"]
+      args:
+        instruction:
+          type: string
+          required: true
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
     abort:
       title: Abort run
       aliases: ["/abort", "/stop"]

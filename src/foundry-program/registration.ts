@@ -12,6 +12,12 @@ import { registerPgasNewTools } from './tools.js';
 
 const AUTO_CONTINUE_ACTIONS = new Set([
   'confirm_design',
+  'reject_design_and_revise_q1',
+  'reject_design_and_revise_q2',
+  'reject_design_and_revise_q3',
+  'reject_design_and_revise_q4',
+  'reject_design_and_revise_q5',
+  'reject_design_and_revise_q6',
   'authorize_standalone_target',
   'load_wiring_manifest',
   'authorize_existing_repo_target',

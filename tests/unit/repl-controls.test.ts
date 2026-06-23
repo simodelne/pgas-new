@@ -16,11 +16,13 @@ interface FakeFetch {
 
 describe('REPL controls', () => {
   it.each([
-    ['/approve', { decision: 'approve' }],
-    ['/approve looks good', { decision: 'approve', instruction: 'looks good' }],
-    ['/reject', { decision: 'reject' }],
-    ['/reject please change Q3', { decision: 'reject', instruction: 'please change Q3' }],
-  ] as const)('routes %s through user_confirmation', async (control, expectedPayload) => {
+    ['/approve', '/controls/pgas-new/approve_artifact_plan', { sessionId: 'session-1', channel: 'http' }],
+    [
+      '/reject please change Q3 stages',
+      '/controls/pgas-new/reject_design_and_revise_q3',
+      { sessionId: 'session-1', channel: 'http', args: { instruction: 'please change Q3 stages' } },
+    ],
+  ] as const)('routes %s through deterministic controls.invoke', async (control, expectedPath, expectedBody) => {
     const fake = createFakePgasFetch();
     vi.stubGlobal('fetch', fake.fetch);
     const stdin = new PassThrough();
@@ -34,18 +36,46 @@ describe('REPL controls', () => {
       await stdout.waitFor('ready');
 
       stdin.write(`${control}\n`);
-      const confirmation = await fake.waitForRequest('/sessions/session-1/trigger/stream', 2);
+      const deterministicControl = await fake.waitForRequest(expectedPath);
       stdin.write('/exit\n');
       stdin.end();
 
       const result = await repl;
 
       expect(result.exitCode).toBe(0);
-      expect(confirmation).toMatchObject({
+      expect(deterministicControl).toMatchObject({
         method: 'POST',
-        path: '/sessions/session-1/trigger/stream',
-        body: { channel: 'user_confirmation', payload: expectedPayload },
+        path: expectedPath,
+        body: expectedBody,
       });
+      expect(fake.requests.filter((request) => request.path === '/sessions/session-1/trigger/stream')).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects /reject controls that do not name a Q1-Q6 revision target', async () => {
+    const fake = createFakePgasFetch();
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+      await stdout.waitFor('ready');
+
+      stdin.write('/reject please revise this\n');
+      await stdout.waitFor('/reject must name Q1, Q2, Q3, Q4, Q5, or Q6');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(fake.requests.some((request) => request.path.includes('/reject_design_and_revise_'))).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -78,6 +108,37 @@ describe('REPL controls', () => {
         path: '/controls/pgas-new/abort',
         body: { sessionId: 'session-1', channel: 'http' },
       });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('drops input queued before /abort instead of starting a new session', async () => {
+    const fake = createFakePgasFetch({ holdFirstTriggerOpen: true });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+
+      stdin.write('Ask Q3.\n');
+      stdin.write('/abort\n');
+      await fake.waitForRequest('/controls/pgas-new/abort');
+      fake.closeHeldTrigger();
+      await stdout.waitFor('Session aborted.');
+
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: null, exitCode: 0 });
+      expect(fake.requests.filter((request) => request.path === '/sessions')).toHaveLength(1);
+      expect(fake.requests.filter((request) => request.path === '/sessions/session-1/trigger/stream')).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -136,10 +197,12 @@ function captureStream(): Writable & { text(): string; waitFor(expected: string)
   return writable;
 }
 
-function createFakePgasFetch(): FakeFetch {
+function createFakePgasFetch(options: { holdFirstTriggerOpen?: boolean } = {}): FakeFetch & { closeHeldTrigger(): void } {
   const requests: RequestRecord[] = [];
   const waiters = new Map<string, Array<{ seenCount: number; resolve(record: RequestRecord): void }>>();
   const encoder = new TextEncoder();
+  let heldTriggerClosed = false;
+  let releaseHeldTrigger: (() => void) | undefined;
 
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -165,6 +228,7 @@ function createFakePgasFetch(): FakeFetch {
       return json({ sessionId: 'session-1' });
     }
     if (request.method === 'POST' && url.pathname === '/sessions/session-1/trigger/stream') {
+      const seen = requests.filter((entry) => entry.path === url.pathname).length;
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(encoder.encode('event: round_complete\n'));
@@ -173,6 +237,13 @@ function createFakePgasFetch(): FakeFetch {
               `data: ${JSON.stringify({ result: { name: 'record_user_note', payload: { message: 'ready' } } })}\n\n`,
             ),
           );
+          if (options.holdFirstTriggerOpen === true && seen === 1) {
+            releaseHeldTrigger = () => {
+              heldTriggerClosed = true;
+              controller.close();
+            };
+            return;
+          }
           controller.close();
         },
       });
@@ -183,6 +254,12 @@ function createFakePgasFetch(): FakeFetch {
     }
     if (request.method === 'POST' && url.pathname === '/controls/pgas-new/abort') {
       return json({ ok: true });
+    }
+    if (request.method === 'POST' && url.pathname === '/controls/pgas-new/approve_artifact_plan') {
+      return json({ ok: true, sessionId: 'session-1' });
+    }
+    if (request.method === 'POST' && url.pathname.startsWith('/controls/pgas-new/reject_design_and_revise_q')) {
+      return json({ ok: true, sessionId: 'session-1' });
     }
 
     return json({ error: `not found: ${url.pathname}` }, 404);
@@ -199,6 +276,10 @@ function createFakePgasFetch(): FakeFetch {
         list.push({ seenCount, resolve });
         waiters.set(path, list);
       });
+    },
+    closeHeldTrigger() {
+      if (heldTriggerClosed) return;
+      releaseHeldTrigger?.();
     },
   };
 }

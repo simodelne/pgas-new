@@ -145,7 +145,168 @@ function injectRequiredToolChoice(body: Buffer): Buffer {
 
   const payloadWithoutToolChoice = { ...payload };
   delete payloadWithoutToolChoice.tool_choice;
-  return Buffer.from(JSON.stringify({ tool_choice: 'required', ...payloadWithoutToolChoice }));
+  const toolChoice = deterministicToolChoice(payloadWithoutToolChoice) ?? 'required';
+  return Buffer.from(JSON.stringify({ tool_choice: toolChoice, ...payloadWithoutToolChoice }));
+}
+
+function deterministicToolChoice(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const tools = toolNames(payload.tools);
+  if (tools.length === 0) return undefined;
+
+  const context = messagesText(payload.messages);
+  const currentState = extractCurrentState(context);
+  const decision = currentState ? userDecision(currentState) : fallbackDecision(context);
+
+  if (decision === 'reject') {
+    const instruction = currentState ? userInstruction(currentState) : context;
+    const questionNumber = rejectQuestionNumber(instruction);
+    const rejectTool = questionNumber === null ? undefined : `reject_design_and_revise_q${String(questionNumber)}`;
+    if (rejectTool && tools.includes(rejectTool)) {
+      return functionToolChoice(rejectTool);
+    }
+  }
+
+  if (decision !== 'approve') return undefined;
+  if (tools.includes('approve_artifact_plan') && hasDraftArtifactPlan(currentState, context)) {
+    return functionToolChoice('approve_artifact_plan');
+  }
+  if (tools.includes('confirm_design')) {
+    return functionToolChoice('confirm_design');
+  }
+
+  return undefined;
+}
+
+function toolNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((tool) => {
+    if (!isJsonObject(tool) || !isJsonObject(tool.function)) return [];
+    return typeof tool.function.name === 'string' ? [tool.function.name] : [];
+  });
+}
+
+function messagesText(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+
+  return value.flatMap((message) => {
+    if (!isJsonObject(message)) return [];
+    const content = message.content;
+    if (typeof content === 'string') return [content];
+    if (Array.isArray(content)) {
+      return content.map((part) => JSON.stringify(part)).join('\n');
+    }
+    return [];
+  }).join('\n\n');
+}
+
+function userDecision(state: Record<string, unknown>): 'approve' | 'reject' | undefined {
+  const decision = stringStateField(state, 'inputs.user_decision.decision')
+    ?? stringStateField(state, 'inputs.user_decision', 'decision');
+  return decision === 'approve' || decision === 'reject' ? decision : undefined;
+}
+
+function userInstruction(state: Record<string, unknown>): string {
+  return stringStateField(state, 'inputs.user_decision.instruction')
+    ?? stringStateField(state, 'inputs.user_decision', 'instruction')
+    ?? '';
+}
+
+function fallbackDecision(context: string): 'approve' | 'reject' | undefined {
+  if (hasDecisionText(context, 'reject')) return 'reject';
+  if (hasDecisionText(context, 'approve')) return 'approve';
+  return undefined;
+}
+
+function hasDecisionText(context: string, decision: 'approve' | 'reject'): boolean {
+  const escaped = decision.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`(?:inputs\\.user_decision\\.decision|\\bdecision\\b)[^A-Za-z0-9_]+${escaped}\\b`, 'iu').test(context);
+}
+
+function hasDraftArtifactPlan(state: Record<string, unknown> | null, context: string): boolean {
+  if (state) {
+    return stringStateField(state, 'artifact_plan.status') === 'draft'
+      || stringStateField(state, 'artifact_plan', 'status') === 'draft';
+  }
+  return /artifact_plan\.status[^A-Za-z0-9_]+draft\b/iu.test(context);
+}
+
+function rejectQuestionNumber(context: string): number | null {
+  const match = /\bq([1-6])\b/iu.exec(context);
+  return match ? Number(match[1]) : null;
+}
+
+function extractCurrentState(context: string): Record<string, unknown> | null {
+  const marker = 'Current state:';
+  const markerIndex = context.lastIndexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const jsonStart = context.indexOf('{', markerIndex + marker.length);
+  if (jsonStart < 0) return null;
+
+  const jsonText = readBalancedJsonObject(context, jsonStart);
+  if (!jsonText) return null;
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    return isJsonObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readBalancedJsonObject(source: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function stringStateField(state: Record<string, unknown>, path: string, nestedKey?: string): string | undefined {
+  const value = state[path];
+  if (nestedKey === undefined) {
+    return typeof value === 'string' ? value : undefined;
+  }
+  if (!isJsonObject(value)) return undefined;
+  const nested = value[nestedKey];
+  return typeof nested === 'string' ? nested : undefined;
+}
+
+function functionToolChoice(name: string): Record<string, unknown> {
+  return {
+    type: 'function',
+    function: { name },
+  };
 }
 
 function resolveUpstreamUrl(upstream: URL, relativePath: string): URL {

@@ -89,4 +89,118 @@ describe('forwardToolChoiceProxyRequest', () => {
       expect.not.objectContaining({ tool_choice: 'required' }),
     ]);
   });
+
+  it('forces approve_artifact_plan for scaffold-plan approval rounds', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: 'Mode scaffold_plan. inputs.user_decision.decision=approve artifact_plan.status=draft',
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'approve_artifact_plan', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'plan_artifacts', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: { type: 'function', function: { name: 'approve_artifact_plan' } },
+      }),
+    ]);
+  });
+
+  it('forces confirm_design for intake approval rounds', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: 'Mode intake_intelligence. inputs.user_decision.decision=approve intake.program_intake_finalized=true',
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'confirm_design', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'record_user_note', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: { type: 'function', function: { name: 'confirm_design' } },
+      }),
+    ]);
+  });
+
+  it('forces the named reject_design_and_revise_qN tool when a rejection names Q1-Q6', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: 'inputs.user_decision.decision=reject inputs.user_decision.instruction=please change Q3 stages',
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'reject_design_and_revise_q1', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'reject_design_and_revise_q3', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: { type: 'function', function: { name: 'reject_design_and_revise_q3' } },
+      }),
+    ]);
+  });
+
+  it('does not force a decision tool from static prompt guidance when current state has no user decision', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              "If the user_confirmation decision is 'reject' and the instruction names Q1, call reject_design_and_revise_q1.",
+              'Current state:',
+              '{',
+              '  "inputs.user_text": "Create a program."',
+              '}',
+            ].join('\n'),
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'record_program_target', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'reject_design_and_revise_q1', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: 'required',
+      }),
+    ]);
+  });
 });

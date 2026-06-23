@@ -5,6 +5,7 @@ import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/regi
 import { handlers } from '../../src/foundry-program/handlers.js';
 import { registerPgasNewTools } from '../../src/foundry-program/tools.js';
 import { parseUserConfirmationControl, type UserConfirmationPayload } from '../../src/repl/runner.js';
+import { terminalActionNames, waitForSnapshot } from './foundry-test-utils.js';
 
 const intakeToolNames = [
   'record_program_target',
@@ -471,6 +472,10 @@ describe('foundry intake flow', () => {
         ...designIntakeRecordActions,
         effect('record_program_intake_finalize', {}),
         effect('reject_design_and_revise_q3', {}),
+        effect('ask_design_question', {
+          question_number: 3,
+          question_text: 'Q3 Stages of work -- name the revised stages in order.',
+        }),
         effect('record_q3_stages', { stages_json: JSON.stringify(revisedStages) }),
       ],
     });
@@ -483,7 +488,11 @@ describe('foundry intake flow', () => {
       }
       await harness.trigger('Finalize the design intake.');
       await harness.trigger(replConfirmation('/reject please change Q3 stages'));
-      let snapshot = await harness.snapshot();
+      let snapshot = await waitForSnapshot(
+        harness,
+        (candidate) => terminalActionNames(candidate.rounds).includes('ask_design_question'),
+        'Q3 revision rejection to re-ask Q3',
+      );
 
       expect(snapshot.domain['intake.q1_recorded']).toBe(true);
       expect(snapshot.domain['intake.q2_recorded']).toBe(true);
@@ -493,6 +502,7 @@ describe('foundry intake flow', () => {
       expect(snapshot.domain['intake.q6_recorded']).toBe(false);
       expect(snapshot.domain['intake.program_intake_finalized']).toBe(false);
       expect(snapshot.domain['program.design_confirmed']).toBe(false);
+      expect(snapshot.domain['intake.last_question_asked']).toBe(3);
 
       await harness.trigger('intake, review, complete');
       snapshot = await harness.snapshot();

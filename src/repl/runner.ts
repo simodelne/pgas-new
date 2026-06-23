@@ -133,6 +133,9 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       .finally(() => {
         if (isText) textBusy = false;
         if (!textBusy) inputBusy = false;
+        if (state.abortRequested) {
+          pendingInputs.length = 0;
+        }
         if (!state.running && !textBusy && !exiting) {
           const next = pendingInputs.shift();
           if (next !== undefined) {
@@ -145,6 +148,10 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   }
 
   function drainPendingAfterRound(): void {
+    if (state.abortRequested) {
+      pendingInputs.length = 0;
+      return;
+    }
     if (state.running || inputBusy || textBusy || exiting) return;
     const next = pendingInputs.shift();
     if (next !== undefined) void dispatchInput(next);
@@ -189,6 +196,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     }
 
     state.abortRequested = true;
+    pendingInputs.length = 0;
     activeSpinner?.stop();
     activeSpinner = null;
     try {
@@ -200,6 +208,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     state.sessionId = null;
     state.mode = null;
     state.running = false;
+    pendingInputs.length = 0;
   }
 
   async function renderStatus(): Promise<void> {
@@ -292,7 +301,48 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       return;
     }
 
-    await runTrigger(state.sessionId, 'user_confirmation', payload);
+    if (payload.decision === 'approve') {
+      await invokeSessionControl('approve_artifact_plan');
+      return;
+    }
+
+    const questionNumber = parseRejectQuestionNumber(payload.instruction);
+    if (questionNumber === null) {
+      renderer.renderError('/reject must name Q1, Q2, Q3, Q4, Q5, or Q6.');
+      return;
+    }
+
+    await invokeSessionControl(`reject_design_and_revise_q${String(questionNumber)}`, {
+      instruction: payload.instruction ?? '',
+    });
+  }
+
+  async function invokeSessionControl(controlId: string, args?: Record<string, unknown>): Promise<void> {
+    if (!state.sessionId) {
+      renderer.renderInfo('No active session.');
+      return;
+    }
+
+    await client.controls.invoke(program, controlId, {
+      sessionId: state.sessionId,
+      channel: 'http',
+      ...(args && Object.keys(args).length > 0 ? { args } : {}),
+    });
+    await refreshLiveState();
+  }
+
+  async function refreshLiveState(): Promise<void> {
+    if (!state.sessionId) return;
+
+    try {
+      const envelope = await client.sessions.get(state.sessionId);
+      const live = readLiveSessionFields(envelope);
+      state.mode = live.mode ?? state.mode;
+      state.running = live.running === true;
+    } catch {
+      // Controls are already committed; a status refresh failure should not
+      // turn an accepted slash command into a user-facing error.
+    }
   }
 
   async function runTrigger(sessionId: string, channel: string, payload: unknown): Promise<void> {
@@ -395,4 +445,9 @@ function buildUserConfirmationPayload(
   instruction: string | undefined,
 ): UserConfirmationPayload {
   return instruction === undefined ? { decision } : { decision, instruction };
+}
+
+function parseRejectQuestionNumber(instruction: string | undefined): number | null {
+  const match = /\bq([1-6])\b/iu.exec(instruction ?? '');
+  return match ? Number(match[1]) : null;
 }
