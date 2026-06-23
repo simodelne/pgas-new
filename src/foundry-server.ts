@@ -245,18 +245,6 @@ function createOpenAiUnifiedPayload(
   if (tools.length > 0) {
     payload.tools = tools;
     payload.tool_choice = resolveToolChoiceFromEnv();
-    // §10 Scenario G re-walk evidence
-    // (.uat/session-logs-current/pgas-new-1782241456225/session-log.ndjson:R20):
-    // Qwen emitted both `record_q4_transitions` AND `ask_design_question(Q5)`
-    // in a single response. The engine takes the LAST tool_call as the
-    // round's terminal action and drops all earlier ones (including their
-    // mutations). The foundry spec at src/foundry-program/specs.yml
-    // already instructs "one tool_call per round" in mode prompts, but
-    // Qwen ignores that on the post-revise re-walk path. parallel_tool_calls=false
-    // is the OpenAI-API constraint that enforces single-tool responses
-    // deterministically. Honored by vLLM's OpenAI-compatible chat-completions
-    // endpoint. Eliminates the engine-discard hazard for multi-tool emissions.
-    payload.parallel_tool_calls = false;
   }
 
   return payload;
