@@ -20,7 +20,26 @@ Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`.
 
 ## Quickstart
 
+### One-shot host provisioning (recommended)
+
 ```bash
+bash scripts/provision.sh
+```
+
+The script handles a fresh host end-to-end: verifies Node ≥20, npm, git, GitHub Packages auth, and vLLM reachability; clones (or updates) the repo at `$HOME/pgas-new`; installs npm dependencies; runs `npm test` for verification; writes env defaults to `$HOME/.config/pgas-new/env`; and installs a global shim at `$HOME/.local/bin/pgas-new`. Idempotent — safe to re-run.
+
+Flags: `--repo-dir DIR`, `--ref TAG`, `--base-url URL`, `--model NAME`, `--skip-tests`, `--skip-vllm-check`. Run `bash scripts/provision.sh --help` for details.
+
+After provisioning succeeds, ensure `$HOME/.local/bin` is on PATH, then:
+
+```bash
+pgas-new
+```
+
+### Manual run from a checkout
+
+```bash
+npm install
 npm run pgas-new
 ```
 
@@ -28,6 +47,10 @@ v3.0 ships the foundry REPL only. Per-domain scaffolds are no longer selected
 with `--template policy-drafting`, `--template web-scraper`, or
 `--template social-media-agent`; generate those programs by walking the
 foundry's design interview in the bare `pgas-new` REPL.
+
+### Known v3.0 limitation
+
+Sessions are ephemeral (in-memory). No login, no DB-backed session persistence. v3.1 will add auth + persistent sessions once `@simodelne/pgas-server` ships the `SqliteStore` / `JwtAuthProvider` public exports tracked at <https://github.com/simodelne/pgas/issues/499>.
 
 The canonical v3 design is [docs/PGAS-NEW-ARCHITECTURE.md](./docs/PGAS-NEW-ARCHITECTURE.md).
 The files under [docs/graduation-evidence/](./docs/graduation-evidence/) are a
