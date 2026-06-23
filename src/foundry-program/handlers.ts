@@ -181,6 +181,26 @@ function assertJsonTopLevelType(value: unknown, expectedType: JsonTopLevelType, 
   }
 }
 
+/**
+ * Q5 delegation accepts user-typed sentinel answers ("none", "no", "n/a",
+ * or empty) and substitutes the canonical empty-delegation object
+ * `{ enabled: false }`. This keeps `record_q5_delegation` deterministic
+ * against Qwen's variable interpretations of the user's "none" reply.
+ *
+ * Returns a NEW payload (does not mutate input) with `delegation_json`
+ * rewritten to '{"enabled":false}' when the sentinel matches. Other
+ * payload keys pass through unchanged.
+ */
+function applyOptionalDelegationSentinel(payload: Record<string, unknown>): Record<string, unknown> {
+  const raw = payload.delegation_json;
+  if (typeof raw !== 'string') return payload;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === 'none' || trimmed === 'no' || trimmed === 'n/a' || trimmed === '') {
+    return { ...payload, delegation_json: '{"enabled":false}' };
+  }
+  return payload;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -582,7 +602,16 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async record_q5_delegation(payload) {
-    const delegation = optionalJsonField(payload, 'delegation', 'delegation_json', 'object');
+    // Q5 explicitly tells the user "none" is a valid answer for the delegation
+    // question. Qwen has been observed to forward that literal string as
+    // `delegation_json: "none"` instead of translating it to a JSON object,
+    // which then fails the optionalJsonField parse. Accept the sentinel
+    // forms here and translate to the canonical empty-delegation object
+    // before delegating to the shared parser. See
+    // .uat/session-logs-current/pgas-new-1782236782870/session-log.ndjson
+    // (R12) for the live evidence.
+    const normalized = applyOptionalDelegationSentinel(payload);
+    const delegation = optionalJsonField(normalized, 'delegation', 'delegation_json', 'object');
     return {
       kind: 'pgas_new_q5_delegation_recorded',
       delegation: delegation.value,

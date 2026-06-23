@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import {
   createProgramAdapters,
   createToolRegistry,
-  enableNotebook,
   loadSpecWithPatterns,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
@@ -34,19 +33,27 @@ const AUTO_CONTINUE_ACTIONS = new Set([
 export function createPgasNewFoundryProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   const { spec: loaded } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
-  // §10 Scenario A scaffold_plan /approve regression evidence:
-  // /tmp/pgas-new-debug-prompts-1782233715/unified-1782233906044-668lbq-request.json
-  // showed 14 tools available in scaffold_plan (vocabulary has 9 + 5 engine-
-  // added notebook tools). On user_confirmation:approve, Qwen picked
-  // `record_note` instead of `approve_artifact_plan`. The notebook tools
-  // (`pin_note`, `unpin_note`, `read_note`, `record_note`, `delete_note`)
-  // are useful only during the design interview where the user provides
-  // free-form context; every downstream mode is auto-driven or gate-critical
-  // and benefits from a narrower decision surface. Scope `enableNotebook`
-  // to `intake_intelligence` so the engine-added notebook vocabulary no
-  // longer competes with `approve_artifact_plan`, `confirm_design`, and the
-  // other gate-action tools in their respective modes.
-  const spec = enableNotebook(loaded, { modes: ['intake_intelligence'] });
+  // The foundry's spec at src/foundry-program/specs.yml declares its own
+  // notebook actions (`record_user_note`, `pin_notebook_note` at lines
+  // 601-602) explicitly scoped to the modes where free-form user notes
+  // are valuable (intake_intelligence, architecture_design, curator_request).
+  //
+  // The engine's enableNotebook() helper adds five MORE notebook tools
+  // (record_note, pin_note, read_note, unpin_note, delete_note) on top of
+  // every mode it targets. Even after Phase 5.12 scoped that to just
+  // intake_intelligence, the full §10 sweep at 6f6fbf5c showed Qwen
+  // non-deterministically picking record_note over the actual Q-action
+  // (Scenario A failed at record_q3_stages → record_note), and downstream
+  // modes still saw __fallback__ on /approve because plan_artifacts
+  // re-fired even when notebook was absent.
+  //
+  // Root product fix: do NOT layer the engine's notebook surface on top
+  // of the foundry's already-scoped spec-declared notebook actions. The
+  // spec's explicit per-mode vocabulary stays authoritative; LLM tool
+  // selection becomes more deterministic; gate-action tools (confirm_design,
+  // approve_artifact_plan, record_q*_*) are no longer crowded by competing
+  // engine-provided tools.
+  const spec = loaded;
   const toolRegistry = createToolRegistry();
   registerPgasNewTools(toolRegistry);
 
