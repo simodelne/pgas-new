@@ -1,8 +1,8 @@
-# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 6)
+# v3.0 Rebuild Plan — Restore the agent-driven foundry (revision 8)
 
 Date: 2026-06-22  
-Status: revision 6 (addresses Codex r5 verdict NEEDS REVISION — uses existing `approve_artifact_plan` action + `artifact_plan.approved` field instead of fabricating duplicates); pending re-validation  
-Supersedes: revisions 2 (`679e114`) / 3 (`bfd4064`) / 4 (`d187135`) / 5 (`ffc865c`)  
+Status: revision 8 (addresses Codex r7 NEEDS REVISION — three handler-contract / schema-additions fixes; see §16 revision history for the full list of renames and additions). Supersedes revision 7. Pending re-validation.  
+Supersedes: revisions 2 (`679e114`) / 3 (`bfd4064`) / 4 (`d187135`) / 5 (`ffc865c`) / 6 (`5be6253`) / 7 (`179edb2`)  
 Anchors:
 - v1 source: `commands/pgas-new-program.md` (recoverable from commit `3d832b5^`)
 - v1 architecture paper: `audit/ARCHITECTURE-claude-pgas-plugin-v1.0.0.md` (recoverable from `3d832b5^`)
@@ -31,7 +31,7 @@ Anchors:
 |---|---|---|
 | **D1** | Primary CLI invocation | **Bare `pgas-new`** opens the streaming REPL. No subcommand needed. `pgas-new --slug foo --out /tmp/bar` is equivalent with pre-filled inputs. `pgas-new design <slug>` is NOT in the v3.0 surface. |
 | **D2** | Legacy scripted subcommands | **Keep indefinitely at top level.** `render-standalone`, `render-attach`, `validate-manifest`, `plan-standalone`, `plan-attach`, `curator-request`, `session`, `version`, `help` all stay as top-level subcommands. Only the consumer-preset `--template <consumer>` flag values get removed in v3.0. |
-| **D3** | Synthesized-spec state namespace | **`program.synthesized_spec`** under existing `program.*`. No new top-level namespace. Adds `program.synthesized_spec`, `program.design_confirmed`, `artifact_plan.approved` to the existing fields in `PgasNewState`. |
+| **D3** | Synthesized-spec state namespace | **`program.synthesized_spec`** under existing `program.*`. No new top-level namespace. Adds `program.synthesized_spec` and `program.design_confirmed` to `PgasNewState`. Re-uses pre-existing `artifact_plan.approved` (already in model + spec) for the D4 second-confirm gate. |
 | **D4** | User confirmation steps before write | **Two confirms.** (1) End of `intake_intelligence`: agent echoes proposed mode list + transitions; user approves to enter `architecture_design`. (2) End of `scaffold_plan`: agent shows artifact-plan list; user approves to enter `branch_write`. |
 | **D5** | Foundry-program asset strategy | **First-run rendered to `~/.pgas-new/foundry-v<version>/`**, cached for subsequent invocations. `pgas-new` spawns a child server via `node --import tsx <workdir>/server.ts` on that rendered foundry. Render is idempotent + skipped if the working dir already exists for the current version. |
 | **D6** | Governance corrections #37/#38/#39 | **Prerequisite — implement before v3 work starts.** Land #37 (architecture-doc CI diff), #38 (PR-template Program Nature checkbox), and #39 (UAT intent-verification template) first. Every subsequent v3 PR flows through the new gates. |
@@ -78,8 +78,8 @@ Output: a fresh PGAS consumer (standalone repo per **standalone mode**, or progr
 | `src/pgas-new/existing-repo.ts` | — | Stay as-is. |
 | `src/pgas-new/curator-request.ts` | — | Stay as-is. |
 | `src/pgas-new/version.ts` | ~50 | Stay as-is. Engine pin + banned-imports scanner. |
-| `src/pgas-new/model.ts` | — | **Salvage with targeted edits.** Add `program.synthesized_spec`, `program.design_confirmed`, `artifact_plan.approved`, `program.skip_dimensions` to `PgasNewState`. |
-| `src/pgas-new/gates.ts` | — | Stay as-is. Add 2 new gate definitions (`design_confirmed`, `plan_approved`) — appended, not modified. |
+| `src/pgas-new/model.ts` | — | **Salvage with targeted edits.** Add `program.synthesized_spec`, `program.design_confirmed`, `program.skip_dimensions`, `program.target_dir`, `program.target_dir_confirmed`, `program.design_path` to `PgasNewState`. `artifact_plan.approved` already exists (`src/pgas-new/model.ts:112-115`); no change needed. |
+| `src/pgas-new/gates.ts` | — | Stay as-is. Add 1 new gate definition (`design_confirmed` — the new D4 first-confirm). The second D4 confirm (artifact-plan approval) reuses the existing artifact-plan gate logic at `src/pgas-new/gates.ts:221-241` — no new gate needed. |
 | `src/pgas-new/command-runner.ts` | — | Stay as-is. |
 | `src/pgas-new/control-plane.ts` | — | Stay as-is. |
 | `src/pgas-new/verify.ts` | — | Stay as-is. |
@@ -261,12 +261,13 @@ synthesize_program_spec:
   - `{ kind: FieldFalsy, path: program.design_confirmed }` (Codex R4-I2 idempotency fix — refuses a second call)
   - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
   - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
-- `approve_artifact_plan` precondition list (note: this action already exists in the current foundry spec — see `templates/pgas-new/program/specs.yml.tmpl` lines 232–241; v3 keeps the existing action and adds the idempotency guard):
-  - `{ kind: FieldTruthy, path: program.synthesis_complete }` (artifact-plan only meaningful after synthesis runs)
-  - `{ kind: FieldEquals, path: artifact_plan.status, value: 'draft' }` (the existing `plan_artifacts` action sets this to `'draft'`; the action is only legal once the plan has been drafted — Codex R5-I1 fix using the real field instead of the invented `approved_for_user`)
-  - `{ kind: FieldFalsy, path: artifact_plan.approved }` (Codex R4-I2 idempotency fix — refuses a second call; `artifact_plan.approved` is the existing model field)
-  - `{ kind: TriggerType, triggerSet: [user_confirmation] }`
-  - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }`
+- `approve_artifact_plan` precondition list (note: this action already exists in the current foundry spec — see `templates/pgas-new/program/specs.yml.tmpl` lines 232–241. v3 KEEPS the existing preconditions and ADDS new ones; this is an amendment, not a replacement):
+  - `{ kind: FieldTruthy, path: repo.write_authorized }` **(EXISTING precondition — keep)**
+  - `{ kind: FieldTruthy, path: program.synthesis_complete }` (new — artifact-plan only meaningful after synthesis runs)
+  - `{ kind: FieldEquals, path: artifact_plan.status, value: 'draft' }` (new — the existing `plan_artifacts` action sets this to `'draft'`; the action is only legal once the plan has been drafted — Codex R5-I1 fix using the real field)
+  - `{ kind: FieldFalsy, path: artifact_plan.approved }` (new — Codex R4-I2 idempotency fix — refuses a second call)
+  - `{ kind: TriggerType, triggerSet: [user_confirmation] }` (new — D4 second confirm trigger)
+  - `{ kind: FieldEquals, path: inputs.user_decision.decision, value: approve }` (new — same shape as `confirm_design`)
 - `synthesize_program_spec` precondition: `program.design_confirmed = true` (synthesis runs in `architecture_design` mode after intake is confirmed)
 
 **Schema additions (D3 + Codex C2 fix for FM5 + Codex N1 fix for target_dir):**
@@ -309,6 +310,11 @@ schema:
   inputs.mode_entry.mode: string
   inputs.mode_entry.from_mode: string
   inputs.mode_entry.entry_round: number
+  # FM5 — user_confirmation channel ingestion paths (Codex r7 #4: foundry uses these in preconditions/projection)
+  inputs.user_text: string                   # free-form text envelope for Q1..Q6 answers
+  inputs.user_decision: object               # decision envelope set by user_confirmation channel
+  inputs.user_decision.decision: string      # 'approve' | 'reject' (D4 confirms)
+  inputs.user_decision.instruction: string   # optional follow-up instruction from user
   governance.round_counter: number
 ```
 
@@ -453,7 +459,7 @@ Handler implementations for every action in the foundry's spec. Each handler has
  *   args: { target_kind: 'standalone' | 'attach', out_dir: string }
  *   side effects: writes files to out_dir per program.synthesized_spec
  *   state reads: program.synthesized_spec, program.slug, program.name, repo.wiring_manifest
- *   state mutations: artifacts.written (array of paths), artifacts.write_complete (boolean)
+ *   state mutations: artifacts.written = true (boolean — matches existing model.ts), artifacts.generated_paths = <array of written paths> (matches existing model.ts:120)
  *   failure modes:
  *     - target_kind === 'standalone' AND out_dir exists with collisions → throw with collision list
  *     - target_kind === 'attach' AND wiring_manifest absent/invalid → throw, do NOT write
@@ -466,7 +472,7 @@ Handler implementations for every action in the foundry's spec. Each handler has
  * npm_install
  *   args: { cwd: string }
  *   side effects: child_process npm install --no-audit --no-fund in cwd
- *   state mutations: graduation.install_evidence_id (string)
+ *   state mutations: none (install is an enveloping concern of the active verification action; its evidence is captured by the existing graduation.{static,live}_evidence_id field set by the verify_* action that called npm_install)
  *   timeout: 300_000 ms (5 minutes)
  *   failure modes: non-zero exit → throw with stderr tail (first 200 chars)
  *   secret redaction: filter NPM_TOKEN from logged env; never log .npmrc content
@@ -1006,3 +1012,13 @@ Codex's mandate (when delegated):
 - Does not implement v1's `pgas-program-builder` skill
 - Does not move legacy scripted subcommands under a `pgas-new ci` namespace (D2: they stay at top level)
 - Does not implement Phase 4 in the initial delegation (requires explicit second authorization)
+
+## §16 Revision history
+
+- **r8** (2026-06-22, this revision): Codex r7 cleanups. `write_scaffold_artifacts` handler contract now uses the pre-existing `artifacts.written:boolean` + `artifacts.generated_paths:array` (model.ts:118-121) instead of inventing new fields. `npm_install` no longer mutates state — install evidence is carried by the enveloping `verify_*` action's existing evidence-id field. Foundry schema-additions block now declares the four `user_confirmation`-channel ingestion paths (`inputs.user_text`, `inputs.user_decision`, `inputs.user_decision.decision`, `inputs.user_decision.instruction`) that the foundry's `confirm_design` / `approve_artifact_plan` preconditions depend on.
+- **r7** (`179edb2`): Codex r6 cleanups — dropped stale gate-add line for the second D4 confirm (reuses existing artifact-plan gate); retained pre-existing `repo.write_authorized` precondition on `approve_artifact_plan`; renamed remaining trace-doc references to the existing approve action; corrected §3/§4 prose so the existing `artifact_plan.approved` field is described as reused, not added.
+- **r6** (`5be6253`): Codex r5 cleanups — replaced fabricated duplicate action / field names with the pre-existing equivalents already in `templates/pgas-new/program/specs.yml.tmpl`.
+- **r5** (`ffc865c`): Codex r4 cleanups — added idempotency `FieldFalsy` preconditions on both D4 confirms.
+- **r4** (`d187135`): Codex r3 cleanups — fixed action-ordering contradiction (target capture before design-path choice).
+- **r3** (`bfd4064`): Codex r2 cleanups — handler-contract purity, FM closure additions.
+- **r2** (`679e114`): incorporated initial Codex validation + 6 owner decisions (D1–D6).

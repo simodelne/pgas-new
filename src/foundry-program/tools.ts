@@ -1,6 +1,24 @@
 import type { ToolImpl, ToolRegistry } from '@simodelne/pgas-server/plugin.js';
 
 const semanticTools = [
+  'record_program_target',
+  'choose_design_path',
+  'apply_default_skeleton',
+  'ask_design_question',
+  'record_q1_purpose',
+  'record_q2_entry_channel',
+  'record_q3_stages',
+  'record_q4_transitions',
+  'record_q5_delegation',
+  'record_q6_completion',
+  'record_program_intake_finalize',
+  'confirm_design',
+  'reject_design_and_revise_q1',
+  'reject_design_and_revise_q2',
+  'reject_design_and_revise_q3',
+  'reject_design_and_revise_q4',
+  'reject_design_and_revise_q5',
+  'reject_design_and_revise_q6',
   'repo_read_file',
   'repo_list_files',
   'record_user_note',
@@ -13,6 +31,7 @@ const semanticTools = [
   'load_wiring_manifest',
   'authorize_existing_repo_target',
   'create_curator_request',
+  'synthesize_program_spec',
   'design_architecture',
   'plan_artifacts',
   'approve_artifact_plan',
@@ -41,7 +60,7 @@ const noopTool: ToolImpl = {
   fn: async (args) => ({ ok: true, args }),
 };
 
-export function register{{PASCAL_NAME}}Tools(registry: ToolRegistry): void {
+export function registerPgasNewTools(registry: ToolRegistry): void {
   for (const name of semanticTools) {
     registry.register(name, noopTool);
   }

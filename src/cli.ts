@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from './pgas-new/artifact-plan.js';
+import {
+  createExistingRepoArtifactPlan,
+  createStandaloneArtifactPlan,
+  validateProgramIdentity,
+} from './pgas-new/artifact-plan.js';
 import { prepareExistingRepoAttachment } from './pgas-new/existing-repo.js';
 import {
   renderExistingRepoAttachment,
@@ -11,6 +15,8 @@ import {
 import { loadWiringManifest } from './pgas-new/wiring-manifest.js';
 import { PGAS_SERVER_PACKAGE, PGAS_SERVER_VERSION } from './pgas-new/version.js';
 import { isPgasNewSessionControl } from './pgas-new/control-plane.js';
+import { startFoundryServer } from './foundry-server.js';
+import { runRepl } from './repl/runner.js';
 
 export interface CliResult {
   exitCode: number;
@@ -23,10 +29,55 @@ interface ParsedOptions {
   [key: string]: string | string[];
 }
 
+interface AgentArgs {
+  slug?: string;
+  name?: string;
+  outDir?: string;
+  nonInteractive?: boolean;
+}
+
+interface DomainPatch {
+  path: string;
+  value: unknown;
+}
+
+interface SeededSessionClient {
+  sessions: {
+    create(body: { program: string; domain_context?: unknown }): Promise<{ sessionId: string }>;
+    patchDomain(sessionId: string, body: { patches: DomainPatch[] }): Promise<unknown>;
+  };
+}
+
+export interface CreateSessionWithInitialStateOptions {
+  program: string;
+  initialState: Record<string, unknown>;
+  domainContext?: unknown;
+}
+
+const KNOWN_SUBCOMMANDS = new Set([
+  'help',
+  'version',
+  'session',
+  'plan-standalone',
+  'render-standalone',
+  'validate-manifest',
+  'plan-attach',
+  'render-attach',
+  'curator-request',
+]);
+
 export async function runCli(argv: string[]): Promise<CliResult> {
   try {
-    if (argv.length === 0 || argv.includes('--help') || argv.includes('-h')) {
+    if (argv.includes('--help') || argv.includes('-h')) {
       return ok(helpText());
+    }
+
+    if (argv.length === 0) {
+      return runAgentSession({});
+    }
+
+    if (!KNOWN_SUBCOMMANDS.has(argv[0]) && argv[0]?.startsWith('-')) {
+      return runAgentSession(parseAgentArgs(argv));
     }
 
     const parsed = parseArgs(argv);
@@ -59,6 +110,108 @@ export async function runCli(argv: string[]): Promise<CliResult> {
   }
 }
 
+async function runAgentSession(args: AgentArgs): Promise<CliResult> {
+  const server = await startFoundryServer({});
+  const initialDomain = initialDomainFromAgentArgs(args);
+  const restoreFetch = installInitialStateSessionCreateInterceptor(initialDomain);
+  try {
+    const replExit = await runRepl({
+      baseUrl: server.url,
+      slug: 'pgas-new',
+      initialDomain,
+      nonInteractive: args.nonInteractive,
+    });
+    return { exitCode: replExit.exitCode, stdout: '', stderr: '' };
+  } finally {
+    restoreFetch();
+    await server.kill();
+  }
+}
+
+export async function createSessionWithInitialState(
+  client: SeededSessionClient,
+  options: CreateSessionWithInitialStateOptions,
+): Promise<{ sessionId: string }> {
+  const created = await client.sessions.create({
+    program: options.program,
+    ...(options.domainContext !== undefined ? { domain_context: options.domainContext } : {}),
+  });
+  const patches = initialStatePatchesFromDomain(options.initialState);
+  if (patches.length > 0) {
+    await client.sessions.patchDomain(created.sessionId, { patches });
+  }
+  return created;
+}
+
+export function initialStatePatchesFromDomain(initialState: Record<string, unknown>): DomainPatch[] {
+  const patches: DomainPatch[] = [];
+  const slug = stringValue(initialState['program.slug']);
+  const name = stringValue(initialState['program.name']);
+  const targetDir = stringValue(initialState['program.target_dir']);
+
+  if (slug !== undefined) patches.push({ path: 'program.slug', value: slug });
+  if (name !== undefined) patches.push({ path: 'program.name', value: name });
+  if (targetDir !== undefined) patches.push({ path: 'program.target_dir', value: targetDir });
+  if (slug !== undefined && name !== undefined && targetDir !== undefined) {
+    patches.push({ path: 'program.target_dir_confirmed', value: true });
+  }
+
+  return patches;
+}
+
+function installInitialStateSessionCreateInterceptor(initialState: Record<string, unknown>): () => void {
+  const originalFetch = globalThis.fetch;
+  if (typeof originalFetch !== 'function') return () => {};
+
+  globalThis.fetch = createInitialStateSessionCreateFetch(originalFetch.bind(globalThis), initialState);
+
+  return () => {
+    globalThis.fetch = originalFetch;
+  };
+}
+
+export function createInitialStateSessionCreateFetch(
+  originalFetch: typeof fetch,
+  initialState: Record<string, unknown>,
+): typeof fetch {
+  const patches = initialStatePatchesFromDomain(initialState);
+  if (patches.length === 0) return originalFetch;
+
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    if (request.method !== 'POST' || !url.pathname.endsWith('/sessions')) {
+      return originalFetch(request);
+    }
+
+    const body = await readJsonObject(request.clone());
+    if (!body || typeof body.program !== 'string') {
+      return originalFetch(request);
+    }
+
+    const createResponse = await originalFetch(new Request(request, {
+      body: JSON.stringify(stripInitialStateFromCreateBody(body, initialState)),
+      headers: jsonHeaders(request.headers),
+    }));
+    if (!createResponse.ok) return createResponse;
+
+    const created = await readJsonObject(createResponse.clone());
+    const sessionId = typeof created?.sessionId === 'string' ? created.sessionId : '';
+    if (sessionId.length > 0) {
+      const patchResponse = await originalFetch(new Request(sessionDomainUrl(url, sessionId), {
+        method: 'PATCH',
+        headers: jsonHeaders(request.headers),
+        body: JSON.stringify({ patches }),
+      }));
+      if (!patchResponse.ok) {
+        throw new Error(`initial state patch failed (${String(patchResponse.status)}): ${await patchResponse.text()}`);
+      }
+    }
+
+    return createResponse;
+  };
+}
+
 function sessionCommand(command: string | undefined): CliResult {
   if (!isPgasNewSessionControl(command)) {
     return fail('unknown session command', 2);
@@ -89,7 +242,6 @@ function planStandalone(options: ParsedOptions): CliResult {
 function renderStandalone(options: ParsedOptions): CliResult {
   const program = programOptions(options);
   const outDir = required(options, 'out');
-  const warning = consumerTemplateDeprecationWarning(program.template);
   const result = renderStandaloneScaffold({
     outDir,
     ...program,
@@ -97,7 +249,7 @@ function renderStandalone(options: ParsedOptions): CliResult {
     githubRepo: optional(options, 'github-repo'),
   });
 
-  return ok(`written\n${formatPlan(result.written)}`, warning);
+  return ok(`written\n${formatPlan(result.written)}`);
 }
 
 function validateManifest(options: ParsedOptions): CliResult {
@@ -126,7 +278,6 @@ function planAttach(options: ParsedOptions): CliResult {
 function renderAttach(options: ParsedOptions): CliResult {
   const repo = required(options, 'repo');
   const program = programOptions(options);
-  const warning = consumerTemplateDeprecationWarning(program.template);
   const manifest = loadWiringManifest(repo);
   if (!manifest.ok || !manifest.manifest) {
     return fail(manifest.errors.join('\n'), 1);
@@ -138,7 +289,7 @@ function renderAttach(options: ParsedOptions): CliResult {
     ...program,
   });
 
-  return ok(`written\n${formatPlan(result.written)}`, warning);
+  return ok(`written\n${formatPlan(result.written)}`);
 }
 
 function curatorRequest(options: ParsedOptions): CliResult {
@@ -214,6 +365,124 @@ function parseArgs(argv: string[]): ParsedOptions {
   return parsed;
 }
 
+function parseAgentArgs(argv: string[]): AgentArgs {
+  const parsed: AgentArgs = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    const [rawKey, inlineValue] = token.startsWith('--') ? token.slice(2).split('=', 2) : ['', undefined];
+    if (!rawKey) {
+      throw new Error(`unknown command: ${token}`);
+    }
+
+    const readValue = (): string => {
+      if (inlineValue !== undefined) return inlineValue;
+      const next = argv[index + 1];
+      if (!next || next.startsWith('--')) {
+        throw new Error(`missing value for --${rawKey}`);
+      }
+      index += 1;
+      return next;
+    };
+
+    switch (rawKey) {
+      case 'slug':
+        parsed.slug = readValue();
+        break;
+      case 'name':
+        parsed.name = readValue();
+        break;
+      case 'out':
+        parsed.outDir = readValue();
+        break;
+      case 'non-interactive': {
+        const value = inlineValue ?? (argv[index + 1] && !argv[index + 1].startsWith('--') ? argv[++index] : 'true');
+        parsed.nonInteractive = value !== 'false';
+        break;
+      }
+      default:
+        throw new Error(`unknown flag: --${rawKey}`);
+    }
+  }
+
+  if (parsed.slug) {
+    validateProgramIdentity({ slug: parsed.slug, name: parsed.name ?? deriveNameFromSlug(parsed.slug) });
+  }
+
+  return parsed;
+}
+
+function initialDomainFromAgentArgs(args: AgentArgs): Record<string, unknown> {
+  const domain: Record<string, unknown> = {};
+  if (args.slug) {
+    domain['program.slug'] = args.slug;
+    domain['program.name'] = args.name ?? deriveNameFromSlug(args.slug);
+  } else if (args.name) {
+    domain['program.name'] = args.name;
+  }
+  if (args.outDir) {
+    domain['program.target_dir'] = args.outDir;
+  }
+  return domain;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+async function readJsonObject(requestOrResponse: Request | Response): Promise<Record<string, unknown> | undefined> {
+  try {
+    const parsed = JSON.parse(await requestOrResponse.text()) as unknown;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stripInitialStateFromCreateBody(
+  body: Record<string, unknown>,
+  initialState: Record<string, unknown>,
+): Record<string, unknown> {
+  const domainContext = body.domain_context;
+  if (domainContext === null || typeof domainContext !== 'object' || Array.isArray(domainContext)) {
+    return body;
+  }
+
+  const strippedContext: Record<string, unknown> = { ...domainContext };
+  for (const key of Object.keys(initialState)) {
+    delete strippedContext[key];
+  }
+
+  const strippedBody = { ...body };
+  if (Object.keys(strippedContext).length === 0) {
+    delete strippedBody.domain_context;
+  } else {
+    strippedBody.domain_context = strippedContext;
+  }
+  return strippedBody;
+}
+
+function jsonHeaders(headers: Headers): Headers {
+  const next = new Headers(headers);
+  next.set('content-type', 'application/json');
+  next.delete('content-length');
+  return next;
+}
+
+function sessionDomainUrl(createUrl: URL, sessionId: string): string {
+  const patchPath = createUrl.pathname.replace(/\/sessions$/u, `/sessions/${encodeURIComponent(sessionId)}/domain`);
+  return `${createUrl.origin}${patchPath}`;
+}
+
+function deriveNameFromSlug(slug: string): string {
+  return slug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+    .join(' ');
+}
+
 function programOptions(options: ParsedOptions): {
   slug: string;
   name: string;
@@ -233,30 +502,15 @@ function templateOption(options: ParsedOptions): ProgramTemplate | undefined {
   if (!value) {
     return undefined;
   }
-  if (
-    value === 'pgas-new-foundry' ||
-    value === 'policy-drafting' ||
-    value === 'web-scraper' ||
-    value === 'social-media-agent'
-  ) {
+  if (value === 'pgas-new-foundry') {
     return value;
   }
-  throw new Error(
-    'invalid --template: expected pgas-new-foundry, policy-drafting, web-scraper, or social-media-agent',
-  );
+  throw new Error(removedTemplateError(value));
 }
 
-function consumerTemplateDeprecationWarning(template: ProgramTemplate | undefined): string {
-  if (template !== 'policy-drafting' && template !== 'web-scraper' && template !== 'social-media-agent') {
-    return '';
-  }
-
-  return [
-    `⚠ --template ${template} is deprecated and will be removed in v3.0.`,
-    `  The ${template} graduation program is preserved in docs/graduation-evidence/ for reference.`,
-    '  Use `pgas-new design <slug>` to interactively design your own program.',
-    '  (Phase 2 of the v3.0 plan: ships in v2.8.0.)',
-  ].join('\n');
+function removedTemplateError(template: string): string {
+  return `invalid --template: ${template}. In v3.0, only pgas-new-foundry is supported. ` +
+    'For per-domain programs, run the bare `pgas-new` REPL and walk the foundry design interview.';
 }
 
 function required(options: ParsedOptions, key: string): string {
@@ -282,10 +536,10 @@ function helpText(): string {
     'pgas-new commands:',
     '  version',
     '  plan-standalone --slug <slug> --name <name>',
-    '  render-standalone --slug <slug> --name <name> --out <dir> [--template pgas-new-foundry|policy-drafting (deprecated)|web-scraper (deprecated)|social-media-agent (deprecated)] [--mandate <text>] [--github-owner <owner> --github-repo <repo>]',
+    '  render-standalone --slug <slug> --name <name> --out <dir> [--template pgas-new-foundry] [--mandate <text>] [--github-owner <owner> --github-repo <repo>]',
     '  validate-manifest --repo <repo>',
     '  plan-attach --repo <repo> --slug <slug> --name <name>',
-    '  render-attach --repo <repo> --slug <slug> --name <name> [--template pgas-new-foundry|policy-drafting (deprecated)|web-scraper (deprecated)|social-media-agent (deprecated)] [--mandate <text>]',
+    '  render-attach --repo <repo> --slug <slug> --name <name> [--template pgas-new-foundry] [--mandate <text>]',
     '  curator-request --repo <repo> --slug <slug> --name <name> [--github-owner <owner> --github-repo <repo>]',
     '  session new|abort|status|history|resume|help',
   ].join('\n');

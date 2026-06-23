@@ -49,6 +49,20 @@ describe('template renderer', () => {
     expect(renderTemplate('hello {{NAME}}', { NAME: 'pgas-new' })).toBe('hello pgas-new');
   });
 
+  it('rejects removed consumer template names at runtime', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-removed-template-'));
+    try {
+      expect(() => renderStandaloneScaffold({
+        outDir,
+        slug: 'draft-policy',
+        name: 'Draft Policy',
+        template: 'policy-drafting' as never,
+      })).toThrow(/invalid --template: policy-drafting/);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to overwrite existing planned artifacts in outDir', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-overwrite-'));
     try {
@@ -139,6 +153,25 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders existing-repo registrations without Node ambient type dependencies', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-registration-'));
+    try {
+      renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'audit-trail',
+        name: 'Audit Trail',
+      });
+
+      const registration = readFileSync(join(repoRoot, 'programs/audit-trail/registration.ts'), 'utf8');
+      expect(registration).toContain("new URL('./specs.yml', import.meta.url).pathname");
+      expect(registration).not.toContain("from 'node:path'");
+      expect(registration).not.toContain("from 'node:url'");
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('declares control-plane session commands, modes, notebook pins, and verification gates', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-spec-'));
     try {
@@ -188,346 +221,374 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders policy-drafting artifacts into manifest paths for existing repo attachments', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-policy-'));
+  it('declares the foundry intake actions, JSON-string intake recording shape, and guidance', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-intake-'));
     try {
-      const result = renderExistingRepoAttachment({
-        repoRoot,
-        manifest: VALID_MANIFEST,
-        slug: 'draft-policy',
-        name: 'Draft Policy',
-        template: 'policy-drafting',
-        mandate:
-          'risk-based policy drafting; intake policy objectives/type/org/risk appetite/resources/audience/jurisdiction; outline approval before section-by-section drafting; Word + HTML rendering; editing/revision like SimoneOS contract draft',
-      });
+      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
 
-      expect(result.written).toEqual([
-        'programs/draft-policy/specs.yml',
-        'programs/draft-policy/registration.ts',
-        'programs/draft-policy/handlers.ts',
-        'programs/draft-policy/tools.ts',
-        '.pgas/pgas-new/draft-policy/dossier.yml',
-        '.pgas/pgas-new/draft-policy/artifacts.json',
-        'audit/PGAS-NEW-draft-policy.md',
-      ]);
-
-      const spec = readFileSync(join(repoRoot, 'programs/draft-policy/specs.yml'), 'utf8');
-      const parsed = load(spec) as {
-        channels: Record<string, { structured_decision?: boolean }>;
-        control_plane: { controls: Record<string, unknown>; version: number };
-        guidance: Record<string, string[]>;
-        ingestion: Record<string, string[]>;
+      const specText = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
+      const parsed = load(specText) as {
         modes: Record<string, {
+          vocabulary: string[];
+          channels?: string[];
           preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
+          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
         }>;
         projection: Record<string, { include: string[] }>;
+        action_map: Record<string, {
+          description: string;
+          channel: string;
+          arg_descriptions?: Record<string, string>;
+          mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
+        }>;
         schema: Record<string, string>;
+        ingestion: Record<string, string[]>;
+        guidance: Record<string, string[]>;
       };
-      const tools = readFileSync(join(repoRoot, 'programs/draft-policy/tools.ts'), 'utf8');
-      const artifacts = readFileSync(join(repoRoot, '.pgas/pgas-new/draft-policy/artifacts.json'), 'utf8');
+      const qActionNames = [
+        'record_q1_purpose',
+        'record_q2_entry_channel',
+        'record_q3_stages',
+        'record_q4_transitions',
+        'record_q5_delegation',
+        'record_q6_completion',
+      ] as const;
+      const qRecordedPaths = [
+        'intake.q1_recorded',
+        'intake.q2_recorded',
+        'intake.q3_recorded',
+        'intake.q4_recorded',
+        'intake.q5_recorded',
+        'intake.q6_recorded',
+      ] as const;
 
-      expect(spec).toContain('risk-based policy drafting');
-      expect(spec).toContain('policy_objectives');
-      expect(spec).toContain('risk_appetite');
-      expect(spec).toContain('approve_outline');
-      expect(spec).toContain('draft_section');
-      expect(spec).toContain('render_policy_outputs');
-      expect(spec).toContain('outputs.html');
-      expect(spec).toContain('outputs.word');
-      expect(parsed.control_plane.version).toBe(1);
-      expect(Object.keys(parsed.control_plane.controls)).toEqual(
-        expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]),
+      expect(parsed.modes.intake_intelligence.vocabulary).toEqual(
+        expect.arrayContaining([
+          'record_program_target',
+          'choose_design_path',
+          'apply_default_skeleton',
+          'ask_design_question',
+          ...qActionNames,
+          'record_program_intake_finalize',
+          'confirm_design',
+          'reject_design_and_revise_q1',
+          'reject_design_and_revise_q2',
+          'reject_design_and_revise_q3',
+          'reject_design_and_revise_q4',
+          'reject_design_and_revise_q5',
+          'reject_design_and_revise_q6',
+        ]),
       );
-      expect(parsed.channels.user_confirmation.structured_decision).toBe(true);
+      expect(parsed.modes.intake_intelligence.vocabulary).not.toContain('record_program_intake');
+      expect(parsed.modes.architecture_design.vocabulary).toEqual(
+        expect.arrayContaining(['synthesize_program_spec']),
+      );
+      expect(parsed.modes.architecture_design.preconditions?.synthesize_program_spec).toEqual(
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'program.design_confirmed' }]),
+      );
+      expect(parsed.modes.architecture_design.transitions).toEqual([
+        { target: 'scaffold_plan', guard: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
+      ]);
+      expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
+      expect(parsed.modes.intake_intelligence.transitions).toEqual(
+        expect.arrayContaining([
+          { target: 'repo_targeting', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_program_target).toEqual(
+        expect.arrayContaining([{ kind: 'FieldFalsy', path: 'program.target_dir_confirmed' }]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.choose_design_path).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
+          { kind: 'FieldFalsy', path: 'program.design_path' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.apply_default_skeleton).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldEquals', path: 'program.design_path', value: 'default' },
+          { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_q1_purpose).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldEquals', path: 'program.design_path', value: 'design' },
+          { kind: 'FieldFalsy', path: 'intake.q1_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_q2_entry_channel).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.q1_recorded' },
+          { kind: 'FieldFalsy', path: 'intake.q2_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_q3_stages).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.q2_recorded' },
+          { kind: 'FieldFalsy', path: 'intake.q3_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_q4_transitions).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.q3_recorded' },
+          { kind: 'FieldFalsy', path: 'intake.q4_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_q5_delegation).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.q4_recorded' },
+          { kind: 'FieldFalsy', path: 'intake.q5_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_q6_completion).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.q5_recorded' },
+          { kind: 'FieldFalsy', path: 'intake.q6_recorded' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.record_program_intake_finalize).toEqual(
+        expect.arrayContaining([
+          ...qRecordedPaths.map((path) => ({ kind: 'FieldTruthy', path })),
+          { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.confirm_design).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
+          { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
+          { kind: 'FieldFalsy', path: 'program.design_confirmed' },
+          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.reject_design_and_revise_q3).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
+          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
+        ]),
+      );
+
+      expect(parsed.action_map.record_program_target.mutations).toEqual([
+        { op: 'MSet', path: 'program.slug', from_arg: 'slug' },
+        { op: 'MSet', path: 'program.name', from_arg: 'name' },
+        { op: 'MSet', path: 'program.target_dir', from_arg: 'target_dir' },
+        { op: 'MSet', path: 'program.target_dir_confirmed', value: true },
+      ]);
+      expect(parsed.action_map.choose_design_path.mutations).toEqual([
+        { op: 'MSet', path: 'program.design_path', from_arg: 'choice' },
+      ]);
+      expect(parsed.action_map.apply_default_skeleton.mutations).toEqual([
+        { op: 'MSet', path: 'intake.purpose', value: '' },
+        { op: 'MSet', path: 'intake.q1_recorded', value: true },
+        { op: 'MSet', path: 'intake.entry_channel', value: 'user_text' },
+        { op: 'MSet', path: 'intake.q2_recorded', value: true },
+        {
+          op: 'MSet',
+          path: 'intake.stages_json',
+          value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]',
+        },
+        { op: 'MSet', path: 'intake.q3_recorded', value: true },
+        {
+          op: 'MSet',
+          path: 'intake.transitions_json',
+          value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]',
+        },
+        { op: 'MSet', path: 'intake.q4_recorded', value: true },
+        { op: 'MSet', path: 'intake.delegation_json', value: '{}' },
+        { op: 'MSet', path: 'intake.q5_recorded', value: true },
+        {
+          op: 'MSet',
+          path: 'intake.completion_json',
+          value: '{"final_stage":"complete","guard_field":"work.example_ready"}',
+        },
+        { op: 'MSet', path: 'intake.q6_recorded', value: true },
+        { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
+      ]);
+      expect(parsed.action_map.ask_design_question).toMatchObject({
+        description: 'Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round\'s inputs.user_text carries the answer.',
+        channel: 'widget_output',
+        arg_descriptions: {
+          question_number: 'Which Q is being asked (1-6).',
+          question_text: 'The question prompt to display to the user.',
+        },
+      });
+      expect(parsed.action_map.ask_design_question.mutations).toEqual([
+        { op: 'MSet', path: 'intake.last_question_asked', from_arg: 'question_number' },
+        { op: 'MSet', path: 'intake.last_question_text', from_arg: 'question_text' },
+      ]);
+      expect(parsed.action_map.record_q1_purpose).toMatchObject({
+        description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does.",
+        channel: 'widget_output',
+      });
+      expect(parsed.action_map.record_q1_purpose.mutations).toEqual([
+        { op: 'MSet', path: 'intake.purpose', from_arg: 'purpose' },
+        { op: 'MSet', path: 'intake.q1_recorded', value: true },
+      ]);
+      expect(parsed.action_map.record_q2_entry_channel.mutations).toEqual([
+        { op: 'MSet', path: 'intake.entry_channel', from_arg: 'entry_channel' },
+        { op: 'MSet', path: 'intake.q2_recorded', value: true },
+      ]);
+      expect(parsed.action_map.record_q3_stages.mutations).toEqual([
+        { op: 'MSet', path: 'intake.stages_json', from_arg: 'stages_json' },
+        { op: 'MSet', path: 'intake.q3_recorded', value: true },
+      ]);
+      expect(parsed.action_map.record_q4_transitions.mutations).toEqual([
+        { op: 'MSet', path: 'intake.transitions_json', from_arg: 'transitions_json' },
+        { op: 'MSet', path: 'intake.q4_recorded', value: true },
+      ]);
+      expect(parsed.action_map.record_q5_delegation.mutations).toEqual([
+        { op: 'MSet', path: 'intake.delegation_json', from_arg: 'delegation_json' },
+        { op: 'MSet', path: 'intake.q5_recorded', value: true },
+      ]);
+      expect(parsed.action_map.record_q6_completion.mutations).toEqual([
+        { op: 'MSet', path: 'intake.completion_json', from_arg: 'completion_json' },
+        { op: 'MSet', path: 'intake.q6_recorded', value: true },
+      ]);
+      expect(parsed.action_map.record_program_intake_finalize).toMatchObject({
+        description: 'Final commit of the design interview once all 6 Q-answers are recorded. Idempotent. The LLM should call this immediately after record_q6_completion fires.',
+        channel: 'widget_output',
+      });
+      expect(parsed.action_map.record_program_intake_finalize.mutations).toEqual([
+        { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
+      ]);
+      expect(parsed.action_map).not.toHaveProperty('record_program_intake');
+      expect(parsed.action_map.confirm_design.mutations).toEqual([
+        { op: 'MSet', path: 'program.design_confirmed', value: true },
+      ]);
+      expect(parsed.action_map.reject_design_and_revise_q3.mutations).toEqual([
+        { op: 'MSet', path: 'intake.q3_recorded', value: false },
+        { op: 'MSet', path: 'program.design_confirmed', value: false },
+      ]);
+      expect(parsed.action_map.synthesize_program_spec).toMatchObject({
+        description: 'Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete.',
+        channel: 'widget_output',
+      });
+      expect(parsed.action_map.synthesize_program_spec.mutations).toEqual([
+        { op: 'MSet', path: 'program.synthesis_complete', value: true },
+      ]);
+      expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+          { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+          { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
+          { kind: 'FieldFalsy', path: 'artifact_plan.approved' },
+          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+        ]),
+      );
+      expect(parsed.modes.scaffold_plan.preconditions?.plan_artifacts).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+          { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+          { kind: 'FieldFalsy', path: 'artifact_plan.status' },
+          { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
+        ]),
+      );
       expect(parsed.ingestion.user_confirmation).toEqual([
+        'inputs.user_decision',
         'inputs.user_decision.decision',
         'inputs.user_decision.instruction',
         'inputs.user_decision.note_mode',
         'inputs.user_decision.timestamp',
       ]);
-      expect(parsed.projection.intake.include).toEqual(expect.arrayContaining(['inputs.user_text']));
-      expect(parsed.projection.outline.include).toEqual(
-        expect.arrayContaining(['inputs.user_text', 'inputs.user_decision', 'inputs.user_decision.decision', 'inputs.user_decision.instruction']),
-      );
-      expect(parsed.projection.drafting.include).toEqual(expect.arrayContaining(['inputs.user_text']));
-      expect(parsed.projection.revision.include).toEqual(expect.arrayContaining(['inputs.user_text']));
-      expect(parsed.guidance.intake).toEqual(expect.arrayContaining([expect.stringContaining('collect_structured_data')]));
-      expect(parsed.guidance.outline).toEqual(expect.arrayContaining([expect.stringContaining('never call record_user_note')]));
-      expect(parsed.schema['intake.fields']).toBe('object');
-      expect(parsed.schema['inputs.user_decision.decision']).toBe('string');
-      expect(parsed.schema['inputs.user_decision.instruction']).toBe('string');
-      expect(parsed.modes.outline.preconditions?.approve_outline).toEqual(
+      expect(parsed.projection.intake_intelligence.include).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
-          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'outline.sections' }),
+          'inputs.user_text',
+          'inputs.user_decision',
+          'inputs.user_decision.decision',
+          'inputs.user_decision.instruction',
+          'inputs.user_decision.note_mode',
+          'inputs.user_decision.timestamp',
+          'intake.purpose',
+          'intake.q1_recorded',
+          'intake.entry_channel',
+          'intake.q2_recorded',
+          'intake.stages_json',
+          'intake.q3_recorded',
+          'intake.transitions_json',
+          'intake.q4_recorded',
+          'intake.delegation_json',
+          'intake.q5_recorded',
+          'intake.completion_json',
+          'intake.q6_recorded',
+          'intake.program_intake_finalized',
+          'program.slug',
+          'program.name',
+          'program.target_dir',
+          'program.target_dir_confirmed',
+          'program.design_path',
+          'program.design_confirmed',
+          'program.skip_dimensions',
         ]),
       );
-      expect(parsed.modes.drafting.preconditions?.render_policy_outputs).toEqual(
+      expect(parsed.projection.branch_write.include).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'draft.sections' }),
+          'program.slug',
+          'program.name',
+          'program.target_dir',
+          'repo.target_kind',
+          'program.synthesis_complete',
         ]),
       );
-      expect(parsed.modes.revision.preconditions?.render_policy_outputs).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'draft.sections' }),
-        ]),
-      );
-      expect(parsed.schema['outline.sections']).toBe('object');
-      expect(parsed.schema['outputs.html']).toBe('object');
-      expect(parsed.schema['outputs.word']).toBe('object');
-      expect(tools).toContain('revise_section');
-      expect(artifacts).toContain('programs/draft-policy/specs.yml');
-      expect(artifacts).not.toContain('{{');
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('renders web-scraper artifacts with hard network guardrails encoded in the spec, tools, and handlers', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-web-scraper-'));
-    try {
-      const result = renderExistingRepoAttachment({
-        repoRoot,
-        manifest: VALID_MANIFEST,
-        slug: 'web-scraper',
-        name: 'Web Scraper',
-        template: 'web-scraper',
-        mandate: 'Ethical legal corpus scraper with HARD network guardrails',
+      expect(parsed.schema).toMatchObject({
+        'inputs.user_text': 'string',
+        'inputs.user_decision': 'object',
+        'inputs.user_decision.decision': 'string',
+        'inputs.user_decision.instruction': 'string',
+        'inputs.user_decision.note_mode': 'string',
+        'inputs.user_decision.timestamp': 'string',
+        'program.design_path': 'string',
+        'program.design_confirmed': 'boolean',
+        'program.synthesis_complete': 'boolean',
+        'program.target_dir': 'string',
+        'program.target_dir_confirmed': 'boolean',
+        'program.skip_dimensions': 'array',
+        'program.skip_dimensions.*': 'string',
+        'intake.last_question_asked': 'number',
+        'intake.last_question_text': 'string',
+        'intake.purpose': 'string',
+        'intake.q1_recorded': 'boolean',
+        'intake.entry_channel': 'string',
+        'intake.q2_recorded': 'boolean',
+        'intake.stages_json': 'string',
+        'intake.q3_recorded': 'boolean',
+        'intake.transitions_json': 'string',
+        'intake.q4_recorded': 'boolean',
+        'intake.delegation_json': 'string',
+        'intake.q5_recorded': 'boolean',
+        'intake.completion_json': 'string',
+        'intake.q6_recorded': 'boolean',
+        'intake.program_intake_finalized': 'boolean',
       });
-
-      expect(result.written).toEqual([
-        'programs/web-scraper/specs.yml',
-        'programs/web-scraper/registration.ts',
-        'programs/web-scraper/handlers.ts',
-        'programs/web-scraper/tools.ts',
-        '.pgas/pgas-new/web-scraper/dossier.yml',
-        '.pgas/pgas-new/web-scraper/artifacts.json',
-        'audit/PGAS-NEW-web-scraper.md',
-      ]);
-
-      const spec = readFileSync(join(repoRoot, 'programs/web-scraper/specs.yml'), 'utf8');
-      const tools = readFileSync(join(repoRoot, 'programs/web-scraper/tools.ts'), 'utf8');
-      const handlers = readFileSync(join(repoRoot, 'programs/web-scraper/handlers.ts'), 'utf8');
-      const dossier = readFileSync(join(repoRoot, '.pgas/pgas-new/web-scraper/dossier.yml'), 'utf8');
-      const parsed = load(spec) as {
-        modes: Record<string, {
-          vocabulary?: string[];
-          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown }>>;
-          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
-        }>;
-        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
-        proceed_to: Record<string, string>;
-        schema: Record<string, string>;
-        terminal: string[];
-      };
-
-      // 9 modes (8 active + blocked terminal pair) — matches the handoff.
-      expect(Object.keys(parsed.modes)).toEqual([
-        'intake',
-        'intelligence',
-        'egress_verification',
-        'web_analysis',
-        'strategy_review',
-        'scraping',
-        'asset_verification',
-        'complete',
-        'blocked',
-      ]);
-      expect(parsed.terminal).toEqual(['complete', 'blocked']);
-
-      // No analysis call without confirmed egress.
-      const analysisTools = ['check_robots_and_terms', 'analyze_html_sample', 'playwright_snapshot', 'vision_analyze_snapshot'];
-      for (const tool of analysisTools) {
-        expect(parsed.modes.web_analysis.preconditions?.[tool]).toEqual(
-          expect.arrayContaining([expect.objectContaining({ kind: 'FieldTruthy', path: 'egress.confirmed' })]),
-        );
-      }
-
-      // No scraping without confirmed egress AND user-approved strategy AND last asset verified.
-      expect(parsed.modes.scraping.preconditions?.fetch_one_asset).toEqual(
+      expect(parsed.schema).not.toHaveProperty('intake.program_intake_recorded');
+      expect(parsed.schema).not.toHaveProperty('program.synthesized_spec');
+      expect(parsed.guidance.architecture_design).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'egress.confirmed' }),
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'strategy.user_approved' }),
-          expect.objectContaining({ kind: 'FieldEquals', path: 'scraping.last_asset_verified', value: true }),
+          expect.stringContaining('call synthesize_program_spec'),
+          expect.stringContaining('in-process transit'),
         ]),
       );
-
-      // Strategy approval requires the user_confirmation trigger.
-      expect(parsed.modes.strategy_review.preconditions?.approve_scraping_strategy).toEqual(
+      expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
+      expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
+      expect(parsed.guidance.repo_targeting.join('\n')).toContain('mandatory between confirm_design and architecture_design');
+      expect(parsed.guidance.repo_targeting.join('\n')).toContain('call authorize_standalone_target');
+      expect(parsed.guidance.intake_intelligence).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
-          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'strategy.proposal_json' }),
+          expect.stringContaining('program.target_dir_confirmed is not true'),
+          expect.stringContaining('call choose_design_path'),
+          expect.stringContaining('call apply_default_skeleton'),
+          expect.stringContaining('Design interview enforcement (Q1-Q6)'),
+          expect.stringContaining('ask_design_question with question_number'),
+          expect.stringContaining('record_qN_<topic>'),
+          expect.stringContaining('record_program_intake_finalize'),
+          expect.stringContaining('Do NOT attempt to batch multiple answers into one action'),
+          expect.stringContaining("intent='confirm_design'"),
+          expect.stringContaining('reject_design_and_revise_qN'),
+          expect.stringContaining("Don't re-ask anything you already extracted"),
         ]),
       );
-
-      // Asset_verification transitions: back to scraping when verified, complete when budget exhausted, blocked on user_decision required.
-      expect(parsed.modes.asset_verification.transitions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            target: 'scraping',
-            guard: expect.objectContaining({ kind: 'FieldEquals', path: 'scraping.last_asset_verified', value: true }),
-          }),
-          expect.objectContaining({
-            target: 'complete',
-            guard: expect.objectContaining({ kind: 'FieldTruthy', path: 'scraping.budget_exhausted' }),
-          }),
-          expect.objectContaining({
-            target: 'blocked',
-            guard: expect.objectContaining({ kind: 'FieldTruthy', path: 'verification.requires_user_decision' }),
-          }),
-        ]),
-      );
-
-      // Durable ledger schema declared.
-      expect(parsed.schema['ledger.path']).toBe('string');
-      expect(parsed.schema['ledger.entries_count']).toBe('number');
-      expect(parsed.schema['scraping.last_asset_verified']).toBe('boolean');
-      expect(parsed.schema['scraping.budget_exhausted']).toBe('boolean');
-      expect(parsed.schema['strategy.user_approved']).toBe('boolean');
-      expect(parsed.schema['egress.confirmed']).toBe('boolean');
-
-      // Mandate landed (literal block scalar — newlines/colons in user mandates are safe).
-      expect(spec).toContain('Ethical legal corpus scraper with HARD network guardrails');
-      expect(dossier).toContain('Ethical legal corpus scraper with HARD network guardrails');
-      expect(dossier).toContain('declared_purpose');
-      expect(dossier).toContain('Stop rather than evade blocks');
-
-      // fetch_one_asset MUST land its asset id and force the verification step (last_asset_verified=false on fetch).
-      expect(parsed.action_map.fetch_one_asset.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'scraping.last_asset_id', from_arg: 'asset_id' }),
-          expect.objectContaining({ path: 'scraping.last_asset_verified', value: false }),
-        ]),
-      );
-
-      // tools.ts encodes the rejection logic for URL arrays, wildcards, xargs, parallel, etc.
-      expect(tools).toContain('FORBIDDEN_PAYLOAD_KEYS');
-      expect(tools).toContain('xargs');
-      expect(tools).toContain('parallel');
-      expect(tools).toContain('payload may not declare plural field');
-      expect(tools).toContain('url must not contain wildcards');
-      expect(tools).toContain('url must be a single string, not an array');
-
-      // handlers.ts has the array-rejection plumb on every networked tool.
-      expect(handlers).toContain('rejectArrays');
-      expect(handlers).toContain('attachment_points');
-      expect(handlers).toContain('fetch_one_asset');
-      expect(handlers).toContain('robots_fetcher');
-
-      // proceed_to wiring covers the canonical ladder.
-      expect(parsed.proceed_to.record_intake).toBe('intelligence');
-      expect(parsed.proceed_to.confirm_egress_ip).toBe('web_analysis');
-      expect(parsed.proceed_to.approve_scraping_strategy).toBe('scraping');
-      expect(parsed.proceed_to.fetch_one_asset).toBe('asset_verification');
-      expect(parsed.proceed_to.complete_run).toBe('complete');
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('renders the social-media-agent program in a standalone scaffold via --template', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-sma-'));
-    try {
-      const result = renderStandaloneScaffold({
-        outDir,
-        slug: 'social-media-agent',
-        name: 'Social Media Agent',
-        template: 'social-media-agent',
-        mandate:
-          'Manage a demo social media account via mocked web navigation only; never log into a real account; never post to a real account; explicit human approval before every publish.',
-      });
-
-      expect(result.written).toEqual(
-        createStandaloneArtifactPlan({ slug: 'social-media-agent', name: 'Social Media Agent' }).artifacts.map(
-          (artifact) => artifact.path,
-        ),
-      );
-
-      const spec = readFileSync(join(outDir, 'src/programs/social-media-agent/specs.yml'), 'utf8');
-      const tools = readFileSync(join(outDir, 'src/programs/social-media-agent/tools.ts'), 'utf8');
-      const handlers = readFileSync(join(outDir, 'src/programs/social-media-agent/handlers.ts'), 'utf8');
-      const dossier = readFileSync(join(outDir, '.pgas/pgas-new/social-media-agent/dossier.yml'), 'utf8');
-      const parsed = load(spec) as {
-        modes: Record<string, {
-          vocabulary?: string[];
-          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
-          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
-        }>;
-        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
-        terminal: string[];
-        schema: Record<string, string>;
-      };
-
-      expect(Object.keys(parsed.modes)).toEqual([
-        'intake',
-        'mock_adapter_check',
-        'session_bootstrap',
-        'monitor_feed',
-        'draft_review',
-        'human_approval',
-        'post_publish',
-        'post_verification',
-        'complete',
-        'blocked',
-      ]);
-      expect(parsed.terminal).toEqual(['complete', 'blocked']);
-
-      expect(parsed.modes.mock_adapter_check.preconditions?.confirm_mock_adapter).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldEquals', path: 'safety.no_real_credentials', value: true }),
-        ]),
-      );
-      expect(parsed.modes.session_bootstrap.preconditions?.bootstrap_mock_session).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldEquals', path: 'browser.adapter_kind', value: 'mock' }),
-        ]),
-      );
-      expect(parsed.modes.human_approval.preconditions?.approve_draft).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'TriggerType', triggerSet: ['user_confirmation'] }),
-          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' }),
-        ]),
-      );
-      expect(parsed.modes.post_publish.preconditions?.publish_one_draft).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldTruthy', path: 'approval.user_approved' }),
-          expect.objectContaining({ kind: 'FieldEquals', path: 'browser.adapter_kind', value: 'mock' }),
-          expect.objectContaining({ kind: 'FieldEquals', path: 'post.last_post_verified', value: true }),
-        ]),
-      );
-
-      expect(parsed.action_map.publish_one_draft.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'post.last_post_id', from_arg: 'post_id' }),
-          expect.objectContaining({ path: 'post.last_post_verified', value: false }),
-        ]),
-      );
-
-      expect(parsed.schema['safety.no_real_credentials']).toBe('boolean');
-      expect(parsed.schema['browser.adapter_kind']).toBe('string');
-      expect(parsed.schema['approval.user_approved']).toBe('boolean');
-      expect(parsed.schema['post.last_post_verified']).toBe('boolean');
-
-      expect(tools).toContain('REAL_PLATFORM_DOMAINS');
-      expect(tools).toContain('twitter.com');
-      expect(tools).toContain('mock/demo URLs only');
-      expect(tools).toContain('publish exactly one draft');
-      expect(tools).toContain('no real credentials accepted');
-      expect(tools).toContain('FORBIDDEN_PAYLOAD_KEYS');
-
-      expect(handlers).toContain('rejectArrays');
-      expect(handlers).toContain('assertMockAdapter');
-      expect(handlers).toContain('attachment_points');
-      expect(handlers).toContain('mock_browser_adapter');
-      expect(handlers).toContain('mock_publisher');
-
-      expect(dossier).toContain('Manage a demo social media account via mocked web navigation only');
-      expect(dossier).toContain('No real social media credentials');
-      expect(dossier).toContain('mock_browser_adapter');
-      expect(dossier).toContain('forbidden_capabilities');
-      expect(dossier).toContain('navigate_real_platform');
+      expect(parsed.guidance.intake_intelligence.join('\n')).not.toContain('record_program_intake with');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
@@ -673,7 +734,7 @@ describe('template renderer', () => {
   });
 
   it('declares the internal system_mode_entry continuation channel in generated specs', () => {
-    for (const template of ['pgas-new-foundry', 'policy-drafting', 'web-scraper', 'social-media-agent'] as const) {
+    for (const template of ['pgas-new-foundry'] as const) {
       const outDir = mkdtempSync(join(tmpdir(), `pgas-new-mode-entry-${template}-`));
       try {
         renderStandaloneScaffold({
@@ -694,117 +755,12 @@ describe('template renderer', () => {
         expect(parsed.channels.system_mode_entry).toEqual({ direction: 'In', sync: 'Async' });
         expect(parsed.ingestion.system_mode_entry).toEqual(['inputs.mode_entry']);
         expect(parsed.schema['inputs.mode_entry']).toBe('object');
-        for (const mode of Object.values(parsed.modes)) {
-          expect(mode.channels).toContain('system_mode_entry');
-        }
+        const firstMode = Object.keys(parsed.modes)[0];
+        expect(firstMode).toBeDefined();
+        expect(parsed.modes[firstMode as string]?.channels).toContain('system_mode_entry');
       } finally {
         rmSync(outDir, { recursive: true, force: true });
       }
-    }
-  });
-
-  it('renders social-media-agent artifacts via render-attach with mock-only guardrails', () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-sma-'));
-    try {
-      const result = renderExistingRepoAttachment({
-        repoRoot,
-        manifest: VALID_MANIFEST,
-        slug: 'social-media-agent',
-        name: 'Social Media Agent',
-        template: 'social-media-agent',
-        mandate: 'Demo-only social media account agent operating through a mocked browser adapter with explicit human approval gates before every publish.',
-      });
-
-      expect(result.written).toEqual([
-        'programs/social-media-agent/specs.yml',
-        'programs/social-media-agent/registration.ts',
-        'programs/social-media-agent/handlers.ts',
-        'programs/social-media-agent/tools.ts',
-        '.pgas/pgas-new/social-media-agent/dossier.yml',
-        '.pgas/pgas-new/social-media-agent/artifacts.json',
-        'audit/PGAS-NEW-social-media-agent.md',
-      ]);
-
-      const spec = readFileSync(join(repoRoot, 'programs/social-media-agent/specs.yml'), 'utf8');
-      const dossier = readFileSync(join(repoRoot, '.pgas/pgas-new/social-media-agent/dossier.yml'), 'utf8');
-      expect(spec).toContain('mock_adapter_check');
-      expect(spec).toContain('approve_draft');
-      expect(spec).toContain('publish_one_draft');
-      expect(dossier).toContain('Demo-only social media account agent');
-      expect(dossier).toContain('forbidden_capabilities');
-    } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('enforces social-media-agent safety gates H1-H4 + M5 from issue #30', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-sma-safety-'));
-    try {
-      renderStandaloneScaffold({
-        outDir,
-        slug: 'sma',
-        name: 'SMA',
-        template: 'social-media-agent',
-      });
-
-      const spec = readFileSync(join(outDir, 'src/programs/sma/specs.yml'), 'utf8');
-      const tools = readFileSync(join(outDir, 'src/programs/sma/tools.ts'), 'utf8');
-      const handlers = readFileSync(join(outDir, 'src/programs/sma/handlers.ts'), 'utf8');
-
-      const parsed = load(spec) as {
-        modes: Record<string, {
-          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown }>>;
-        }>;
-        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
-        ingestion: Record<string, string[]>;
-        schema: Record<string, string>;
-      };
-
-      // H1: record_intake requires inputs.no_real_credentials=true at the spec layer.
-      expect(parsed.modes.intake.preconditions?.record_intake).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.no_real_credentials', value: true }),
-        ]),
-      );
-      // ingestion + schema declare the new user-supplied field.
-      expect(parsed.ingestion.user_text).toEqual(expect.arrayContaining(['inputs.no_real_credentials']));
-      expect(parsed.schema['inputs.no_real_credentials']).toBe('boolean');
-
-      // H2: confirm_mock_adapter requires inputs.adapter_kind=mock at the spec layer.
-      expect(parsed.modes.mock_adapter_check.preconditions?.confirm_mock_adapter).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: 'FieldEquals', path: 'inputs.adapter_kind', value: 'mock' }),
-        ]),
-      );
-      expect(parsed.ingestion.user_text).toEqual(expect.arrayContaining(['inputs.adapter_kind']));
-      expect(parsed.schema['inputs.adapter_kind']).toBe('string');
-
-      // H3: tools.ts wraps every action via safetyValidatedTool — no noopTool pass-through.
-      expect(tools).toContain('safetyValidatedTool');
-      expect(tools).not.toContain('const noopTool');
-      // Every semantic tool registers through safetyValidatedTool.
-      expect(tools).toMatch(/registry\.register\(name, safetyValidatedTool\(name/);
-
-      // H4: approve_draft no longer mutates post.last_post_verified.
-      const approveMutations = parsed.action_map.approve_draft.mutations ?? [];
-      const writesVerified = approveMutations.some((m) => m.path === 'post.last_post_verified');
-      expect(writesVerified).toBe(false);
-
-      // M5: forbidden_capabilities from the dossier are enforced in tools + handlers.
-      expect(tools).toContain('FORBIDDEN_CAPABILITY_NAMES');
-      expect(tools).toContain('navigate_real_platform');
-      expect(tools).toContain('submit_real_credentials');
-      expect(tools).toContain('publish_real_post');
-      expect(tools).toContain('read_real_user_profile');
-      expect(tools).toContain('assertNoForbiddenCapability');
-      expect(handlers).toContain('FORBIDDEN_CAPABILITY_NAMES');
-      expect(handlers).toContain('assertNoForbiddenCapability');
-
-      // Defense-in-depth bonus: assertMockAdapter now covers bootstrap + capture too.
-      expect(handlers).toMatch(/bootstrap_mock_session[\s\S]*?assertMockAdapter\('bootstrap_mock_session'/);
-      expect(handlers).toMatch(/capture_feed_snapshot[\s\S]*?assertMockAdapter\('capture_feed_snapshot'/);
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
     }
   });
 
@@ -815,7 +771,7 @@ describe('template renderer', () => {
       const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
       const parsed = load(spec) as {
         modes: Record<string, {
-          preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown }>>;
+          preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggerSet?: string[] }>>;
           transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
         }>;
         action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
@@ -827,20 +783,26 @@ describe('template renderer', () => {
       expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
       expect(parsed.schema['repo.write_authorized']).toBe('boolean');
       expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+      expect(parsed.schema['repo.wiring_manifest.repo_root']).toBe('string');
+      expect(parsed.schema['repo.wiring_manifest_json']).toBe('string');
+      expect(parsed.schema['repo.allowed_imports']).toBe('array');
       expect(parsed.schema['intake.research_allowed']).toBe('boolean');
+      expect(parsed.schema['intake.user_research_authorized']).toBe('boolean');
       expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
       expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
       expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
       expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
+      expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
+      expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
       expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
       expect(parsed.proceed_to.run_static_verification).toBeUndefined();
       expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
       expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
       expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.research_allowed' }]),
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
       );
       expect(parsed.modes.architecture_design.preconditions?.web_research).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.research_allowed' }]),
+        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
       );
       expect(parsed.modes.repo_targeting.preconditions?.authorize_existing_repo_target).toEqual(
         expect.arrayContaining([
@@ -883,10 +845,20 @@ describe('template renderer', () => {
           expect.objectContaining({ path: 'repo.blocked', value: false }),
         ]),
       );
+      expect(parsed.action_map.authorize_standalone_target.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'repo.target_kind', value: 'standalone_repo' }),
+          expect.objectContaining({ path: 'repo.write_authorized', value: true }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'not_required' }),
+        ]),
+      );
       expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ path: 'repo.wiring_manifest.status', from_arg: 'status' }),
-          expect.objectContaining({ path: 'repo.wiring_manifest.path', from_arg: 'path' }),
+          expect.objectContaining({ path: 'repo.target_kind', value: 'existing_repo' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.repo_root', from_arg: 'repo_root' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'valid' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' }),
+          expect.objectContaining({ path: 'repo.write_authorized', value: true }),
         ]),
       );
       expect(parsed.action_map.run_static_verification.mutations).toEqual(
@@ -901,64 +873,6 @@ describe('template renderer', () => {
           expect.objectContaining({ path: 'graduation.ready_for_live', value: true }),
         ]),
       );
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
-    }
-  });
-
-  it('renders policy-drafting program in a standalone scaffold via --template', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-pd-'));
-    try {
-      const result = renderStandaloneScaffold({
-        outDir,
-        slug: 'draft-policy',
-        name: 'Draft Policy',
-        template: 'policy-drafting',
-        mandate: 'Risk-based policy drafting for SimoneOS.',
-      });
-
-      expect(result.written).toEqual(
-        createStandaloneArtifactPlan({ slug: 'draft-policy', name: 'Draft Policy' }).artifacts.map(
-          (a) => a.path,
-        ),
-      );
-
-      const spec = readFileSync(join(outDir, 'src/programs/draft-policy/specs.yml'), 'utf8');
-      for (const artifact of result.plan.artifacts) {
-        expect(readFileSync(join(outDir, artifact.path), 'utf8')).not.toContain('{{');
-      }
-      expect(spec).toContain('policy_objectives');
-      expect(spec).toContain('approve_outline');
-      expect(spec).toContain('render_policy_outputs');
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
-    }
-  });
-
-  it('renders web-scraper program in a standalone scaffold via --template', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-standalone-ws-'));
-    try {
-      const result = renderStandaloneScaffold({
-        outDir,
-        slug: 'web-scraper',
-        name: 'Web Scraper',
-        template: 'web-scraper',
-        mandate: 'Ethical corpus scraper with hard network guardrails.',
-      });
-
-      expect(result.written).toEqual(
-        createStandaloneArtifactPlan({ slug: 'web-scraper', name: 'Web Scraper' }).artifacts.map(
-          (a) => a.path,
-        ),
-      );
-
-      const spec = readFileSync(join(outDir, 'src/programs/web-scraper/specs.yml'), 'utf8');
-      for (const artifact of result.plan.artifacts) {
-        expect(readFileSync(join(outDir, artifact.path), 'utf8')).not.toContain('{{');
-      }
-      expect(spec).toContain('egress.confirmed');
-      expect(spec).toContain('fetch_one_asset');
-      expect(spec).toContain('strategy.user_approved');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }

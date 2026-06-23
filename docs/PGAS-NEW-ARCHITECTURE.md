@@ -1,8 +1,22 @@
 # PGAS-New Architecture
 
-Status: shipped; current release v2.3.0 on main.
+Status: v3.0 release candidate on `v3-rebuild`; current release target v3.0.0.
+
+## Changelog
+
+### v3.0.0
+
+- Converged the foundry back onto the original PGAS-new design after 16 phases of focused fixes.
+- Removed the deprecated per-domain `--template policy-drafting`, `--template web-scraper`, and `--template social-media-agent` scaffold paths. The graduation programs remain only as read-only evidence under `docs/graduation-evidence/`.
+- Proven by the section 10 ALL PASS gate against live Qwen at commit `8699131`.
+
+## What pgas-new IS
 
 `pgas-new` is a PGAS-specific foundry for producing new PGAS programs. It is not a general coding assistant. Its responsibility is to govern the creation of a PGAS program: collect the mandate, research when allowed, design the PGAS architecture, plan artifacts, write only planned artifacts, verify deterministically, run a user-selected live provider graduation, rebase on the current target repo, and open a PR.
+
+In v3.0 the foundry itself is a PGAS program. The bare `pgas-new` command starts the foundry REPL, whose modes, actions, control plane, notebook state, and projections are declared in `src/foundry-program/`. Per-domain programs are synthesized by completing the foundry design interview and approving the governed artifact plan, not by choosing a preset template flag.
+
+The only remaining `--template` value is `pgas-new-foundry`, retained for the legacy foundry bootstrap render path. Consumer template values are removed in v3.0; callers that pass them receive an error pointing to the bare REPL.
 
 ## PGAS Contract
 
@@ -32,14 +46,14 @@ The state dictionary is the source of truth. Conversation history is not state.
 - `graduation`: static, live, and rebase verification status.
 - `curator_requests`: requests to the repo curator.
 
-## Modes And Gates
+## 10-Mode Workflow
 
 | Mode | Purpose | Main Legal Actions | Exit Gate |
 | --- | --- | --- | --- |
-| `intake_intelligence` | Capture mandate, notebook notes, and confirmed research scope. | `record_user_note`, `confirm_research_scope`, `record_user_requested_research`, `web_research`, session controls | Mandate exists. |
+| `intake_intelligence` | Capture target identity, Q1-Q6 design intake, notebook notes, and confirmed research scope. | `record_program_target`, `choose_design_path`, `apply_default_skeleton`, `ask_design_question`, `record_q1_purpose`, `record_q2_entry_channel`, `record_q3_stages`, `record_q4_transitions`, `record_q5_delegation`, `record_q6_completion`, `record_program_intake_finalize`, `confirm_design`, `web_research`, session controls | Design intake finalized and approved through `user_confirmation`. |
 | `repo_targeting` | Choose standalone or existing repo and load wiring manifest. | `select_repo_target`, `authorize_standalone_target`, `load_wiring_manifest`, `authorize_existing_repo_target`, `create_curator_request` | Target authorized, or route to curator. |
-| `architecture_design` | Design the PGAS program and service attachment points. | `design_architecture`, `web_research`, `record_user_note` | Architecture marked ready. |
-| `scaffold_plan` | Produce first-class artifact plan before writes. | `plan_artifacts`, `approve_artifact_plan`, `create_curator_request` | Artifact plan approved. |
+| `architecture_design` | Synthesize the PGAS program spec from approved intake and service attachment points. | `synthesize_program_spec`, `design_architecture`, `web_research`, `record_user_note` | Deterministic synthesized spec is available in in-process transit. |
+| `scaffold_plan` | Produce first-class artifact plan from the synthesized spec before writes. | `plan_artifacts`, `approve_artifact_plan`, `create_curator_request` | Artifact plan approved through `user_confirmation`. |
 | `branch_write` | Write only planned artifacts. | `write_scaffold_artifacts`, `git_status` | Artifacts written. |
 | `static_verify` | Install/typecheck/test deterministically and confirm live graduation intent. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification`, `confirm_live_provider_intent` | Static verification passed and live-provider intent confirmed. |
 | `live_verify` | Verify through the external API with a real provider. | `run_api_blackbox_verification`, `run_live_provider_verification` | Live verification passed. |
@@ -53,7 +67,7 @@ Every mode includes session controls: `session_new`, `session_abort_current`, `s
 
 Existing-repo attachment is bound to `.pgas/wiring.yml`. Without that fixed-path manifest, `pgas-new` refuses writes and produces a curator request. A valid manifest declares package manager, PGAS package/imports, artifact directories, registration strategy, verification commands, and curator GitHub owner/repo.
 
-If a repo has no manifest, the correct output is a request for the repo curator to publish one. If a manifest exists but required facilities are missing, `pgas-new` stays in planning/request mode until the curator supplies or changes the repo wiring. `render-attach` writes only the planned per-program artifacts, refuses missing/invalid manifests, and refuses to overwrite existing planned files; registration integration remains a curator-owned patch point.
+If a repo has no manifest, the correct output is a request for the repo curator to publish one. If a manifest exists but required facilities are missing, `pgas-new` stays in planning/request mode until the curator supplies or changes the repo wiring. `render-attach` writes only the foundry program artifacts, refuses missing/invalid manifests, and refuses to overwrite existing planned files; registration integration remains a curator-owned patch point. Per-domain existing-repo attachments are generated by the foundry REPL after the design interview, not by `--template <domain>`.
 
 ## Artifact Ownership
 
@@ -65,7 +79,7 @@ Code artifacts are primary objects, not incidental side effects. The artifact pl
 
 The generated program declares a PGAS `control_plane` with free text routed through `ask` and session lifecycle controls: `ask`, `abort`, `new`, `history`, `status`, `resume`, and `help`.
 
-The CLI is a bootstrap/control surface:
+The CLI is a bootstrap/control surface. With no subcommand, `pgas-new` starts the foundry REPL. The legacy render commands remain for the foundry bootstrap path only and accept no per-domain template flags.
 
 - `pgas-new session new`
 - `pgas-new session abort`
@@ -99,4 +113,4 @@ The static ladder is:
 
 Post-rebase verification reruns the static ladder after `gitStatus` and `gitRebaseLatest`. Live-provider evidence is separate from command-runner evidence and is recorded as `liveProviderRoundTrip`.
 
-Static and live graduation are complete through v2.2.0. Future branches must re-run the full static ladder after rebase.
+The v3.0 release candidate has fresh static gates and section 10 live-provider evidence. Release branches must re-run the full static ladder after rebase.

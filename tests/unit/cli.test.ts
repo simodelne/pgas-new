@@ -89,9 +89,9 @@ describe('pgas-new CLI', () => {
     }
   });
 
-  it('prints a deprecation warning while preserving consumer template rendering', async () => {
+  it('rejects removed consumer templates and points users at the bare REPL', async () => {
     for (const template of ['policy-drafting', 'web-scraper', 'social-media-agent']) {
-      const outDir = mkdtempSync(join(tmpdir(), `pgas-new-cli-deprecated-${template}-`));
+      const outDir = mkdtempSync(join(tmpdir(), `pgas-new-cli-removed-${template}-`));
       try {
         const result = await runCli([
           'render-standalone',
@@ -105,29 +105,26 @@ describe('pgas-new CLI', () => {
           template,
         ]);
 
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain('written');
-        expect(result.stderr).toContain(`⚠ --template ${template} is deprecated and will be removed in v3.0.`);
-        expect(result.stderr).toContain(
-          `The ${template} graduation program is preserved in docs/graduation-evidence/ for reference.`,
-        );
-        expect(result.stderr).toContain('Use `pgas-new design <slug>` to interactively design your own program.');
-        expect(result.stderr).toContain('(Phase 2 of the v3.0 plan: ships in v2.8.0.)');
-        expect(readFileSync(join(outDir, `src/programs/${template}/specs.yml`), 'utf8')).not.toContain('{{');
+        expect(result.exitCode).toBe(1);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(`invalid --template: ${template}`);
+        expect(result.stderr).toContain('only pgas-new-foundry is supported');
+        expect(result.stderr).toContain('bare `pgas-new` REPL');
+        expect(readDirSafe(outDir)).toEqual([]);
       } finally {
         rmSync(outDir, { recursive: true, force: true });
       }
     }
   });
 
-  it('marks consumer templates as deprecated in help without deprecating the foundry template', async () => {
+  it('lists only the foundry template in help', async () => {
     const result = await runCli(['help']);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('pgas-new-foundry');
-    expect(result.stdout).toContain('policy-drafting (deprecated)');
-    expect(result.stdout).toContain('web-scraper (deprecated)');
-    expect(result.stdout).toContain('social-media-agent (deprecated)');
+    expect(result.stdout).not.toContain('policy-drafting');
+    expect(result.stdout).not.toContain('web-scraper');
+    expect(result.stdout).not.toContain('social-media-agent');
     expect(result.stdout).not.toContain('pgas-new-foundry (deprecated)');
   });
 
@@ -185,8 +182,6 @@ describe('pgas-new CLI', () => {
         'draft-policy',
         '--name',
         'Draft Policy',
-        '--template',
-        'policy-drafting',
         '--mandate',
         'risk-based policy drafting with outline approval before section-by-section drafting and Word plus HTML output stubs',
       ]);
@@ -194,7 +189,7 @@ describe('pgas-new CLI', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('written');
       expect(result.stdout).toContain('programs/draft-policy/specs.yml');
-      expect(readFileSync(join(repo, 'programs/draft-policy/specs.yml'), 'utf8')).toContain('risk-based policy drafting');
+      expect(readFileSync(join(repo, 'programs/draft-policy/specs.yml'), 'utf8')).toContain('Program: PGAS New');
       expect(readFileSync(join(repo, '.pgas/pgas-new/draft-policy/artifacts.json'), 'utf8')).toContain(
         'programs/draft-policy/specs.yml',
       );

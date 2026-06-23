@@ -21,8 +21,8 @@ else
   fail ".claude-plugin/plugin.json missing or invalid JSON"
 fi
 
-echo "[2/5] plugin.json + package.json version pinned to 2.6.0"
-EXPECTED_VERSION="2.6.0"
+echo "[2/5] plugin.json + package.json version pinned to 3.0.0"
+EXPECTED_VERSION="3.0.0"
 MANIFEST_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version ?? '')" 2>/dev/null)
 PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version ?? '')" 2>/dev/null)
 if [[ "$MANIFEST_VERSION" == "$EXPECTED_VERSION" ]]; then
@@ -42,7 +42,10 @@ for path in \
   src/pgas-new/model.ts \
   src/pgas-new/gates.ts \
   src/pgas-new/template-renderer.ts \
-  templates/pgas-new/program/specs.yml.tmpl \
+  src/foundry-program/specs.yml \
+  src/foundry-program/registration.ts \
+  templates/pgas-new/program/spec-skeleton.yml.tmpl \
+  templates/pgas-new/program/registration-skeleton.ts.tmpl \
   templates/pgas-new/repo/.pgas/wiring.yml.tmpl \
   docs/PGAS-NEW-ARCHITECTURE.md \
   docs/PGAS-NEW-LIVE-GRADUATION.md; do

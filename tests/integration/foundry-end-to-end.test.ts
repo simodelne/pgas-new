@@ -1,0 +1,353 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createTestHarness, type TestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { handlers } from '../../src/foundry-program/handlers.js';
+import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
+import { waitForSnapshot } from './foundry-test-utils.js';
+
+const stages = [
+  { slug: 'intake', is_bootstrap: true },
+  { slug: 'triage' },
+  { slug: 'resolved', is_terminal: true },
+];
+
+const transitions = [
+  { from: 'intake', to: 'triage', trigger: 'ready', guard_field: 'intake.started' },
+  { from: 'triage', to: 'resolved', trigger: 'summary_ready', guard_field: 'triage.summary_ready' },
+];
+
+interface CommandCheck {
+  command: string;
+  status: 'passed' | 'skipped';
+  reason?: string;
+}
+
+const tempRoots: string[] = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+  vi.restoreAllMocks();
+});
+
+describe('foundry end-to-end acceptance gate', () => {
+  it('drives the foundry topology in memory and verifies generated scaffold gates', async () => {
+    const tempRoot = trackedTempRoot('pgas-new-foundry-e2e-');
+    const targetDir = join(tempRoot, 'incident-triage');
+    const openPullRequest = vi.spyOn(handlers, 'open_pull_request');
+    const harness = await createHarness(successAuthorResponses(targetDir));
+
+    try {
+      const seenModes = [await harness.getMode()];
+
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Create an incident triage PGAS program.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the design path.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'scaffold_plan' && snapshot.domain['artifact_plan.status'] === 'draft',
+        'draft artifact plan before approval',
+      );
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const finalSnapshot = await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'pr_graduation' && snapshot.terminal === true,
+        'approval continuation through pr_graduation',
+      );
+
+      expect(await harness.getMode()).toBe('pr_graduation');
+      expect(await harness.getDomain('program.target_dir')).toBe(targetDir);
+      expect(existsSync(targetDir), 'branch_write should create the configured output dir').toBe(true);
+
+      const generatedChecks = runGeneratedChecks(targetDir);
+      expect(generatedChecks).toEqual([
+        expect.objectContaining({ command: 'npm install --no-audit --no-fund', status: expect.stringMatching(/^(passed|skipped)$/u) }),
+        expect.objectContaining({ command: 'npm run typecheck', status: expect.stringMatching(/^(passed|skipped)$/u) }),
+        expect.objectContaining({ command: 'npm test', status: expect.stringMatching(/^(passed|skipped)$/u) }),
+      ]);
+
+      const liveProvider = await probeLiveProvider();
+      expect(liveProvider.status).toMatch(/^(passed|skipped)$/u);
+
+      expect(terminalActionNames(finalSnapshot.rounds)).toEqual(
+        expect.arrayContaining([
+          'confirm_design',
+          'authorize_standalone_target',
+          'synthesize_program_spec',
+          'plan_artifacts',
+          'approve_artifact_plan',
+          'write_scaffold_artifacts',
+          'run_static_verification',
+          'confirm_live_provider_intent',
+          'run_rebase_static_verification',
+        ]),
+      );
+      expect(finalSnapshot.terminal).toBe(true);
+
+      const curatorRequestPath = join(targetDir, 'audit', 'PGAS-NEW-GRADUATION.md');
+      expect(existsSync(curatorRequestPath), 'pr_graduation should have a curator-request artifact to review').toBe(true);
+      expect(readFileSync(curatorRequestPath, 'utf8')).toContain('Incident Triage');
+      expect(openPullRequest).not.toHaveBeenCalled();
+    } finally {
+      await harness.close();
+    }
+  }, 600_000);
+
+  it('reaches curator_request on the refusal path without binding a port', async () => {
+    const tempRoot = trackedTempRoot('pgas-new-foundry-refusal-');
+    const targetDir = join(tempRoot, 'existing-repo');
+    const harness = await createHarness(refusalAuthorResponses(targetDir));
+
+    try {
+      const seenModes = [await harness.getMode()];
+
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Attach to an existing repo.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the default skeleton.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Apply the default.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+
+      expect(await harness.getMode()).toBe('curator_request');
+      const requestPath = join(targetDir, 'audit', 'PGAS-NEW-incident-triage.md');
+      expect(existsSync(requestPath), 'curator_request should render the refusal artifact').toBe(true);
+      expect(readFileSync(requestPath, 'utf8')).toContain('Missing required repo wiring');
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+async function createHarness(authorResponses: TestHarnessAuthorResponse[]): Promise<TestHarness> {
+  return createTestHarness(createPgasNewFoundryProgramEntry(), {
+    programName: 'pgas-new',
+    authorResponses,
+  });
+}
+
+function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] {
+  return [
+    seedStandaloneTarget(targetDir),
+    effect('choose_design_path', { choice: 'design' }),
+    effect('record_q1_purpose', {
+      purpose: 'Route incidents into a triage workflow.',
+    }),
+    effect('record_q2_entry_channel', {
+      entry_channel: 'user_text',
+    }),
+    effect('record_q3_stages', {
+      stages_json: JSON.stringify(stages),
+    }),
+    effect('record_q4_transitions', {
+      transitions_json: JSON.stringify(transitions),
+    }),
+    effect('record_q5_delegation', {
+      delegation_json: JSON.stringify({}),
+    }),
+    effect('record_q6_completion', {
+      completion_json: JSON.stringify({ final_stage: 'resolved', guard_field: 'triage.summary_ready' }),
+    }),
+    effect('record_program_intake_finalize'),
+    effect('confirm_design', { approved: true }),
+    effect('authorize_standalone_target'),
+    effect('synthesize_program_spec'),
+    effect('plan_artifacts'),
+    effect('approve_artifact_plan'),
+    effect('write_scaffold_artifacts', { cwd: targetDir }),
+    effect('run_static_verification', { status: 'passed', evidence_id: 'static-e2e' }),
+    effect('confirm_live_provider_intent'),
+    markLiveVerificationPassed(),
+    markRebasePassed(),
+    effect('run_rebase_static_verification', { status: 'passed', evidence_id: 'rebase-static-e2e' }),
+  ];
+}
+
+function refusalAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] {
+  return [
+    seedBlockedExistingRepoTarget(targetDir),
+    effect('choose_design_path', { choice: 'default' }),
+    effect('apply_default_skeleton'),
+    effect('confirm_design', { approved: true }),
+    effect('create_curator_request', {
+      repo_root: targetDir,
+      slug: 'incident-triage',
+      title: 'Missing required repo wiring',
+      body: 'Missing required repo wiring for an existing-repo attachment.',
+    }),
+  ];
+}
+
+function seedStandaloneTarget(targetDir: string): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      mutation('record_program_target', 'program.slug', 'incident-triage'),
+      mutation('record_program_target', 'program.name', 'Incident Triage'),
+      mutation('record_program_target', 'program.target_dir', targetDir),
+      mutation('record_program_target', 'program.target_dir_confirmed', true),
+      terminal('record_program_target', { slug: 'incident-triage', name: 'Incident Triage', target_dir: targetDir }),
+    ],
+  };
+}
+
+function seedBlockedExistingRepoTarget(targetDir: string): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      mutation('record_program_target', 'program.slug', 'incident-triage'),
+      mutation('record_program_target', 'program.name', 'Incident Triage'),
+      mutation('record_program_target', 'program.target_dir', targetDir),
+      mutation('record_program_target', 'program.target_dir_confirmed', true),
+      mutation('record_program_target', 'repo.target_kind', 'existing_repo'),
+      mutation('record_program_target', 'repo.blocked', true),
+      mutation('record_program_target', 'repo.wiring_manifest_json', JSON.stringify({ paths: { audit_dir: 'audit' } })),
+      terminal('record_program_target', { slug: 'incident-triage', name: 'Incident Triage', target_dir: targetDir }),
+    ],
+  };
+}
+
+function markLiveVerificationPassed(): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      mutation('run_live_provider_verification', 'graduation.live_verification', 'passed'),
+      mutation('run_live_provider_verification', 'graduation.live_evidence_id', 'live-e2e'),
+      terminal('session_status', continuationNotice()),
+    ],
+  };
+}
+
+function markRebasePassed(): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      mutation('git_rebase_latest', 'graduation.rebase_status', 'passed'),
+      mutation('git_rebase_latest', 'graduation.rebase_evidence_id', 'rebase-e2e'),
+      terminal('session_status', continuationNotice()),
+    ],
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown> = {}): TestHarnessAuthorResponse {
+  return { actions: [terminal(name, payload)] };
+}
+
+function mutation(name: string, path: string, value: unknown): Record<string, unknown> {
+  return { kind: 'MutationAction', name, op: 'MSet', path, value };
+}
+
+function terminal(name: string, payload: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: 'EffectAction',
+    name,
+    channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
+    payload,
+  };
+}
+
+function continuationNotice(): Record<string, unknown> {
+  return { intent: 'present_information', auto_continue: true };
+}
+
+async function triggerAndRecord(
+  harness: TestHarness,
+  seenModes: string[],
+  input: { channel: string; payload: unknown },
+): Promise<void> {
+  await harness.trigger(input);
+  const currentMode = await harness.getMode();
+  if (seenModes.at(-1) !== currentMode) {
+    seenModes.push(currentMode);
+  }
+}
+
+function runGeneratedChecks(targetDir: string): CommandCheck[] {
+  const install = runGeneratedCommand(targetDir, ['install', '--no-audit', '--no-fund'], 'npm install --no-audit --no-fund', 45_000);
+  if (install.status === 'skipped') {
+    return [
+      install,
+      { command: 'npm run typecheck', status: 'skipped', reason: `skipped because ${install.reason}` },
+      { command: 'npm test', status: 'skipped', reason: `skipped because ${install.reason}` },
+    ];
+  }
+
+  return [
+    install,
+    runGeneratedCommand(targetDir, ['run', 'typecheck'], 'npm run typecheck', 120_000),
+    runGeneratedCommand(targetDir, ['test'], 'npm test', 120_000),
+  ];
+}
+
+function runGeneratedCommand(targetDir: string, args: string[], command: string, timeout: number): CommandCheck {
+  try {
+    execFileSync('npm', args, { cwd: targetDir, stdio: 'pipe', timeout });
+    return { command, status: 'passed' };
+  } catch (error) {
+    const output = commandFailureOutput(error);
+    if (isRegistryAccessFailure(output)) {
+      return { command, status: 'skipped', reason: `registry unavailable: ${oneLine(output)}` };
+    }
+    throw error;
+  }
+}
+
+async function probeLiveProvider(): Promise<CommandCheck> {
+  const providerUrl = process.env.PGAS_OPENAI_BASE_URL;
+  if (!providerUrl) {
+    return { command: 'live provider reachability', status: 'skipped', reason: 'PGAS_OPENAI_BASE_URL not set' };
+  }
+  if (!(await isReachable(providerUrl))) {
+    return { command: 'live provider reachability', status: 'skipped', reason: `provider unreachable: ${providerUrl}` };
+  }
+  return { command: 'live provider reachability', status: 'passed' };
+}
+
+async function isReachable(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2_000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isRegistryAccessFailure(output: string): boolean {
+  return /EAI_AGAIN|ENOTFOUND|ECONNREFUSED|EPERM|ETIMEDOUT|timed out|SIGTERM|network|registry|401 Unauthorized|403 Forbidden|404 Not Found/iu.test(output);
+}
+
+function commandFailureOutput(error: unknown): string {
+  if (!error || typeof error !== 'object') return String(error);
+  const candidate = error as { stdout?: Buffer | string; stderr?: Buffer | string; message?: string };
+  return [candidate.stderr, candidate.stdout, candidate.message].filter(Boolean).map((value) => value?.toString() ?? '').join('\n');
+}
+
+function oneLine(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim().slice(0, 240);
+}
+
+function trackedTempRoot(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  tempRoots.push(root);
+  return root;
+}
+
+function terminalActionNames(rounds: unknown[]): string[] {
+  return rounds.flatMap((round) => {
+    if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+    const result = (round as { result?: unknown }).result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+    const terminal = (result as { terminal?: unknown }).terminal;
+    if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+    const name = (terminal as { name?: unknown }).name;
+    return typeof name === 'string' ? [name] : [];
+  });
+}

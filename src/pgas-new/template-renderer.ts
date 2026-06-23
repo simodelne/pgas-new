@@ -13,8 +13,9 @@ import { PGAS_SERVER_VERSION } from './version.js';
 import type { WiringManifest } from './wiring-manifest.js';
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new');
+const FOUNDRY_PROGRAM_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../foundry-program');
 
-export type ProgramTemplate = 'pgas-new-foundry' | 'policy-drafting' | 'web-scraper' | 'social-media-agent';
+export type ProgramTemplate = 'pgas-new-foundry';
 
 export interface RenderStandaloneOptions extends ProgramIdentity {
   outDir: string;
@@ -22,6 +23,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   githubRepo?: string;
   template?: ProgramTemplate;
   mandate?: string;
+  synthesizedSpecYaml?: string;
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -29,6 +31,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   manifest: WiringManifest;
   template?: ProgramTemplate;
   mandate?: string;
+  synthesizedSpecYaml?: string;
 }
 
 export interface RenderResult {
@@ -39,6 +42,9 @@ export interface RenderResult {
 interface TemplateSpec {
   file: string;
   tokens: readonly string[];
+  root?: 'templates' | 'foundry';
+  substitute?: boolean;
+  content?: string;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -54,10 +60,12 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'src/server.ts': spec('standalone/src/server.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'src/repl/index.ts': spec('standalone/src/repl/index.ts.tmpl', ['NAME', 'SLUG']),
   'src/repl/renderer.ts': spec('standalone/src/repl/renderer.ts.tmpl', []),
-  'src/programs/{{SLUG}}/specs.yml': spec('program/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'NAME', 'SLUG']),
-  'src/programs/{{SLUG}}/registration.ts': spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  'src/programs/{{SLUG}}/handlers.ts': spec('program/handlers.ts.tmpl', []),
-  'src/programs/{{SLUG}}/tools.ts': spec('program/tools.ts.tmpl', ['PASCAL_NAME']),
+  'src/programs/{{SLUG}}/specs.yml': foundrySpec('specs.yml'),
+  'src/programs/{{SLUG}}/registration.ts': foundrySpec('registration.ts'),
+  'src/programs/{{SLUG}}/handlers.ts': foundrySpec('handlers.ts'),
+  'src/programs/{{SLUG}}/handlers/index.ts': spec('program/handlers-index.ts.tmpl', []),
+  'src/programs/{{SLUG}}/handlers/_resolver.ts': spec('program/handlers-resolver.ts.tmpl', []),
+  'src/programs/{{SLUG}}/tools.ts': foundrySpec('tools.ts'),
   'tests/spec-load.test.ts': spec('tests/spec-load.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/control-plane.test.ts': spec('tests/control-plane.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/program-deterministic.test.ts': spec('tests/program-deterministic.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
@@ -66,87 +74,30 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'audit/PGAS-NEW-GRADUATION.md': spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
 };
 
-// The three graduation programs are frozen regression evidence, not active
-// scaffold templates. They intentionally resolve from docs/graduation-evidence
-// while the generic artifact manifest remains under templates/pgas-new/consumer.
-const EXISTING_POLICY_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
-  spec: spec('../../docs/graduation-evidence/policy-drafting/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  handler: spec('../../docs/graduation-evidence/policy-drafting/handlers.ts.tmpl', []),
-  tool: spec('../../docs/graduation-evidence/policy-drafting/tools.ts.tmpl', ['PASCAL_NAME']),
-  dossier: spec('../../docs/graduation-evidence/policy-drafting/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
-  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
-  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
-};
-
-const EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
-  spec: spec('../../docs/graduation-evidence/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  handler: spec('../../docs/graduation-evidence/web-scraper/handlers.ts.tmpl', []),
-  tool: spec('../../docs/graduation-evidence/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
-  dossier: spec('../../docs/graduation-evidence/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
-  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
-  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
-};
-
-const EXISTING_SOCIAL_MEDIA_AGENT_TEMPLATE_BY_KIND: Partial<Record<PlannedArtifact['kind'], TemplateSpec>> = {
-  spec: spec('../../docs/graduation-evidence/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-  registration: spec('program/registration.ts.tmpl', ['PASCAL_NAME']),
-  handler: spec('../../docs/graduation-evidence/social-media-agent/handlers.ts.tmpl', []),
-  tool: spec('../../docs/graduation-evidence/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
-  dossier: spec('../../docs/graduation-evidence/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
-  metadata: spec('consumer/artifacts.json.tmpl', ['ARTIFACT_PATHS_JSON', 'NAME', 'PGAS_SERVER_VERSION', 'SLUG']),
-  audit: spec('audit/PGAS-NEW-GRADUATION.md.tmpl', ['NAME', 'SLUG']),
-};
-
-const STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE: Record<
-  Exclude<ProgramTemplate, 'pgas-new-foundry'>,
-  Partial<Record<PlannedArtifact['kind'], TemplateSpec>>
-> = {
-  'policy-drafting': {
-    spec: spec('../../docs/graduation-evidence/policy-drafting/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-    handler: spec('../../docs/graduation-evidence/policy-drafting/handlers.ts.tmpl', []),
-    tool: spec('../../docs/graduation-evidence/policy-drafting/tools.ts.tmpl', ['PASCAL_NAME']),
-    dossier: spec('../../docs/graduation-evidence/policy-drafting/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
-  },
-  'web-scraper': {
-    spec: spec('../../docs/graduation-evidence/web-scraper/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-    handler: spec('../../docs/graduation-evidence/web-scraper/handlers.ts.tmpl', []),
-    tool: spec('../../docs/graduation-evidence/web-scraper/tools.ts.tmpl', ['PASCAL_NAME']),
-    dossier: spec('../../docs/graduation-evidence/web-scraper/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
-  },
-  'social-media-agent': {
-    spec: spec('../../docs/graduation-evidence/social-media-agent/specs.yml.tmpl', ['CONTROL_PLANE_CONTROLS_YAML', 'MANDATE', 'NAME', 'SLUG']),
-    handler: spec('../../docs/graduation-evidence/social-media-agent/handlers.ts.tmpl', []),
-    tool: spec('../../docs/graduation-evidence/social-media-agent/tools.ts.tmpl', ['PASCAL_NAME']),
-    dossier: spec('../../docs/graduation-evidence/social-media-agent/dossier.yml.tmpl', ['MANDATE', 'NAME', 'SLUG']),
-  },
-};
-
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
   const plan = createStandaloneArtifactPlan({ slug: options.slug, name: options.name });
-  const template = options.template ?? 'pgas-new-foundry';
+  assertSupportedTemplate(options.template);
 
   assertNoExistingArtifacts(options.outDir, plan);
 
   return renderPlan({
     plan,
     rootDir: options.outDir,
-    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, template),
+    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, options.synthesizedSpecYaml),
     tokens: tokensFor(options, plan),
   });
 }
 
 export function renderExistingRepoAttachment(options: RenderExistingRepoOptions): RenderResult {
   const plan = createExistingRepoArtifactPlan({ slug: options.slug, name: options.name }, options.manifest);
-  const template = options.template ?? 'pgas-new-foundry';
+  assertSupportedTemplate(options.template);
 
   assertNoExistingArtifacts(options.repoRoot, plan);
 
   return renderPlan({
     plan,
     rootDir: options.repoRoot,
-    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, template),
+    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, options.synthesizedSpecYaml),
     tokens: tokensFor(options, plan),
   });
 }
@@ -205,8 +156,10 @@ function renderPlan(options: {
       throw new Error(`no template for artifact path: ${artifact.path}`);
     }
 
-    const source = readFileSync(join(TEMPLATE_ROOT, templatePath.file), 'utf8');
-    const rendered = renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
+    const source = templatePath.content ?? readFileSync(join(rootFor(templatePath), templatePath.file), 'utf8');
+    const rendered = templatePath.substitute === false
+      ? renderDirectSource(source)
+      : renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
     const outPath = join(options.rootDir, artifact.path);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, rendered);
@@ -219,16 +172,15 @@ function renderPlan(options: {
 function templateForExistingArtifact(
   artifact: PlannedArtifact,
   slug: string,
-  template: ProgramTemplate,
+  synthesizedSpecYaml?: string,
 ): TemplateSpec | undefined {
-  if (template === 'policy-drafting') {
-    return EXISTING_POLICY_TEMPLATE_BY_KIND[artifact.kind];
+  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSpecYaml);
+  if (synthesizedTemplate) {
+    return synthesizedTemplate;
   }
-  if (template === 'web-scraper') {
-    return EXISTING_WEB_SCRAPER_TEMPLATE_BY_KIND[artifact.kind];
-  }
-  if (template === 'social-media-agent') {
-    return EXISTING_SOCIAL_MEDIA_AGENT_TEMPLATE_BY_KIND[artifact.kind];
+  const handlerDirectoryTemplate = templateForHandlerDirectoryArtifact(artifact, slug);
+  if (handlerDirectoryTemplate) {
+    return handlerDirectoryTemplate;
   }
 
   return templateForFoundryArtifact(artifact, slug);
@@ -239,7 +191,7 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/specs.yml'];
   }
   if (artifact.kind === 'registration') {
-    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/registration.ts'];
+    return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
   if (artifact.kind === 'handler') {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
@@ -263,16 +215,30 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
 function templateForStandaloneArtifact(
   artifact: PlannedArtifact,
   slug: string,
-  template: ProgramTemplate,
+  synthesizedSpecYaml?: string,
 ): TemplateSpec | undefined {
-  if (template !== 'pgas-new-foundry') {
-    const override = STANDALONE_PROGRAM_OVERRIDE_BY_TEMPLATE[template][artifact.kind];
-    if (override) {
-      return override;
-    }
+  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSpecYaml);
+  if (synthesizedTemplate) {
+    return synthesizedTemplate;
+  }
+  const handlerDirectoryTemplate = templateForHandlerDirectoryArtifact(artifact, slug);
+  if (handlerDirectoryTemplate) {
+    return handlerDirectoryTemplate;
   }
 
   return templateForStandalonePath(artifact.path, slug);
+}
+
+function assertSupportedTemplate(template: ProgramTemplate | undefined): void {
+  const value = template as string | undefined;
+  if (!value || value === 'pgas-new-foundry') {
+    return;
+  }
+
+  throw new Error(
+    `invalid --template: ${value}. In v3.0, only pgas-new-foundry is supported. ` +
+      'For per-domain programs, run the bare `pgas-new` REPL and walk the foundry design interview.',
+  );
 }
 
 function templateForStandalonePath(path: string, slug: string): TemplateSpec | undefined {
@@ -291,6 +257,12 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
   if (path === `src/programs/${slug}/handlers.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
   }
+  if (path === `src/programs/${slug}/handlers/index.ts`) {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers/index.ts'];
+  }
+  if (path === `src/programs/${slug}/handlers/_resolver.ts`) {
+    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers/_resolver.ts'];
+  }
   if (path === `src/programs/${slug}/tools.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/tools.ts'];
   }
@@ -300,6 +272,59 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
 
 function spec(file: string, tokens: readonly string[]): TemplateSpec {
   return { file, tokens };
+}
+
+function foundrySpec(file: string): TemplateSpec {
+  return { file, tokens: [], root: 'foundry', substitute: false };
+}
+
+function inlineTemplate(content: string): TemplateSpec {
+  return { file: '', tokens: [], content, substitute: false };
+}
+
+function templateForSynthesizedArtifact(
+  artifact: PlannedArtifact,
+  slug: string,
+  synthesizedSpecYaml: string | undefined,
+): TemplateSpec | undefined {
+  if (!synthesizedSpecYaml) {
+    return undefined;
+  }
+  if (artifact.path.endsWith(`/${slug}/specs.yml`)) {
+    return inlineTemplate(synthesizedSpecYaml);
+  }
+  if (artifact.path.endsWith(`/${slug}/registration.ts`)) {
+    return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
+  }
+  if (artifact.path.endsWith(`/${slug}/handlers.ts`)) {
+    return spec('program/handlers-skeleton.ts.tmpl', []);
+  }
+  if (artifact.path.endsWith(`/${slug}/tools.ts`)) {
+    return spec('program/tools-skeleton.ts.tmpl', ['PASCAL_NAME']);
+  }
+  return undefined;
+}
+
+function templateForHandlerDirectoryArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
+  if (artifact.path.endsWith(`/${slug}/handlers/index.ts`)) {
+    return spec('program/handlers-index.ts.tmpl', []);
+  }
+  if (artifact.path.endsWith(`/${slug}/handlers/_resolver.ts`)) {
+    return spec('program/handlers-resolver.ts.tmpl', []);
+  }
+  return undefined;
+}
+
+function rootFor(template: TemplateSpec): string {
+  return template.root === 'foundry' ? FOUNDRY_PROGRAM_ROOT : TEMPLATE_ROOT;
+}
+
+function renderDirectSource(source: string): string {
+  if (/\{\{[^}]+\}\}/.test(source)) {
+    throw new Error('foundry program source must not contain template tokens');
+  }
+
+  return source;
 }
 
 function selectTokens(tokens: Record<string, string>, names: readonly string[]): Record<string, string> {

@@ -1,0 +1,19 @@
+export interface HandlerPayload {
+  domain?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export function resolveDomainValue<T>(
+  payload: HandlerPayload,
+  key: string,
+  fallback?: T,
+): T | undefined {
+  if (payload.args && Object.prototype.hasOwnProperty.call(payload.args, key)) {
+    return payload.args[key] as T;
+  }
+  if (payload.domain && Object.prototype.hasOwnProperty.call(payload.domain, key)) {
+    return payload.domain[key] as T;
+  }
+  return fallback;
+}

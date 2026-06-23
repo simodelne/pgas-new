@@ -256,7 +256,7 @@ These five tests run against a freshly synthesized program produced by feeding a
 1. Ship `templates/pgas-new/program/spec-skeleton.yml.tmpl` — the canonical 3-mode skeleton, FM3-safe, with all engine-owned schema paths declared (FM5).
 2. Implement `synthesize_program_spec` handler in the foundry: rename + copy-block per §5. **No LLM call.** Validate output against the engine's spec loader before returning.
 3. `architecture_design` mode runs `synthesize_program_spec`, writes result to `program.synthesized_spec` (D3 namespace decision). The `confirm_design` user_confirmation step is the FIRST of the two D4 confirms and happens at the END of `intake_intelligence` (gating entry into `architecture_design`), not at the end of `architecture_design`. Architecture_design runs the deterministic synthesizer + a final readback before transitioning to `scaffold_plan`.
-4. `scaffold_plan` reads `program.synthesized_spec`, produces an artifact plan including handlers/{index,_resolver}.ts (FM1 layout) + tools + tests, then ends with the SECOND D4 confirm (`approve_plan`).
+4. `scaffold_plan` reads `program.synthesized_spec`, produces an artifact plan including handlers/{index,_resolver}.ts (FM1 layout) + tools + tests, then ends with the SECOND D4 confirm (`approve_artifact_plan`).
 5. `branch_write` writes the synthesized program.
 6. Regression corpus: feed each `docs/graduation-evidence/<name>/MANDATE.md` into the synthesizer (deterministic, no LLM), assert structural-equivalence with the frozen graduation spec.
 7. FM1–FM5 closure tests (§7).
@@ -277,7 +277,7 @@ Phase 2 ships when ALL of:
 - [ ] If user picks `default`: `apply_default_skeleton` fires with declared MSet mutations; name/slug only required
 - [ ] If user picks `design`: Q1–Q6 asked in order, skips fall back to defaults
 - [ ] After Q6 (or after `default` skeleton), agent echoes the design back for user confirmation (`confirm_design`)
-- [ ] `confirm_design` and `approve_plan` are idempotent (`FieldFalsy` precondition on themselves; Codex R4-I2)
+- [ ] `confirm_design` is idempotent (`FieldFalsy` on `program.design_confirmed`) and `approve_artifact_plan` is idempotent (`FieldFalsy` on the existing `artifact_plan.approved`) — Codex R4-I2
 - [ ] All foundry spec contracts asserted by the user's test in `tests/unit/template-renderer.test.ts` pass
 - [ ] Bare-entry test asserts the REPL opens (without requiring an actual LLM server in unit tests — use a stub)
 - [ ] All existing tests stay green; new tests added per the plan

@@ -2,6 +2,13 @@
 
 <!-- 1-3 bullets. What changed and why. -->
 
+## Program Nature
+
+- [ ] Cosmetic only
+- [ ] Behavior change
+- [ ] Re-platforming
+- [ ] Architecture change
+
 ## Test plan
 
 - [ ] `npm test`

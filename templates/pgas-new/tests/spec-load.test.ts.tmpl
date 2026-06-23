@@ -13,8 +13,6 @@ describe('{{SLUG}} spec load', () => {
 
     expect(entry.spec.schannels.has('system_mode_entry')).toBe(true);
     expect(entry.spec.ingestion.get('system_mode_entry')).toEqual(['inputs.mode_entry']);
-    for (const mode of entry.spec.modes.values()) {
-      expect(mode.channels).toContain('system_mode_entry');
-    }
+    expect(entry.spec.modes.get(entry.spec.initial)?.channels).toContain('system_mode_entry');
   });
 });
