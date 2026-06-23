@@ -625,6 +625,16 @@ action_map:
   open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
 
 reactions:
+  debug_approve_artifact_plan_preconditions:
+    event: AfterIngestion
+    watch:
+      - repo.write_authorized
+      - program.synthesis_complete
+      - artifact_plan.status
+      - artifact_plan.approved
+      - inputs.user_decision.decision
+    write_scope:
+      - debug.approve_artifact_plan_preconditions_checked
   normalize_intake_json_fields:
     event: AfterMutation
     watch:
@@ -712,6 +722,7 @@ schema:
   graduation.rebase_evidence_id: string
   graduation.rebase_verification: string
   graduation.rebase_static_evidence_id: string
+  debug.approve_artifact_plan_preconditions_checked: boolean
   governance.round_counter: number
 
 repair_bound: 2

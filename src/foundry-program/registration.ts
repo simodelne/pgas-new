@@ -10,6 +10,20 @@ import {
 import { handlers, reactionHandlers } from './handlers.js';
 import { registerPgasNewTools } from './tools.js';
 
+const AUTO_CONTINUE_ACTIONS = new Set([
+  'confirm_design',
+  'authorize_standalone_target',
+  'authorize_existing_repo_target',
+  'synthesize_program_spec',
+  'approve_artifact_plan',
+  'write_scaffold_artifacts',
+  'run_static_verification',
+  'confirm_live_provider_intent',
+  'run_live_provider_verification',
+  'git_rebase_latest',
+  'run_rebase_static_verification',
+]);
+
 export function createPgasNewFoundryProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   const { spec: loaded } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
@@ -21,7 +35,26 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
     spec,
     reactionHandlers,
     continuationPolicy: {
-      modeEntryAutoContinue: true,
+      modeEntryAutoContinue: false,
+    },
+    sessionOptions: {
+      reliability: {
+        onGateVerdict: (event) => {
+          if (process.env.PGAS_FOUNDRY_DEBUG !== '1') return;
+          if (event.gate !== 'GKPrecondition') return;
+          if (event.actionContext?.name !== 'approve_artifact_plan') return;
+          console.error(
+            '[PGAS_FOUNDRY_DEBUG] approve_artifact_plan gate verdict',
+            JSON.stringify({
+              roundNumber: event.roundNumber,
+              attemptNumber: event.attemptNumber,
+              passed: event.passed,
+              error: event.error,
+              actionContext: event.actionContext,
+            }),
+          );
+        },
+      },
     },
     createAdapters: (ctx) => {
       const adapters = createProgramAdapters(spec, ctx, handlers);
@@ -33,6 +66,7 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
         }
       }
       exposeSynthesisMarkerInTerminalPayload(adapters);
+      exposeAutoContinueIntentInTerminalPayload(adapters);
       return adapters;
     },
   };
@@ -55,6 +89,22 @@ function exposeSynthesisMarkerInTerminalPayload(adapters: ProgramAdapters): void
   }
 }
 
+function exposeAutoContinueIntentInTerminalPayload(adapters: ProgramAdapters): void {
+  for (const adapter of adapters.outputs.values()) {
+    const dispatch = adapter.dispatch.bind(adapter) as typeof adapter.dispatch;
+    adapter.dispatch = async (payload: Parameters<typeof adapter.dispatch>[0]) => {
+      const result = await dispatch(payload);
+      if (isAutoContinueEffect(payload)) {
+        payload.payload = mergePayloadMarker(payload.payload, {
+          intent: 'present_information',
+          auto_continue: true,
+        });
+      }
+      return result;
+    };
+  }
+}
+
 function isSynthesizeProgramSpecEffect(
   payload: unknown,
 ): payload is { kind: 'EffectAction'; name: 'synthesize_program_spec'; payload: unknown } {
@@ -64,6 +114,17 @@ function isSynthesizeProgramSpecEffect(
     !Array.isArray(payload) &&
     (payload as { kind?: unknown }).kind === 'EffectAction' &&
     (payload as { name?: unknown }).name === 'synthesize_program_spec'
+  );
+}
+
+function isAutoContinueEffect(payload: unknown): payload is { kind: 'EffectAction'; name: string; payload: unknown } {
+  return (
+    !!payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    (payload as { kind?: unknown }).kind === 'EffectAction' &&
+    typeof (payload as { name?: unknown }).name === 'string' &&
+    AUTO_CONTINUE_ACTIONS.has((payload as { name: string }).name)
   );
 }
 

@@ -6,6 +6,7 @@ import { createTestHarness, type TestHarness, type TestHarnessAuthorResponse } f
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
+import { waitForSnapshot } from './foundry-test-utils.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -53,7 +54,17 @@ describe('foundry end-to-end acceptance gate', () => {
       await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
       await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'scaffold_plan' && snapshot.domain['artifact_plan.status'] === 'draft',
+        'draft artifact plan before approval',
+      );
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const finalSnapshot = await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'pr_graduation' && snapshot.terminal === true,
+        'approval continuation through pr_graduation',
+      );
 
       expect(await harness.getMode()).toBe('pr_graduation');
       expect(await harness.getDomain('program.target_dir')).toBe(targetDir);
@@ -69,8 +80,7 @@ describe('foundry end-to-end acceptance gate', () => {
       const liveProvider = await probeLiveProvider();
       expect(liveProvider.status).toMatch(/^(passed|skipped)$/u);
 
-      const snapshot = await harness.snapshot();
-      expect(terminalActionNames(snapshot.rounds)).toEqual(
+      expect(terminalActionNames(finalSnapshot.rounds)).toEqual(
         expect.arrayContaining([
           'confirm_design',
           'authorize_standalone_target',
@@ -83,7 +93,7 @@ describe('foundry end-to-end acceptance gate', () => {
           'run_rebase_static_verification',
         ]),
       );
-      expect(snapshot.terminal).toBe(true);
+      expect(finalSnapshot.terminal).toBe(true);
 
       const curatorRequestPath = join(targetDir, 'audit', 'PGAS-NEW-GRADUATION.md');
       expect(existsSync(curatorRequestPath), 'pr_graduation should have a curator-request artifact to review').toBe(true);
@@ -151,7 +161,6 @@ function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] 
     effect('authorize_standalone_target'),
     effect('synthesize_program_spec'),
     effect('plan_artifacts'),
-    effect('session_status'),
     effect('approve_artifact_plan'),
     effect('write_scaffold_artifacts', { cwd: targetDir }),
     effect('run_static_verification', { status: 'passed', evidence_id: 'static-e2e' }),
@@ -209,7 +218,7 @@ function markLiveVerificationPassed(): TestHarnessAuthorResponse {
     actions: [
       mutation('run_live_provider_verification', 'graduation.live_verification', 'passed'),
       mutation('run_live_provider_verification', 'graduation.live_evidence_id', 'live-e2e'),
-      terminal('session_status'),
+      terminal('session_status', continuationNotice()),
     ],
   };
 }
@@ -219,7 +228,7 @@ function markRebasePassed(): TestHarnessAuthorResponse {
     actions: [
       mutation('git_rebase_latest', 'graduation.rebase_status', 'passed'),
       mutation('git_rebase_latest', 'graduation.rebase_evidence_id', 'rebase-e2e'),
-      terminal('session_status'),
+      terminal('session_status', continuationNotice()),
     ],
   };
 }
@@ -233,7 +242,16 @@ function mutation(name: string, path: string, value: unknown): Record<string, un
 }
 
 function terminal(name: string, payload: Record<string, unknown> = {}): Record<string, unknown> {
-  return { kind: 'EffectAction', name, channel: 'widget_output', payload };
+  return {
+    kind: 'EffectAction',
+    name,
+    channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
+    payload,
+  };
+}
+
+function continuationNotice(): Record<string, unknown> {
+  return { intent: 'present_information', auto_continue: true };
 }
 
 async function triggerAndRecord(

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 import { getSynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import { parseUserConfirmationControl, type UserConfirmationPayload } from '../../src/repl/runner.js';
+import { terminalActionNames, waitForSnapshot } from './foundry-test-utils.js';
 
 function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
   return {
@@ -10,7 +11,7 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
       {
         kind: 'EffectAction',
         name,
-        channel: 'widget_output',
+        channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
         payload,
       },
     ],
@@ -54,6 +55,7 @@ describe('intake normalization synthesis integration', () => {
       effect('confirm_design', {}),
       effect('authorize_standalone_target', {}),
       effect('synthesize_program_spec', {}),
+      effect('plan_artifacts', {}),
     ];
 
     const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
@@ -73,7 +75,14 @@ describe('intake normalization synthesis integration', () => {
       await harness.trigger('Q6 answer.');
       await harness.trigger('Finalize intake.');
       await harness.trigger(replConfirmation('/approve'));
-      const snapshot = await harness.snapshot();
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) =>
+          candidate.mode === 'scaffold_plan' &&
+          candidate.domain['artifact_plan.status'] === 'draft' &&
+          terminalActionNames(candidate.rounds).includes('synthesize_program_spec'),
+        'normalized intake synthesis and artifact planning',
+      );
 
       expect(terminalActionNames(snapshot.rounds)).toContain('synthesize_program_spec');
       expect(snapshot.mode).toBe('scaffold_plan');
@@ -103,15 +112,3 @@ describe('intake normalization synthesis integration', () => {
     }
   });
 });
-
-function terminalActionNames(rounds: unknown[]): string[] {
-  return rounds.flatMap((round) => {
-    if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
-    const result = (round as { result?: unknown }).result;
-    if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
-    const terminal = (result as { terminal?: unknown }).terminal;
-    if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
-    const name = (terminal as { name?: unknown }).name;
-    return typeof name === 'string' ? [name] : [];
-  });
-}

@@ -336,7 +336,56 @@ const intakeJsonPaths = [
   'intake.completion_json',
 ] as const;
 
+const approveArtifactPlanPreconditions = [
+  { label: 'repo.write_authorized', path: 'repo.write_authorized', expect: true },
+  { label: 'program.synthesis_complete', path: 'program.synthesis_complete', expect: true },
+  { label: 'artifact_plan.status', path: 'artifact_plan.status', expect: 'draft' },
+  { label: 'artifact_plan.approved', path: 'artifact_plan.approved', expect: false },
+  { label: 'trigger', path: 'trigger', expect: 'user_confirmation' },
+  { label: 'inputs.user_decision.decision', path: 'inputs.user_decision.decision', expect: 'approve' },
+] as const;
+
+function foundryDebugEnabled(): boolean {
+  return process.env.PGAS_FOUNDRY_DEBUG === '1';
+}
+
+function debugApprovalPreconditions(snapshot: ReadonlyMap<string, unknown>, trigger: string, mode: string): void {
+  if (!foundryDebugEnabled()) return;
+  if (mode !== 'scaffold_plan') return;
+  if (trigger !== 'user_confirmation' && trigger !== 'system_mode_entry') return;
+
+  const values = Object.fromEntries(
+    approveArtifactPlanPreconditions.map((precondition) => [
+      precondition.label,
+      precondition.path === 'trigger' ? trigger : snapshot.get(precondition.path),
+    ]),
+  );
+  const userDecision = {
+    decision: snapshot.get('inputs.user_decision.decision'),
+    instruction: snapshot.get('inputs.user_decision.instruction'),
+    note_mode: snapshot.get('inputs.user_decision.note_mode'),
+    timestamp: snapshot.get('inputs.user_decision.timestamp'),
+  };
+  const failed = approveArtifactPlanPreconditions
+    .filter((precondition) => values[precondition.label] !== precondition.expect)
+    .map((precondition) => precondition.label);
+
+  console.error(
+    '[PGAS_FOUNDRY_DEBUG] approve_artifact_plan preconditions',
+    JSON.stringify({
+      mode,
+      trigger,
+      values,
+      user_decision: userDecision,
+      failed,
+    }),
+  );
+}
+
 export const reactionHandlers: Map<string, ReactionHandler> = new Map([
+  ['debug_approve_artifact_plan_preconditions', (snapshot, trigger, mode) => {
+    debugApprovalPreconditions(snapshot, trigger, mode);
+  }],
   ['normalize_intake_json_fields', (snapshot) => {
     const mutations = intakeJsonPaths.flatMap((path) => {
       const value = snapshot.get(path);
@@ -468,6 +517,20 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 
+  async authorize_standalone_target() {
+    return {
+      kind: 'pgas_new_standalone_target_authorized',
+      write_authorized: true,
+    };
+  },
+
+  async authorize_existing_repo_target() {
+    return {
+      kind: 'pgas_new_existing_repo_target_authorized',
+      write_authorized: true,
+    };
+  },
+
   async plan_artifacts(payload) {
     const sessionId = sessionIdFromPayload(payload);
     const domain = domainFromPayload(payload);
@@ -482,6 +545,27 @@ export const handlers: Record<string, ToolHandler> = {
       : createStandaloneArtifactPlan(program);
 
     return plan.artifacts;
+  },
+
+  async approve_artifact_plan(payload) {
+    if (foundryDebugEnabled()) {
+      const domain = domainFromPayload(payload);
+      console.error(
+        '[PGAS_FOUNDRY_DEBUG] approve_artifact_plan handler',
+        JSON.stringify({
+          user_decision: {
+            decision: domain['inputs.user_decision.decision'],
+            instruction: domain['inputs.user_decision.instruction'],
+            note_mode: domain['inputs.user_decision.note_mode'],
+            timestamp: domain['inputs.user_decision.timestamp'],
+          },
+        }),
+      );
+    }
+    return {
+      kind: 'pgas_new_artifact_plan_approved',
+      approved: true,
+    };
   },
 
   async record_user_note(payload) {

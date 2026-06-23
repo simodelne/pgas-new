@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPgasServer, type UnifiedAuthorDriverOptions } from '@simodelne/pgas-server/plugin.js';
@@ -52,6 +52,7 @@ describe('foundry synthesizer marker observability', () => {
         method: 'POST',
         body: JSON.stringify({ channel: 'user_confirmation', payload: { decision: 'approve' } }),
       });
+      await waitForSessionLog(logRoot, sessionId, ['synthesize_program_spec', 'mechanical_synthesis', 'plan_artifacts']);
     } finally {
       await server.close();
       restoreEnv('PGAS_SESSION_LOG_DIR', previousLogDir);
@@ -112,6 +113,9 @@ async function createSyntheticFoundryServer(targetRoot: string) {
     if (toolNames.includes('synthesize_program_spec')) {
       return toolCall('synthesize_program_spec', {});
     }
+    if (toolNames.includes('plan_artifacts')) {
+      return toolCall('plan_artifacts', {});
+    }
     return toolCall('session_status', {});
   };
 
@@ -137,6 +141,22 @@ async function createSyntheticFoundryServer(targetRoot: string) {
     telemetry: { enabled: false },
     port: 0,
   });
+}
+
+async function waitForSessionLog(logRoot: string, sessionId: string, expected: string[]): Promise<void> {
+  const logPath = join(logRoot, sessionId, 'session-log.ndjson');
+  const deadline = Date.now() + 2_000;
+  let latest = '';
+
+  while (Date.now() < deadline) {
+    if (existsSync(logPath)) {
+      latest = readFileSync(logPath, 'utf8');
+      if (expected.every((text) => latest.includes(text))) return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  throw new Error(`timed out waiting for session log markers: ${expected.join(', ')}`);
 }
 
 function toolCall(name: string, args: Record<string, unknown>): { tool_calls: Array<{ id: string; function: { name: string; arguments: string } }> } {

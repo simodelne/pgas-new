@@ -1,6 +1,7 @@
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
 import { describe, expect, it } from 'vitest';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
+import { waitForSnapshot } from './foundry-test-utils.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -47,6 +48,7 @@ describe('foundry repo_targeting continuation flow', () => {
         effect('confirm_design', { approved: true }),
         effect('authorize_standalone_target', {}),
         effect('synthesize_program_spec', {}),
+        effect('plan_artifacts', {}),
       ],
     });
 
@@ -62,7 +64,11 @@ describe('foundry repo_targeting continuation flow', () => {
       await harness.trigger('Finalize intake.');
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
 
-      const snapshot = await harness.snapshot();
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) => candidate.mode === 'scaffold_plan' && candidate.domain['artifact_plan.status'] === 'draft',
+        'repo targeting continuation to scaffold artifact plan',
+      );
       const rounds = terminalRounds(snapshot.rounds);
 
       expect(rounds.find((round) => round.name === 'confirm_design')?.proposedMode).toBe('repo_targeting');
@@ -88,7 +94,7 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
       {
         kind: 'EffectAction',
         name,
-        channel: 'widget_output',
+        channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
         payload,
       },
     ],

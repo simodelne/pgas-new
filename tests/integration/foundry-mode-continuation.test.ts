@@ -1,6 +1,7 @@
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
 import { describe, expect, it } from 'vitest';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
+import { terminalActionNames, waitForSnapshot } from './foundry-test-utils.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -47,6 +48,7 @@ describe('foundry mode-entry continuation', () => {
         effect('confirm_design', { approved: true }),
         effect('authorize_standalone_target', {}),
         effect('synthesize_program_spec', {}),
+        effect('plan_artifacts', {}),
       ],
     });
 
@@ -62,12 +64,21 @@ describe('foundry mode-entry continuation', () => {
       await harness.trigger('Finalize intake.');
 
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
-      const snapshot = await harness.snapshot();
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) =>
+          candidate.mode === 'scaffold_plan' &&
+          candidate.domain['artifact_plan.status'] === 'draft' &&
+          terminalActionNames(candidate.rounds).includes('plan_artifacts'),
+        'confirm_design continuation to scaffold artifact plan',
+      );
 
       expect(snapshot.mode).toBe('scaffold_plan');
       expect(snapshot.domain['program.design_confirmed']).toBe(true);
       expect(snapshot.domain['repo.write_authorized']).toBe(true);
       expect(snapshot.domain['program.synthesis_complete']).toBe(true);
+      expect(snapshot.domain['artifact_plan.approved']).toBe(false);
+      expect(terminalActionNames(snapshot.rounds)).not.toContain('approve_artifact_plan');
       expect(snapshot.rounds).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -96,7 +107,7 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
       {
         kind: 'EffectAction',
         name,
-        channel: 'widget_output',
+        channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
         payload,
       },
     ],

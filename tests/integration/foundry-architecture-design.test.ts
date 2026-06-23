@@ -2,6 +2,7 @@ import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pg
 import { describe, expect, it } from 'vitest';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
+import { waitForSnapshot } from './foundry-test-utils.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -20,7 +21,7 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
       {
         kind: 'EffectAction',
         name,
-        channel: 'widget_output',
+        channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
         payload,
       },
     ],
@@ -76,10 +77,12 @@ describe('foundry architecture_design to scaffold_plan flow', () => {
       await harness.trigger('Resolved when triage.summary_ready is true.');
       await harness.trigger('Finalize intake.');
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
-      await harness.trigger({ channel: 'system_mode_entry', payload: {} });
-      await harness.trigger({ channel: 'system_mode_entry', payload: {} });
 
-      const snapshot = await harness.snapshot();
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) => candidate.mode === 'scaffold_plan' && candidate.domain['artifact_plan.status'] === 'draft',
+        'architecture synthesis to draft artifact plan',
+      );
 
       expect(snapshot.mode).toBe('scaffold_plan');
       expect(snapshot.domain['program.synthesis_complete']).toBe(true);
