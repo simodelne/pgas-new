@@ -157,6 +157,10 @@ function deterministicToolChoice(payload: Record<string, unknown>): Record<strin
   const currentState = extractCurrentState(context);
   const decision = currentState ? userDecision(currentState) : fallbackDecision(context);
 
+  if (tools.includes('authorize_existing_repo_target') && hasValidExistingRepoManifest(currentState, context)) {
+    return functionToolChoice('authorize_existing_repo_target');
+  }
+
   if (decision === 'reject') {
     const instruction = currentState ? userInstruction(currentState) : context;
     const questionNumber = rejectQuestionNumber(instruction);
@@ -230,6 +234,23 @@ function hasDraftArtifactPlan(state: Record<string, unknown> | null, context: st
   }
   return /artifact_plan\.status[^A-Za-z0-9_]+draft\b/iu.test(context)
     || /"artifact_plan"\s*:\s*\{[^}]*"status"\s*:\s*"draft"/iu.test(context);
+}
+
+function hasValidExistingRepoManifest(state: Record<string, unknown> | null, context: string): boolean {
+  if (state) {
+    const targetKind = stringStateField(state, 'repo.target_kind')
+      ?? stringStateField(state, 'repo', 'target_kind');
+    const manifestStatus = stringStateField(state, 'repo.wiring_manifest.status')
+      ?? stringStateField(state, 'repo.wiring_manifest', 'status');
+    const manifestPath = stringStateField(state, 'repo.wiring_manifest.path')
+      ?? stringStateField(state, 'repo.wiring_manifest', 'path');
+    return targetKind === 'existing_repo'
+      && manifestStatus === 'valid'
+      && manifestPath === '.pgas/wiring.yml';
+  }
+  return /repo\.target_kind[^A-Za-z0-9_]+existing_repo\b/iu.test(context)
+    && /repo\.wiring_manifest\.status[^A-Za-z0-9_]+valid\b/iu.test(context)
+    && /repo\.wiring_manifest\.path[^A-Za-z0-9_.-]+\.pgas\/wiring\.yml\b/iu.test(context);
 }
 
 function rejectQuestionNumber(context: string): number | null {

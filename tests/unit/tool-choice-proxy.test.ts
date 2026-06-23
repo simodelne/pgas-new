@@ -215,6 +215,43 @@ describe('forwardToolChoiceProxyRequest', () => {
     ]);
   });
 
+  it('forces existing-repo authorization after a valid wiring manifest is loaded', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Mode repo_targeting.',
+              'Current state:',
+              '{',
+              '  "program.target_dir": "/tmp/fake-consumer",',
+              '  "repo.target_kind": "existing_repo",',
+              '  "repo.wiring_manifest.status": "valid",',
+              '  "repo.wiring_manifest.path": ".pgas/wiring.yml",',
+              '  "repo.write_authorized": true',
+              '}',
+            ].join('\n'),
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'authorize_existing_repo_target', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'session_status', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: { type: 'function', function: { name: 'authorize_existing_repo_target' } },
+      }),
+    ]);
+  });
+
   it('forces the named reject_design_and_revise_qN tool when a rejection names Q1-Q6', async () => {
     await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
       method: 'POST',
