@@ -29,7 +29,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -61,7 +61,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -100,7 +100,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -135,7 +135,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -193,7 +193,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -241,7 +241,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -276,7 +276,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -307,7 +307,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -339,7 +339,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start session\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
@@ -370,7 +370,7 @@ describe('REPL controls', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('hello world\n');
       const trigger = await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);

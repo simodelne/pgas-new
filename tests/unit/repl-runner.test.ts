@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { runRepl } from '../../src/repl/runner.js';
@@ -5,6 +8,7 @@ import { runRepl } from '../../src/repl/runner.js';
 interface RequestRecord {
   method: string;
   path: string;
+  auth: string | null;
   body: unknown;
 }
 
@@ -30,7 +34,7 @@ describe('runRepl', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('hello foundry\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream');
@@ -62,6 +66,64 @@ describe('runRepl', () => {
     }
   });
 
+  it('reads the cached token and uses it as bearer auth when options.token is absent', async () => {
+    const originalHome = process.env.HOME;
+    const homeDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-token-'));
+    const token = tokenWithExp(Math.floor(Date.now() / 1000) + 3600);
+    writeToken(homeDir, token);
+    process.env.HOME = homeDir;
+    const fake = createFakePgasFetch({ sseEvents: [] });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(fake.requests[0]).toMatchObject({
+        method: 'GET',
+        path: '/programs',
+        auth: `Bearer ${token}`,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      restoreHome(originalHome);
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['missing token', undefined],
+    ['expired token', tokenWithExp(1)],
+  ])('exits before connecting when the cached session is %s', async (_label, token) => {
+    const originalHome = process.env.HOME;
+    const homeDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-no-token-'));
+    if (token) writeToken(homeDir, token);
+    process.env.HOME = homeDir;
+    const fake = createFakePgasFetch({ sseEvents: [] });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const result = await runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+
+      expect(result).toMatchObject({ reason: 'error', sessionId: null, exitCode: 1 });
+      expect(stdout.text()).toContain('no active session — run `pgas-new login`');
+      expect(fake.requests).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+      restoreHome(originalHome);
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('sends /abort during an in-flight round and closes the active session', async () => {
     let releaseSse!: () => void;
     const fake = createFakePgasFetch({
@@ -81,7 +143,7 @@ describe('runRepl', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start work\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream');
@@ -111,6 +173,29 @@ describe('runRepl', () => {
     }
   });
 
+  it('exits cleanly when the cached session is rejected mid-round', async () => {
+    const fake = createFakePgasFetch({
+      sseEvents: [],
+      triggerStatus: 401,
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write('hello after expiry\n');
+      await stdout.waitFor('session expired, re-run `pgas-new login`');
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'error', sessionId: 'session-1', exitCode: 1 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('rejects unknown slash commands with the existing renderer shape', async () => {
     const fake = createFakePgasFetch({ sseEvents: [] });
     vi.stubGlobal('fetch', fake.fetch);
@@ -118,7 +203,7 @@ describe('runRepl', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('/bogus\n');
       stdin.write('/exit\n');
@@ -159,7 +244,7 @@ describe('runRepl', () => {
     const stdout = captureStream();
 
     try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
       await stdout.waitFor('Connected');
       stdin.write('start design\n');
       await fake.waitForRequest('/sessions/session-1/trigger/stream');
@@ -210,6 +295,7 @@ function createFakePgasFetch(options: {
   sseEvents: Array<{ event: string; data: unknown }>;
   beforeRoundComplete?: () => Promise<void>;
   sessionEnvelope?: Record<string, unknown>;
+  triggerStatus?: number;
 }): FakeFetch {
   const requests: RequestRecord[] = [];
   const waiters = new Map<string, Array<(record: RequestRecord) => void>>();
@@ -219,7 +305,12 @@ function createFakePgasFetch(options: {
     const request = input instanceof Request ? input : new Request(input, init);
     const body = await readJson(request);
     const url = new URL(request.url);
-    const record: RequestRecord = { method: request.method, path: url.pathname, body };
+    const record: RequestRecord = {
+      method: request.method,
+      path: url.pathname,
+      auth: request.headers.get('authorization'),
+      body,
+    };
     requests.push(record);
     for (const resolve of waiters.get(record.path) ?? []) {
       resolve(record);
@@ -233,6 +324,9 @@ function createFakePgasFetch(options: {
       return json({ sessionId: 'session-1' });
     }
     if (request.method === 'POST' && url.pathname === '/sessions/session-1/trigger/stream') {
+      if (options.triggerStatus !== undefined) {
+        return json({ error: 'unauthorized' }, options.triggerStatus);
+      }
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           for (const event of options.sseEvents) {
@@ -278,6 +372,25 @@ function createFakePgasFetch(options: {
       });
     },
   };
+}
+
+function writeToken(homeDir: string, token: string): void {
+  const dir = join(homeDir, '.local/share/pgas-new');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'token'), token, { mode: 0o600 });
+}
+
+function tokenWithExp(exp: number): string {
+  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
+  return `header.${payload}.signature`;
+}
+
+function restoreHome(value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = value;
+  }
 }
 
 async function readJson(request: Request): Promise<unknown> {

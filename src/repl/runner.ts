@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import readline from 'node:readline';
 import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
 import { createReplRenderer, REPL_CONTROL_HINT } from './renderer.js';
@@ -38,10 +41,14 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   const stdin = options.stdin ?? process.stdin;
   const stdout = options.stdout ?? process.stdout;
   const apiBase = options.apiBase ?? options.baseUrl ?? 'http://localhost:3000';
-  const token = options.token ?? 'dev-token';
   const program = options.program ?? options.slug ?? 'pgas-new';
   const displayName = options.programDisplayName ?? program;
   const renderer = createReplRenderer(stdout);
+  const token = options.token ?? readActiveCachedToken();
+  if (token === undefined) {
+    renderer.renderError('no active session — run `pgas-new login`');
+    return { reason: 'error', sessionId: null, finalMode: null, exitCode: 1 };
+  }
   const client = createPgasClient(fetchTransport({ baseUrl: apiBase, token }));
   const state: ReplState = {
     sessionId: null,
@@ -84,7 +91,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   try {
     await client.programs.list();
   } catch (error) {
-    renderer.renderError(renderStartupError(error, apiBase));
+    renderer.renderError(isUnauthorizedError(error) ? 'session expired, re-run `pgas-new login`' : renderStartupError(error, apiBase));
     return { reason: 'error', sessionId: null, finalMode: null, exitCode: 1 };
   }
 
@@ -132,7 +139,14 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
         ? handleText(input)
         : handleCommand(input);
     return handler
-      .catch((error) => renderer.renderError(errorMessage(error)))
+      .catch(async (error) => {
+        if (isUnauthorizedError(error)) {
+          renderer.renderError('session expired, re-run `pgas-new login`');
+          await finish('error', 1);
+          return;
+        }
+        renderer.renderError(errorMessage(error));
+      })
       .finally(() => {
         if (isText) textBusy = false;
         if (!textBusy && !isUserConfirmation) inputBusy = false;
@@ -398,6 +412,11 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     } catch (error) {
       if (!state.abortRequested) {
         spinner.stop();
+        if (isUnauthorizedError(error)) {
+          renderer.renderError('session expired, re-run `pgas-new login`');
+          await finish('error', 1);
+          return;
+        }
         renderer.renderError(errorMessage(error));
       }
     } finally {
@@ -408,6 +427,30 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   }
 
   return exitPromise;
+}
+
+function readActiveCachedToken(): string | undefined {
+  const tokenPath = join(homedir(), '.local/share/pgas-new/token');
+  if (!existsSync(tokenPath)) return undefined;
+
+  const token = readFileSync(tokenPath, 'utf8').trim();
+  if (token.length === 0) return undefined;
+  const exp = decodeJwtExp(token);
+  if (exp === undefined || exp <= Math.floor(Date.now() / 1000)) return undefined;
+  return token;
+}
+
+function decodeJwtExp(token: string): number | undefined {
+  const [, payload] = token.split('.');
+  if (!payload) return undefined;
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
+    return isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)
+      ? decoded.exp
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function renderStartupError(error: unknown, apiBase: string): string {
@@ -427,6 +470,11 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   return String(error);
+}
+
+function isUnauthorizedError(error: unknown): boolean {
+  const maybeStatus = error as { status?: unknown } | undefined;
+  return maybeStatus?.status === 401;
 }
 
 function readLiveSessionFields(envelope: Record<string, unknown>): {
