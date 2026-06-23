@@ -12,6 +12,9 @@
     "test": "npm run typecheck && npm run test:manifest && npm run test:unit && npm run test:static",
     "pgas-new": "node --import tsx src/cli.ts"
   },
+  "bin": {
+    "pgas-new": "./bin/pgas-new"
+  },
   "dependencies": {
     "@simodelne/pgas-server": "^2.13.4"
   },

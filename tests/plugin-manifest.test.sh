@@ -35,6 +35,17 @@ if [[ "$PKG_VERSION" == "$EXPECTED_VERSION" ]]; then
 else
   fail "package.json version = '$PKG_VERSION' (expected $EXPECTED_VERSION)"
 fi
+BIN_ENTRY=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).bin?.['pgas-new'] ?? '')" 2>/dev/null)
+if [[ "$BIN_ENTRY" == "./bin/pgas-new" ]]; then
+  pass "package.json bin pgas-new = $BIN_ENTRY"
+else
+  fail "package.json bin pgas-new = '$BIN_ENTRY' (expected ./bin/pgas-new)"
+fi
+if [[ -x bin/pgas-new ]]; then
+  pass "bin/pgas-new is executable"
+else
+  fail "bin/pgas-new missing or not executable"
+fi
 
 echo "[3/5] pgas-new foundry sources exist"
 for path in \
