@@ -131,7 +131,7 @@ modes:
       - target: scaffold_plan
         guard: { kind: FieldTruthy, path: program.synthesis_complete }
   scaffold_plan:
-    vocabulary: [plan_artifacts, approve_artifact_plan, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [approve_artifact_plan, plan_artifacts, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_confirmation, system_mode_entry, widget_output, artifact_plan_output]
     preconditions:
       plan_artifacts:
@@ -674,7 +674,11 @@ action_map:
     mutations:
       - { op: MSet, path: program.synthesis_complete, value: true }
   plan_artifacts:
-    description: "Plan artifacts."
+    description: |
+      INTERNAL: Auto-fires exactly ONCE on system_mode_entry into scaffold_plan
+      to draft the artifact plan. Do NOT call this in response to /approve —
+      the user-driven approval action is approve_artifact_plan. Its precondition
+      forbids re-firing after artifact_plan.status is set.
     result_path: artifact_plan.artifacts
     mutations:
       - { op: MSet, path: artifact_plan.status, value: draft }
@@ -682,7 +686,12 @@ action_map:
       - { op: MSet, path: artifact_plan.write_authorized, value: false }
     channel: artifact_plan_output
   approve_artifact_plan:
-    description: "Approve artifact plan after write authorization."
+    description: |
+      USER-DRIVEN: Fires when the user types /approve to authorize the
+      drafted artifact plan. This is the ONLY tool to call in scaffold_plan
+      when receiving inputs.user_decision.decision='approve'. Sets
+      artifact_plan.status='approved' and triggers the write_scaffold_artifacts
+      transition.
     mutations:
       - { op: MSet, path: artifact_plan.status, value: approved }
       - { op: MSet, path: artifact_plan.approved, value: true }

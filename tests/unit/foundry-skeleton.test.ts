@@ -101,6 +101,19 @@ describe('foundry generic program skeleton engine loader', () => {
   });
 });
 
+describe('foundry scaffold_plan tool ordering', () => {
+  it('offers approve_artifact_plan before plan_artifacts to bias /approve tool selection', () => {
+    const spec = load(readFileSync(FOUNDRY_SPEC, 'utf8')) as {
+      modes: Record<string, { vocabulary?: string[] }>;
+    };
+
+    expect(spec.modes.scaffold_plan.vocabulary?.slice(0, 2)).toEqual([
+      'approve_artifact_plan',
+      'plan_artifacts',
+    ]);
+  });
+});
+
 function readSkeletonSpec(): SkeletonSpec {
   return load(renderSkeletonSpec()) as SkeletonSpec;
 }
