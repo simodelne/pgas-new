@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createPgasServer, type PgasServer } from '@simodelne/pgas-server/create-server.js';
-import { ensureOpenAiJsonResponseFormatDisabled } from '../../src/foundry-server.js';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 
 describe('foundry LLM provider payload', () => {
@@ -41,8 +40,7 @@ describe('foundry LLM provider payload', () => {
     restoreEnv('PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT', originalDisableJsonResponseFormat);
   });
 
-  it('omits response_format from the actual OpenAI-compatible request payload', async () => {
-    ensureOpenAiJsonResponseFormatDisabled();
+  it('leaves OpenAI-compatible request payload formatting to the engine provider', async () => {
     server = await createPgasServer({
       programs: [{ name: 'pgas-new', entry: createPgasNewFoundryProgramEntry() }],
       devMode: true,
@@ -67,9 +65,6 @@ describe('foundry LLM provider payload', () => {
     expect(payload).toMatchObject({
       model: 'qwen36-27b',
     });
-    for (const request of providerRequests) {
-      expect(request).not.toHaveProperty('response_format');
-    }
   });
 });
 

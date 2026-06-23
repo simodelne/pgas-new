@@ -26,13 +26,13 @@ describe('foundry LLM mode bootstrap', () => {
     restoreEnv('PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT', originalDisableJsonResponseFormat);
   });
 
-  (canOpenLoopbackListener ? it : it.skip)('sets PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT to 1 by default', async () => {
+  (canOpenLoopbackListener ? it : it.skip)('leaves PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT unset by default', async () => {
     server = await startFoundryServer({ port: 0 });
 
-    expect(process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT).toBe('1');
+    expect(process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT).toBeUndefined();
   });
 
-  (canOpenLoopbackListener ? it : it.skip)('preserves an explicit JSON response format override', async () => {
+  (canOpenLoopbackListener ? it : it.skip)('leaves an explicit JSON response format override untouched', async () => {
     process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = '0';
 
     server = await startFoundryServer({ port: 0 });

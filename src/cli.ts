@@ -1,3 +1,5 @@
+process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
+
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';

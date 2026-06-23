@@ -118,7 +118,7 @@ describe('template renderer', () => {
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
       const deterministicTest = readFileSync(join(outDir, 'tests/program-deterministic.test.ts'), 'utf8');
 
-      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^2.13.0"');
+      expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^2.13.4"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
       expect(registration).toContain("from '@simodelne/pgas-server/plugin.js'");
       expect(registration).toContain('type ProgramEntry');

@@ -50,7 +50,11 @@ describe('pgas-new CLI', () => {
     const result = await runCli(['version']);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('@simodelne/pgas-server@2.13.0');
+    expect(result.stdout).toContain('@simodelne/pgas-server@2.13.4');
+  });
+
+  it('defaults engine OpenAI tool choice to required when no override is configured', () => {
+    expect(process.env.PGAS_OPENAI_TOOL_CHOICE).toBe('required');
   });
 
   it('maps session commands to generated control-plane controls and points users to the REPL', async () => {
