@@ -161,7 +161,7 @@ describe('REPL controls', () => {
     }
   });
 
-  it('drains text queued while a deterministic control waits for auto-continuation to go idle', async () => {
+  it('keeps text input live while a deterministic control observes auto-continuation state', async () => {
     const fake = createFakePgasFetch({
       sessionEnvelopes: [
         {
@@ -211,9 +211,54 @@ describe('REPL controls', () => {
       const result = await repl;
 
       expect(result.exitCode).toBe(0);
-      expect(fake.requests.filter((request) => request.path === '/sessions/session-1').length).toBeGreaterThanOrEqual(
-        2,
-      );
+      expect(fake.requests.filter((request) => request.path === '/sessions/session-1').length).toBeGreaterThanOrEqual(1);
+      expect(revisedAnswer).toMatchObject({
+        method: 'POST',
+        path: '/sessions/session-1/trigger/stream',
+        body: { channel: 'user_text', payload: 'intake, review, remediation, complete' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('drains queued text after a control when the live session remains running', async () => {
+    const fake = createFakePgasFetch({
+      sessionEnvelope: {
+        sessionId: 'session-1',
+        program: 'pgas-new',
+        status: 'Running',
+        state: {
+          mode: 'intake_intelligence',
+          running: true,
+          currentRoundNumber: 17,
+          rounds: Array.from({ length: 17 }, (_, index) => ({ number: index })),
+        },
+      },
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+      await stdout.waitFor('ready');
+
+      stdin.write('/reject please change Q3 stages\n');
+      await fake.waitForRequest('/sessions/session-1');
+      await sleep(0);
+
+      stdin.write('intake, review, remediation, complete\n');
+      const revisedAnswer = await waitForMaybeRequest(fake, '/sessions/session-1/trigger/stream', 250, 2);
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
       expect(revisedAnswer).toMatchObject({
         method: 'POST',
         path: '/sessions/session-1/trigger/stream',

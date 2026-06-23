@@ -224,7 +224,6 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       const envelope = await client.sessions.get(state.sessionId);
       const live = readLiveSessionFields(envelope);
       state.mode = live.mode ?? state.mode;
-      state.running = live.running === true;
       renderer.renderInfo(
         `session: ${state.sessionId}  status: ${String(envelope.status ?? 'unknown')}  ` +
           `mode: ${String(live.mode ?? '?')}  running: ${String(live.running === true)}  ` +
@@ -280,7 +279,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       const live = readLiveSessionFields(envelope);
       state.sessionId = envelope.sessionId;
       state.mode = live.mode ?? null;
-      state.running = live.running === true;
+      state.running = false;
       renderer.renderStep(`Resumed session ${envelope.sessionId} (mode: ${state.mode ?? '?'}).`);
     } catch (error) {
       renderer.renderError(`Resume failed: ${errorMessage(error)}`);
@@ -331,29 +330,41 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       channel: 'http',
       ...(args && Object.keys(args).length > 0 ? { args } : {}),
     });
-    await waitForSessionIdleAfterControl();
+    await waitForSessionRoundSettleAfterControl();
   }
 
-  async function refreshLiveState(): Promise<void> {
-    if (!state.sessionId) return;
+  async function refreshLiveState(): Promise<ReturnType<typeof readLiveSessionFields> | null> {
+    if (!state.sessionId) return null;
 
     try {
       const envelope = await client.sessions.get(state.sessionId);
       const live = readLiveSessionFields(envelope);
       state.mode = live.mode ?? state.mode;
-      state.running = live.running === true;
+      return live;
     } catch {
       // Controls are already committed; a status refresh failure should not
       // turn an accepted slash command into a user-facing error.
+      return null;
     }
   }
 
-  async function waitForSessionIdleAfterControl(): Promise<void> {
+  async function waitForSessionRoundSettleAfterControl(): Promise<void> {
     const deadline = Date.now() + CONTROL_IDLE_TIMEOUT_MS;
+    let lastRoundCount: number | null = null;
+    let stableRoundPolls = 0;
 
     do {
-      await refreshLiveState();
-      if (!state.running || exiting) return;
+      const live = await refreshLiveState();
+      if (exiting) return;
+      if (live) {
+        if (live.roundCount === lastRoundCount) {
+          stableRoundPolls += 1;
+        } else {
+          lastRoundCount = live.roundCount;
+          stableRoundPolls = 0;
+        }
+        if (stableRoundPolls >= 1) return;
+      }
       await sleep(CONTROL_IDLE_POLL_INTERVAL_MS);
     } while (Date.now() < deadline);
   }
