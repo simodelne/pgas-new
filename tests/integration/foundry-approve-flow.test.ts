@@ -77,45 +77,102 @@ describe('foundry artifact-plan approval flow', () => {
       await harness.close();
     }
   });
-});
 
-async function createHarness(targetDir: string): Promise<TestHarness> {
-  return createTestHarness(createPgasNewFoundryProgramEntry(), {
-    programName: 'pgas-new',
-    authorResponses: [
-      effect('record_program_target', {
-        slug: 'incident-triage',
-        name: 'Incident Triage',
-        target_dir: targetDir,
-      }),
-      effect('choose_design_path', { choice: 'design' }),
-      effect('record_q1_purpose', {
-        purpose: 'Route incoming incidents into a triage workflow.',
-      }),
-      effect('record_q2_entry_channel', {
-        entry_channel: 'user_text',
-      }),
-      effect('record_q3_stages', {
-        stages_json: JSON.stringify(stages),
-      }),
-      effect('record_q4_transitions', {
-        transitions_json: JSON.stringify(transitions),
-      }),
-      effect('record_q5_delegation', {
-        delegation_json: JSON.stringify({}),
-      }),
-      effect('record_q6_completion', {
-        completion_json: JSON.stringify({ final_stage: 'resolved', guard_field: 'triage.summary_ready' }),
-      }),
-      effect('record_program_intake_finalize'),
-      effect('confirm_design', { approved: true }),
-      effect('authorize_standalone_target'),
-      effect('synthesize_program_spec'),
+  it('repairs a repeated plan_artifacts tool call on /approve into approve_artifact_plan', async () => {
+    const targetDir = join(trackedTempRoot('pgas-new-foundry-approve-repair-'), 'incident-triage');
+    const harness = await createHarnessWithResponses([
+      ...intakeThroughDraftResponses(targetDir),
       effect('plan_artifacts'),
       effect('approve_artifact_plan'),
       effect('write_scaffold_artifacts', { cwd: targetDir }),
-    ],
+    ]);
+
+    try {
+      await driveToDraftArtifactPlan(harness);
+
+      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const approved = await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.domain['artifacts.written'] === true,
+        'repair from repeated plan_artifacts to approval write',
+      );
+      const terminals = terminalActionNames(approved.rounds);
+
+      expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'write_scaffold_artifacts']));
+      expect(approved.domain['artifact_plan.status']).toBe('approved');
+      expect(approved.domain['artifact_plan.approved']).toBe(true);
+      expect(approved.domain['artifacts.written']).toBe(true);
+    } finally {
+      await harness.close();
+    }
   });
+});
+
+async function createHarness(targetDir: string): Promise<TestHarness> {
+  return createHarnessWithResponses([
+    ...intakeThroughDraftResponses(targetDir),
+    effect('approve_artifact_plan'),
+    effect('write_scaffold_artifacts', { cwd: targetDir }),
+  ]);
+}
+
+async function createHarnessWithResponses(authorResponses: TestHarnessAuthorResponse[]): Promise<TestHarness> {
+  return createTestHarness(createPgasNewFoundryProgramEntry(), {
+    programName: 'pgas-new',
+    authorResponses,
+  });
+}
+
+function intakeThroughDraftResponses(targetDir: string): TestHarnessAuthorResponse[] {
+  return [
+    effect('record_program_target', {
+      slug: 'incident-triage',
+      name: 'Incident Triage',
+      target_dir: targetDir,
+    }),
+    effect('choose_design_path', { choice: 'design' }),
+    effect('record_q1_purpose', {
+      purpose: 'Route incoming incidents into a triage workflow.',
+    }),
+    effect('record_q2_entry_channel', {
+      entry_channel: 'user_text',
+    }),
+    effect('record_q3_stages', {
+      stages_json: JSON.stringify(stages),
+    }),
+    effect('record_q4_transitions', {
+      transitions_json: JSON.stringify(transitions),
+    }),
+    effect('record_q5_delegation', {
+      delegation_json: JSON.stringify({}),
+    }),
+    effect('record_q6_completion', {
+      completion_json: JSON.stringify({ final_stage: 'resolved', guard_field: 'triage.summary_ready' }),
+    }),
+    effect('record_program_intake_finalize'),
+    effect('confirm_design', { approved: true }),
+    effect('authorize_standalone_target'),
+    effect('synthesize_program_spec'),
+    effect('plan_artifacts'),
+  ];
+}
+
+async function driveToDraftArtifactPlan(harness: TestHarness): Promise<void> {
+  await harness.trigger({ channel: 'user_text', payload: 'Create an incident triage PGAS program.' });
+  await harness.trigger({ channel: 'user_text', payload: 'Use the design path.' });
+  await harness.trigger({ channel: 'user_text', payload: 'Route incoming incidents into a triage workflow.' });
+  await harness.trigger({ channel: 'user_text', payload: 'user_text' });
+  await harness.trigger({ channel: 'user_text', payload: 'intake, triage, resolved' });
+  await harness.trigger({ channel: 'user_text', payload: 'intake to triage, then triage to resolved.' });
+  await harness.trigger({ channel: 'user_text', payload: 'No delegation.' });
+  await harness.trigger({ channel: 'user_text', payload: 'Resolved when triage.summary_ready is true.' });
+  await harness.trigger({ channel: 'user_text', payload: 'Finalize intake.' });
+  await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+  await waitForSnapshot(
+    harness,
+    (snapshot) => snapshot.mode === 'scaffold_plan' && snapshot.domain['artifact_plan.status'] === 'draft',
+    'draft artifact plan before approval',
+  );
 }
 
 function effect(name: string, payload: Record<string, unknown> = {}): TestHarnessAuthorResponse {

@@ -26,7 +26,7 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_q6_completion, record_program_intake_finalize, confirm_design, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_q6_completion, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       record_program_target:
@@ -69,6 +69,30 @@ modes:
         - { kind: FieldFalsy, path: program.design_confirmed }
         - { kind: TriggerType, triggerSet: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
+      reject_design_and_revise_q1:
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
+      reject_design_and_revise_q2:
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
+      reject_design_and_revise_q3:
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
+      reject_design_and_revise_q4:
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
+      reject_design_and_revise_q5:
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
+      reject_design_and_revise_q6:
+        - { kind: FieldTruthy, path: intake.program_intake_finalized }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
       web_research:
         - { kind: FieldTruthy, path: intake.user_research_authorized }
     transitions:
@@ -110,6 +134,11 @@ modes:
     vocabulary: [plan_artifacts, approve_artifact_plan, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_confirmation, system_mode_entry, widget_output, artifact_plan_output]
     preconditions:
+      plan_artifacts:
+        - { kind: FieldTruthy, path: repo.write_authorized }
+        - { kind: FieldTruthy, path: program.synthesis_complete }
+        - { kind: FieldFalsy, path: artifact_plan.status }
+        - { kind: TriggerType, triggerSet: [system_mode_entry] }
       approve_artifact_plan:
         - { kind: FieldTruthy, path: repo.write_authorized }
         - { kind: FieldTruthy, path: program.synthesis_complete }
@@ -306,6 +335,10 @@ prompts:
        recording each answer with its corresponding Q-action, then call
        `record_program_intake_finalize`.
     5. Finally call `confirm_design` to gate transition to repo_targeting.
+    6. If the user_confirmation decision is `reject` and the instruction names
+       Q1, Q2, Q3, Q4, Q5, or Q6, call the matching
+       `reject_design_and_revise_qN` action first. Then re-run that Q-action
+       and continue from there through Q6 before asking for confirmation again.
 
     Do not pre-fill or batch multiple tool calls in one response.
   repo_targeting: |
@@ -348,6 +381,9 @@ prompts:
     - One tool_call per round.
 
     Create and approve the artifact plan before writes.
+    - On system_mode_entry with no artifact_plan.status, call plan_artifacts.
+    - On user_confirmation decision='approve' with artifact_plan.status='draft',
+      call approve_artifact_plan. Do NOT call plan_artifacts on approval.
   branch_write: "Write only planned artifacts."
   static_verify: "Run static verification and record evidence."
   live_verify: "Run real-provider verification through the external API."
@@ -509,6 +545,63 @@ action_map:
     mutations:
       - { op: MSet, path: program.design_confirmed, value: true }
     channel: widget_output
+  reject_design_and_revise_q1:
+    description: "Reopen design intake from Q1 onward after explicit confirm_design rejection."
+    mutations:
+      - { op: MSet, path: intake.q1_recorded, value: false }
+      - { op: MSet, path: intake.q2_recorded, value: false }
+      - { op: MSet, path: intake.q3_recorded, value: false }
+      - { op: MSet, path: intake.q4_recorded, value: false }
+      - { op: MSet, path: intake.q5_recorded, value: false }
+      - { op: MSet, path: intake.q6_recorded, value: false }
+      - { op: MSet, path: intake.program_intake_finalized, value: false }
+      - { op: MSet, path: program.design_confirmed, value: false }
+    channel: widget_output
+  reject_design_and_revise_q2:
+    description: "Reopen design intake from Q2 onward after explicit confirm_design rejection."
+    mutations:
+      - { op: MSet, path: intake.q2_recorded, value: false }
+      - { op: MSet, path: intake.q3_recorded, value: false }
+      - { op: MSet, path: intake.q4_recorded, value: false }
+      - { op: MSet, path: intake.q5_recorded, value: false }
+      - { op: MSet, path: intake.q6_recorded, value: false }
+      - { op: MSet, path: intake.program_intake_finalized, value: false }
+      - { op: MSet, path: program.design_confirmed, value: false }
+    channel: widget_output
+  reject_design_and_revise_q3:
+    description: "Reopen design intake from Q3 onward after explicit confirm_design rejection."
+    mutations:
+      - { op: MSet, path: intake.q3_recorded, value: false }
+      - { op: MSet, path: intake.q4_recorded, value: false }
+      - { op: MSet, path: intake.q5_recorded, value: false }
+      - { op: MSet, path: intake.q6_recorded, value: false }
+      - { op: MSet, path: intake.program_intake_finalized, value: false }
+      - { op: MSet, path: program.design_confirmed, value: false }
+    channel: widget_output
+  reject_design_and_revise_q4:
+    description: "Reopen design intake from Q4 onward after explicit confirm_design rejection."
+    mutations:
+      - { op: MSet, path: intake.q4_recorded, value: false }
+      - { op: MSet, path: intake.q5_recorded, value: false }
+      - { op: MSet, path: intake.q6_recorded, value: false }
+      - { op: MSet, path: intake.program_intake_finalized, value: false }
+      - { op: MSet, path: program.design_confirmed, value: false }
+    channel: widget_output
+  reject_design_and_revise_q5:
+    description: "Reopen design intake from Q5 onward after explicit confirm_design rejection."
+    mutations:
+      - { op: MSet, path: intake.q5_recorded, value: false }
+      - { op: MSet, path: intake.q6_recorded, value: false }
+      - { op: MSet, path: intake.program_intake_finalized, value: false }
+      - { op: MSet, path: program.design_confirmed, value: false }
+    channel: widget_output
+  reject_design_and_revise_q6:
+    description: "Reopen design intake from Q6 onward after explicit confirm_design rejection."
+    mutations:
+      - { op: MSet, path: intake.q6_recorded, value: false }
+      - { op: MSet, path: intake.program_intake_finalized, value: false }
+      - { op: MSet, path: program.design_confirmed, value: false }
+    channel: widget_output
   record_user_note: { description: "Record a notebook note.", mutations: [{ op: MAppend, path: notebook.entries, from_arg: note }], channel: widget_output }
   pin_notebook_note: { description: "Pin a notebook note for next-turn projection.", mutations: [{ op: MAppend, path: notebook.pins, from_arg: key }], channel: widget_output }
   confirm_research_scope:
@@ -553,9 +646,10 @@ action_map:
   load_wiring_manifest:
     description: "Load and validate fixed .pgas/wiring.yml for existing-repo writes."
     arg_descriptions:
-      repo_root: "Existing repository root; pass program.target_dir exactly."
+      repo_root: "The absolute path to the existing repository root. Read this from program.target_dir in the current state."
     mutations:
       - { op: MSet, path: repo.target_kind, value: existing_repo }
+      - { op: MSet, path: repo.wiring_manifest.repo_root, from_arg: repo_root }
       - { op: MSet, path: repo.wiring_manifest.status, value: valid }
       - { op: MSet, path: repo.wiring_manifest.path, value: .pgas/wiring.yml }
       - { op: MSet, path: repo.blocked, value: false }
@@ -697,6 +791,7 @@ schema:
   repo.curator_request_lodged: boolean
   repo.wiring_manifest.status: string
   repo.wiring_manifest.path: string
+  repo.wiring_manifest.repo_root: string
   repo.wiring_manifest_json: string
   repo.allowed_imports: array
   repo.allowed_imports.*: string
@@ -758,7 +853,7 @@ guidance:
     - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
-    - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask which dimension to revise, re-run the relevant step, and re-emit the echo-back."
+    - "On user_confirmation with decision='reject' and instruction naming Q1, Q2, Q3, Q4, Q5, or Q6, first call the matching reject_design_and_revise_qN action (for example reject_design_and_revise_q3 for Q3). That action reopens the Q-chain from that question onward. Then re-ask/record that Q and continue through Q6 before re-emitting the confirm_design echo-back."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
   repo_targeting:
     - "This mode is mandatory between confirm_design and architecture_design; do not skip it."
@@ -766,10 +861,10 @@ guidance:
     - "If program.target_dir points to an existing repo with .pgas/wiring.yml, call load_wiring_manifest with repo_root=program.target_dir, then call authorize_existing_repo_target after the manifest status is valid."
     - "Only leave repo_targeting after repo.write_authorized is true; the transition to architecture_design is guarded on that field."
   scaffold_plan:
-    - "Call plan_artifacts to produce the artifact plan from the synthesized spec in in-process transit. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
+    - "Only call plan_artifacts on system_mode_entry to produce the artifact plan from the synthesized spec in in-process transit after repo.write_authorized and program.synthesis_complete are true and artifact_plan.status is still unset. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
     - "Echo the artifact-plan list (paths + purposes) to the user as plain text and instruct them to type /approve or /reject."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
-    - "On user_confirmation decision='approve', call approve_artifact_plan. Then the transition to branch_write fires."
+    - "On user_confirmation decision='approve' with artifact_plan.status='draft' and artifact_plan.approved false, call approve_artifact_plan. Do NOT call plan_artifacts on an approval trigger. Then the transition to branch_write fires."
     - "On reject/edit: don't call approve_artifact_plan; ask which artifact the user wants changed; re-emit."
   architecture_design:
     - "On entering architecture_design after confirm_design, call synthesize_program_spec. The handler performs mechanical synthesis with no LLM call, writes the YAML to in-process transit for this session, and flips program.synthesis_complete via the action-map mutation."

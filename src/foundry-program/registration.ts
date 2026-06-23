@@ -13,6 +13,7 @@ import { registerPgasNewTools } from './tools.js';
 const AUTO_CONTINUE_ACTIONS = new Set([
   'confirm_design',
   'authorize_standalone_target',
+  'load_wiring_manifest',
   'authorize_existing_repo_target',
   'synthesize_program_spec',
   'approve_artifact_plan',
@@ -118,13 +119,28 @@ function isSynthesizeProgramSpecEffect(
 }
 
 function isAutoContinueEffect(payload: unknown): payload is { kind: 'EffectAction'; name: string; payload: unknown } {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false;
+  }
+  if ((payload as { kind?: unknown }).kind !== 'EffectAction') {
+    return false;
+  }
+  const name = (payload as { name?: unknown }).name;
+  if (typeof name !== 'string') {
+    return false;
+  }
+  if (name === 'select_repo_target') {
+    return selectedExistingRepoTarget((payload as { payload?: unknown }).payload);
+  }
+  return AUTO_CONTINUE_ACTIONS.has(name);
+}
+
+function selectedExistingRepoTarget(payload: unknown): boolean {
   return (
     !!payload &&
     typeof payload === 'object' &&
     !Array.isArray(payload) &&
-    (payload as { kind?: unknown }).kind === 'EffectAction' &&
-    typeof (payload as { name?: unknown }).name === 'string' &&
-    AUTO_CONTINUE_ACTIONS.has((payload as { name: string }).name)
+    (payload as { target_kind?: unknown }).target_kind === 'existing_repo'
   );
 }
 

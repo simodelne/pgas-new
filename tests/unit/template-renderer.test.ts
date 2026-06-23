@@ -238,6 +238,12 @@ describe('template renderer', () => {
           ...qActionNames,
           'record_program_intake_finalize',
           'confirm_design',
+          'reject_design_and_revise_q1',
+          'reject_design_and_revise_q2',
+          'reject_design_and_revise_q3',
+          'reject_design_and_revise_q4',
+          'reject_design_and_revise_q5',
+          'reject_design_and_revise_q6',
         ]),
       );
       expect(parsed.modes.intake_intelligence.vocabulary).not.toContain('record_program_intake');
@@ -320,6 +326,13 @@ describe('template renderer', () => {
           { kind: 'FieldFalsy', path: 'program.design_confirmed' },
           { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
           { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+        ]),
+      );
+      expect(parsed.modes.intake_intelligence.preconditions?.reject_design_and_revise_q3).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
+          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
         ]),
       );
 
@@ -410,6 +423,14 @@ describe('template renderer', () => {
       expect(parsed.action_map.confirm_design.mutations).toEqual([
         { op: 'MSet', path: 'program.design_confirmed', value: true },
       ]);
+      expect(parsed.action_map.reject_design_and_revise_q3.mutations).toEqual([
+        { op: 'MSet', path: 'intake.q3_recorded', value: false },
+        { op: 'MSet', path: 'intake.q4_recorded', value: false },
+        { op: 'MSet', path: 'intake.q5_recorded', value: false },
+        { op: 'MSet', path: 'intake.q6_recorded', value: false },
+        { op: 'MSet', path: 'intake.program_intake_finalized', value: false },
+        { op: 'MSet', path: 'program.design_confirmed', value: false },
+      ]);
       expect(parsed.action_map.synthesize_program_spec).toMatchObject({
         description: 'Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete.',
         channel: 'widget_output',
@@ -425,6 +446,14 @@ describe('template renderer', () => {
           { kind: 'FieldFalsy', path: 'artifact_plan.approved' },
           { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
           { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+        ]),
+      );
+      expect(parsed.modes.scaffold_plan.preconditions?.plan_artifacts).toEqual(
+        expect.arrayContaining([
+          { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+          { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+          { kind: 'FieldFalsy', path: 'artifact_plan.status' },
+          { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
         ]),
       );
       expect(parsed.ingestion.user_confirmation).toEqual([
@@ -526,6 +555,7 @@ describe('template renderer', () => {
           expect.stringContaining('record_program_intake_finalize'),
           expect.stringContaining('Do NOT attempt to batch multiple answers into one action'),
           expect.stringContaining("intent='confirm_design'"),
+          expect.stringContaining('reject_design_and_revise_qN'),
           expect.stringContaining("Don't re-ask anything you already extracted"),
         ]),
       );
@@ -1168,7 +1198,7 @@ describe('template renderer', () => {
       const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
       const parsed = load(spec) as {
         modes: Record<string, {
-          preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown }>>;
+          preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggerSet?: string[] }>>;
           transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
         }>;
         action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
@@ -1180,6 +1210,7 @@ describe('template renderer', () => {
       expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
       expect(parsed.schema['repo.write_authorized']).toBe('boolean');
       expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+      expect(parsed.schema['repo.wiring_manifest.repo_root']).toBe('string');
       expect(parsed.schema['repo.wiring_manifest_json']).toBe('string');
       expect(parsed.schema['repo.allowed_imports']).toBe('array');
       expect(parsed.schema['intake.research_allowed']).toBe('boolean');
@@ -1251,6 +1282,7 @@ describe('template renderer', () => {
       expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ path: 'repo.target_kind', value: 'existing_repo' }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.repo_root', from_arg: 'repo_root' }),
           expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'valid' }),
           expect.objectContaining({ path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' }),
           expect.objectContaining({ path: 'repo.write_authorized', value: true }),

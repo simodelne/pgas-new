@@ -163,6 +163,85 @@ describe('foundry intake tool-call protocol guidance', () => {
     }
   });
 
+  it('declares repo_root as a required load_wiring_manifest tool argument', async () => {
+    let loadWiringManifestTool: Record<string, unknown> | undefined;
+    let callIndex = 0;
+    const server = await createUnifiedServer(async (_messages, tools) => {
+      const toolNames = tools.map((tool) => tool.function.name);
+      callIndex += 1;
+      if (callIndex === 1) {
+        return toolCall('record_program_target', {
+          slug: 'native-target',
+          name: 'Native Target',
+          target_dir: '/tmp/native-target',
+        });
+      }
+      if (callIndex === 2) {
+        return toolCall('choose_design_path', { choice: 'default' });
+      }
+      if (callIndex === 3) {
+        return toolCall('apply_default_skeleton', {});
+      }
+      if (callIndex === 4) {
+        return toolCall('confirm_design', {});
+      }
+      if (toolNames.includes('load_wiring_manifest')) {
+        loadWiringManifestTool = tools.find((tool) => tool.function.name === 'load_wiring_manifest')?.function.parameters;
+        return toolCall('authorize_standalone_target', {});
+      }
+      if (toolNames.includes('synthesize_program_spec')) {
+        return toolCall('synthesize_program_spec', {});
+      }
+      return toolCall('plan_artifacts', {});
+    });
+
+    try {
+      const created = await fetchJson<{ sessionId: string }>(server, '/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ program: 'pgas-new' }),
+      });
+      await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'user_text',
+          payload: 'Create a PGAS program named Native Target in /tmp/native-target.',
+        }),
+      });
+      await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'user_text',
+          payload: 'Use the default skeleton.',
+        }),
+      });
+      await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'user_text',
+          payload: 'Apply the default skeleton.',
+        }),
+      });
+      await fetchJson(server, `/sessions/${created.sessionId}/trigger`, {
+        method: 'POST',
+        body: JSON.stringify({
+          channel: 'user_confirmation',
+          payload: { decision: 'approve' },
+        }),
+      });
+
+      expect(loadWiringManifestTool).toMatchObject({
+        type: 'object',
+        properties: {
+          repo_root: expect.objectContaining({ type: 'string' }),
+        },
+        required: expect.arrayContaining(['repo_root']),
+      });
+      expect(stringPropertyDescription(loadWiringManifestTool, 'repo_root')).toContain('program.target_dir');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('fires ask_design_question from structured native tool_calls and records the last question', async () => {
     const questionText = 'Q1 Purpose -- what does the program do?';
     const server = await createUnifiedServer(async () => ({
@@ -242,6 +321,18 @@ describe('foundry intake tool-call protocol guidance', () => {
 });
 
 type UnifiedComplete = UnifiedAuthorDriverOptions['complete'];
+
+function toolCall(name: string, args: Record<string, unknown>) {
+  return {
+    tool_calls: [{
+      id: `call_${name}`,
+      function: {
+        name,
+        arguments: JSON.stringify(args),
+      },
+    }],
+  };
+}
 
 const throwingAuthorHandle = {
   modelId: 'native-tool-call-test',

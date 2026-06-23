@@ -574,6 +574,30 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 
+  async reject_design_and_revise_q1() {
+    return designRevisionRequested(1);
+  },
+
+  async reject_design_and_revise_q2() {
+    return designRevisionRequested(2);
+  },
+
+  async reject_design_and_revise_q3() {
+    return designRevisionRequested(3);
+  },
+
+  async reject_design_and_revise_q4() {
+    return designRevisionRequested(4);
+  },
+
+  async reject_design_and_revise_q5() {
+    return designRevisionRequested(5);
+  },
+
+  async reject_design_and_revise_q6() {
+    return designRevisionRequested(6);
+  },
+
   async authorize_standalone_target() {
     return {
       kind: 'pgas_new_standalone_target_authorized',
@@ -785,7 +809,12 @@ export const handlers: Record<string, ToolHandler> = {
    * cwd safety: no process spawn.
    */
   async load_wiring_manifest(payload) {
-    const repoRoot = stringPayloadField(payload, 'repo_root');
+    const domain = optionalDomainFromPayload(payload);
+    const repoRoot = optionalStringPayloadField(payload, 'repo_root')
+      ?? (domain ? optionalStringDomainField(domain, 'program.target_dir') : undefined);
+    if (!repoRoot) {
+      throw new Error('missing string payload field: repo_root');
+    }
     const manifestPath = join(repoRoot, WIRING_MANIFEST_PATH);
     if (!existsSync(manifestPath)) {
       throw new Error(`no wiring manifest at ${manifestPath}; foundry must lodge a curator request instead of writing`);
@@ -848,6 +877,13 @@ export const handlers: Record<string, ToolHandler> = {
   },
 };
 
+function designRevisionRequested(questionNumber: number): Record<string, unknown> {
+  return {
+    kind: 'pgas_new_design_revision_requested',
+    question_number: questionNumber,
+  };
+}
+
 function sessionIdFromPayload(payload: Record<string, unknown>): string {
   const direct = payload.session_id ?? payload.sessionId;
   if (typeof direct === 'string' && direct.length > 0) {
@@ -872,6 +908,14 @@ function domainFromPayload(payload: Record<string, unknown>): Record<string, unk
   return domain as Record<string, unknown>;
 }
 
+function optionalDomainFromPayload(payload: Record<string, unknown>): Record<string, unknown> | undefined {
+  const domain = payload.domain;
+  if (!domain || typeof domain !== 'object' || Array.isArray(domain)) {
+    return undefined;
+  }
+  return domain as Record<string, unknown>;
+}
+
 function stringDomainField(domain: Record<string, unknown>, path: string): string {
   const value = domainValue(domain, path);
   if (typeof value !== 'string' || value.length === 0) {
@@ -891,7 +935,23 @@ function parseWiringManifestDomainField(domain: Record<string, unknown>): Wiring
     return JSON.parse(value) as WiringManifest;
   }
   if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const nestedJson = (value as Record<string, unknown>).wiring_manifest_json;
+    if (typeof nestedJson === 'string') {
+      return JSON.parse(nestedJson) as WiringManifest;
+    }
     return value as WiringManifest;
+  }
+  const manifestRoot = optionalStringDomainField(domain, 'repo.wiring_manifest.repo_root')
+    ?? optionalStringDomainField(domain, 'program.target_dir');
+  if (
+    manifestRoot &&
+    domainValue(domain, 'repo.wiring_manifest.status') === 'valid' &&
+    domainValue(domain, 'repo.wiring_manifest.path') === WIRING_MANIFEST_PATH
+  ) {
+    const result = readWiringManifest(manifestRoot);
+    if (result.ok && result.manifest) {
+      return result.manifest;
+    }
   }
   throw new Error('existing-repo artifact planning requires repo.wiring_manifest_json');
 }

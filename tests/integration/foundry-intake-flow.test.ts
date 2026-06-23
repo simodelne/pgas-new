@@ -19,6 +19,12 @@ const intakeToolNames = [
   'record_q6_completion',
   'record_program_intake_finalize',
   'confirm_design',
+  'reject_design_and_revise_q1',
+  'reject_design_and_revise_q2',
+  'reject_design_and_revise_q3',
+  'reject_design_and_revise_q4',
+  'reject_design_and_revise_q5',
+  'reject_design_and_revise_q6',
 ] as const;
 
 const defaultStages = [
@@ -283,6 +289,10 @@ describe('foundry intake flow', () => {
       kind: 'pgas_new_design_confirmed',
       approved: true,
     });
+    await expect(handlers.reject_design_and_revise_q3({})).resolves.toEqual({
+      kind: 'pgas_new_design_revision_requested',
+      question_number: 3,
+    });
   });
 
   it('drives the Q1-Q6 design fork to repo_targeting', async () => {
@@ -439,6 +449,60 @@ describe('foundry intake flow', () => {
       } finally {
         await harness.close();
       }
+    }
+  });
+
+  it('clears Q3 through Q6 when confirmation is rejected for a Q3 revision', async () => {
+    const revisedStages = [
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'review' },
+      { slug: 'complete', is_terminal: true },
+    ];
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses: [
+        effect('record_program_target', {
+          slug: 'incident-triage',
+          name: 'Incident Triage',
+          target_dir: '/tmp/incident-triage',
+        }),
+        effect('choose_design_path', { choice: 'design' }),
+        ...designIntakeRecordActions,
+        effect('record_program_intake_finalize', {}),
+        effect('reject_design_and_revise_q3', {}),
+        effect('record_q3_stages', { stages_json: JSON.stringify(revisedStages) }),
+      ],
+    });
+
+    try {
+      await harness.trigger('Create an incident triage PGAS program.');
+      await harness.trigger('I want to design it.');
+      for (const answer of answerByRound) {
+        await harness.trigger(answer);
+      }
+      await harness.trigger('Finalize the design intake.');
+      await harness.trigger(replConfirmation('/reject please change Q3 stages'));
+      let snapshot = await harness.snapshot();
+
+      expect(snapshot.domain['intake.q1_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q2_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q3_recorded']).toBe(false);
+      expect(snapshot.domain['intake.q4_recorded']).toBe(false);
+      expect(snapshot.domain['intake.q5_recorded']).toBe(false);
+      expect(snapshot.domain['intake.q6_recorded']).toBe(false);
+      expect(snapshot.domain['intake.program_intake_finalized']).toBe(false);
+      expect(snapshot.domain['program.design_confirmed']).toBe(false);
+
+      await harness.trigger('intake, review, complete');
+      snapshot = await harness.snapshot();
+
+      expect(snapshot.domain['intake.q3_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q4_recorded']).toBe(false);
+      expect(snapshot.domain['intake.program_intake_finalized']).toBe(false);
+      expect(snapshot.domain['intake.stages_json']).toBe(JSON.stringify(revisedStages));
+    } finally {
+      await harness.close();
     }
   });
 
