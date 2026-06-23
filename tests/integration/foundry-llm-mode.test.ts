@@ -7,12 +7,16 @@ const canOpenLoopbackListener = await canBindLoopbackListener();
 describe('foundry LLM mode bootstrap', () => {
   const originalProvider = process.env.PGAS_PROVIDER;
   const originalEnableMockProvider = process.env.PGAS_ENABLE_MOCK_PROVIDER;
+  const originalPgasDb = process.env.PGAS_DB;
   const originalDisableJsonResponseFormat = process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
+  const originalJwtSecret = process.env.PGAS_JWT_SECRET;
   let server: StartedFoundryServer | null = null;
 
   beforeEach(() => {
     process.env.PGAS_PROVIDER = 'mock';
     process.env.PGAS_ENABLE_MOCK_PROVIDER = '1';
+    process.env.PGAS_DB = ':memory:';
+    process.env.PGAS_JWT_SECRET = 'foundry-llm-mode-jwt-secret';
     delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
   });
 
@@ -23,7 +27,9 @@ describe('foundry LLM mode bootstrap', () => {
     }
     restoreEnv('PGAS_PROVIDER', originalProvider);
     restoreEnv('PGAS_ENABLE_MOCK_PROVIDER', originalEnableMockProvider);
+    restoreEnv('PGAS_DB', originalPgasDb);
     restoreEnv('PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT', originalDisableJsonResponseFormat);
+    restoreEnv('PGAS_JWT_SECRET', originalJwtSecret);
   });
 
   (canOpenLoopbackListener ? it : it.skip)('leaves PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT unset by default', async () => {

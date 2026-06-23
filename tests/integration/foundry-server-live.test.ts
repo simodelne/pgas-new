@@ -7,11 +7,15 @@ const canOpenLoopbackListener = await canBindLoopbackListener();
 describe('foundry server live bootstrap', () => {
   const originalProvider = process.env.PGAS_PROVIDER;
   const originalEnableMockProvider = process.env.PGAS_ENABLE_MOCK_PROVIDER;
+  const originalPgasDb = process.env.PGAS_DB;
+  const originalJwtSecret = process.env.PGAS_JWT_SECRET;
   let server: StartedFoundryServer | null = null;
 
   beforeEach(() => {
     process.env.PGAS_PROVIDER = 'mock';
     process.env.PGAS_ENABLE_MOCK_PROVIDER = '1';
+    process.env.PGAS_DB = ':memory:';
+    process.env.PGAS_JWT_SECRET = 'foundry-live-jwt-secret';
   });
 
   afterEach(async () => {
@@ -21,6 +25,8 @@ describe('foundry server live bootstrap', () => {
     }
     restoreEnv('PGAS_PROVIDER', originalProvider);
     restoreEnv('PGAS_ENABLE_MOCK_PROVIDER', originalEnableMockProvider);
+    restoreEnv('PGAS_DB', originalPgasDb);
+    restoreEnv('PGAS_JWT_SECRET', originalJwtSecret);
   });
 
   (canOpenLoopbackListener ? it : it.skip)('serves /health and closes the listener through kill', async () => {

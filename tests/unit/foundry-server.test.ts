@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { PgasServer, PgasServerConfig } from '@simodelne/pgas-server/create-server.js';
 import type { ProgramEntry } from '@simodelne/pgas-server/plugin.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,16 +35,29 @@ describe('startFoundryServer', () => {
   const originalFoundryPort = process.env.PGAS_FOUNDRY_PORT;
   const originalOpenAiBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
   const originalDisableJsonResponseFormat = process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
+  const originalPgasDb = process.env.PGAS_DB;
+  const originalJwtSecret = process.env.PGAS_JWT_SECRET;
+  const originalJwtIssuer = process.env.PGAS_JWT_ISSUER;
+  const originalJwtExpiresIn = process.env.PGAS_JWT_EXPIRES_IN;
+  const originalHome = process.env.HOME;
+  let homeDir: string;
 
   beforeEach(() => {
     createPgasServerMock.mockReset();
     createEntryMock.mockClear();
+    homeDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-home-'));
+    process.env.HOME = homeDir;
     delete process.env.PGAS_FOUNDRY_PORT;
     delete process.env.PGAS_OPENAI_BASE_URL;
     delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
+    delete process.env.PGAS_DB;
+    process.env.PGAS_JWT_SECRET = 'unit-jwt-secret';
+    delete process.env.PGAS_JWT_ISSUER;
+    delete process.env.PGAS_JWT_EXPIRES_IN;
   });
 
   afterEach(() => {
+    rmSync(homeDir, { recursive: true, force: true });
     if (originalFoundryPort === undefined) {
       delete process.env.PGAS_FOUNDRY_PORT;
     } else {
@@ -56,6 +72,31 @@ describe('startFoundryServer', () => {
       delete process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT;
     } else {
       process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = originalDisableJsonResponseFormat;
+    }
+    if (originalPgasDb === undefined) {
+      delete process.env.PGAS_DB;
+    } else {
+      process.env.PGAS_DB = originalPgasDb;
+    }
+    if (originalJwtSecret === undefined) {
+      delete process.env.PGAS_JWT_SECRET;
+    } else {
+      process.env.PGAS_JWT_SECRET = originalJwtSecret;
+    }
+    if (originalJwtIssuer === undefined) {
+      delete process.env.PGAS_JWT_ISSUER;
+    } else {
+      process.env.PGAS_JWT_ISSUER = originalJwtIssuer;
+    }
+    if (originalJwtExpiresIn === undefined) {
+      delete process.env.PGAS_JWT_EXPIRES_IN;
+    } else {
+      process.env.PGAS_JWT_EXPIRES_IN = originalJwtExpiresIn;
+    }
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
     }
   });
 
@@ -124,6 +165,98 @@ describe('startFoundryServer', () => {
     await server.kill();
 
     expect(engine.close).toHaveBeenCalledOnce();
+  });
+
+  it('passes configured storage and auth settings to createPgasServer', async () => {
+    const engine = mockPgasServer({ boundPort: 4562 });
+    createPgasServerMock.mockResolvedValue(engine);
+    const dbPath = join(homeDir, 'nested', 'configured.db');
+    process.env.PGAS_DB = dbPath;
+    process.env.PGAS_JWT_SECRET = 'configured-jwt-secret';
+    process.env.PGAS_JWT_ISSUER = 'configured-issuer';
+    process.env.PGAS_JWT_EXPIRES_IN = '30m';
+
+    await startFoundryServer({ port: 4562, hostname: '127.0.0.1' });
+
+    expect(existsSync(dirname(dbPath))).toBe(true);
+    expect(statSync(dirname(dbPath)).isDirectory()).toBe(true);
+    expect(serverConfig()).toEqual(expect.objectContaining({
+      storage: { dbPath },
+      auth: {
+        jwtSecret: 'configured-jwt-secret',
+        issuer: 'configured-issuer',
+        expiresIn: '30m',
+      },
+    }));
+  });
+
+  it('resolves default db path and JWT secret file when env overrides are absent', async () => {
+    const engine = mockPgasServer({ boundPort: 4563 });
+    createPgasServerMock.mockResolvedValue(engine);
+    delete process.env.PGAS_JWT_SECRET;
+    const dataDir = join(homeDir, '.local/share/pgas-new');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'jwt.secret'), 'file-jwt-secret\n');
+
+    await startFoundryServer({ port: 4563, hostname: '127.0.0.1' });
+
+    expect(serverConfig()).toEqual(expect.objectContaining({
+      storage: { dbPath: join(dataDir, 'pgas-new.db') },
+      auth: {
+        jwtSecret: 'file-jwt-secret',
+        issuer: 'pgas-new',
+        expiresIn: '7d',
+      },
+    }));
+  });
+
+  it('throws a clear init error when no JWT secret is configured', async () => {
+    delete process.env.PGAS_JWT_SECRET;
+
+    await expect(startFoundryServer({ port: 4564, hostname: '127.0.0.1' }))
+      .rejects.toThrow('no JWT secret configured; run `pgas-new init`');
+    expect(createPgasServerMock).not.toHaveBeenCalled();
+  });
+
+  it('passes initialAdmin when staged and deletes the staging file after successful startup', async () => {
+    const engine = mockPgasServer({ boundPort: 4565 });
+    createPgasServerMock.mockResolvedValue(engine);
+    const dataDir = join(homeDir, '.local/share/pgas-new');
+    mkdirSync(dataDir, { recursive: true });
+    const initialAdminPath = join(dataDir, 'initial-admin.json');
+    writeFileSync(initialAdminPath, JSON.stringify({
+      email: 'admin@test',
+      password: 'test-password',
+    }));
+
+    await startFoundryServer({ port: 4565, hostname: '127.0.0.1' });
+
+    expect(serverConfig().auth).toEqual(expect.objectContaining({
+      initialAdmin: { email: 'admin@test', password: 'test-password' },
+    }));
+    expect(existsSync(initialAdminPath)).toBe(false);
+  });
+
+  it('prefers passwordHash from initial-admin.json and omits initialAdmin when absent', async () => {
+    const engine = mockPgasServer({ boundPort: 4566 });
+    createPgasServerMock.mockResolvedValue(engine);
+    const dataDir = join(homeDir, '.local/share/pgas-new');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'initial-admin.json'), JSON.stringify({
+      email: 'admin@test',
+      password: 'plaintext-password',
+      passwordHash: 'stored-hash-value',
+    }));
+
+    await startFoundryServer({ port: 4566, hostname: '127.0.0.1' });
+    expect(serverConfig().auth).toEqual(expect.objectContaining({
+      initialAdmin: { email: 'admin@test', password: 'stored-hash-value' },
+    }));
+
+    const secondEngine = mockPgasServer({ boundPort: 4567 });
+    createPgasServerMock.mockResolvedValue(secondEngine);
+    await startFoundryServer({ port: 4567, hostname: '127.0.0.1' });
+    expect(serverConfig().auth).not.toHaveProperty('initialAdmin');
   });
 
   it('does not rewrite PGAS_OPENAI_BASE_URL before creating the server', async () => {
