@@ -569,13 +569,9 @@ action_map:
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q3:
-    description: "Reopen design intake from Q3 onward after explicit confirm_design rejection."
+    description: "Reopen design intake for Q3 after explicit confirm_design rejection while preserving later recorded answers."
     mutations:
       - { op: MSet, path: intake.q3_recorded, value: false }
-      - { op: MSet, path: intake.q4_recorded, value: false }
-      - { op: MSet, path: intake.q5_recorded, value: false }
-      - { op: MSet, path: intake.q6_recorded, value: false }
-      - { op: MSet, path: intake.program_intake_finalized, value: false }
       - { op: MSet, path: program.design_confirmed, value: false }
     channel: widget_output
   reject_design_and_revise_q4:
@@ -862,7 +858,7 @@ guidance:
     - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."
-    - "On user_confirmation with decision='reject' and instruction naming Q1, Q2, Q3, Q4, Q5, or Q6, first call the matching reject_design_and_revise_qN action (for example reject_design_and_revise_q3 for Q3). That action reopens the Q-chain from that question onward. Then re-ask/record that Q and continue through Q6 before re-emitting the confirm_design echo-back."
+    - "On user_confirmation with decision='reject' and instruction naming Q1, Q2, Q3, Q4, Q5, or Q6, first call the matching reject_design_and_revise_qN action (for example reject_design_and_revise_q3 for Q3). Re-ask/record that Q and then re-emit the confirm_design echo-back; preserve later recorded answers unless the user explicitly asks to revise them."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
   repo_targeting:
     - "This mode is mandatory between confirm_design and architecture_design; do not skip it."

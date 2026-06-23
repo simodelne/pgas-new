@@ -453,7 +453,7 @@ describe('foundry intake flow', () => {
     }
   });
 
-  it('clears Q3 through Q6 when confirmation is rejected for a Q3 revision', async () => {
+  it('preserves downstream answers when confirmation is rejected for a Q3 revision', async () => {
     const revisedStages = [
       { slug: 'intake', is_bootstrap: true },
       { slug: 'review' },
@@ -477,6 +477,7 @@ describe('foundry intake flow', () => {
           question_text: 'Q3 Stages of work -- name the revised stages in order.',
         }),
         effect('record_q3_stages', { stages_json: JSON.stringify(revisedStages) }),
+        effect('confirm_design', { approved: true }),
       ],
     });
 
@@ -497,10 +498,10 @@ describe('foundry intake flow', () => {
       expect(snapshot.domain['intake.q1_recorded']).toBe(true);
       expect(snapshot.domain['intake.q2_recorded']).toBe(true);
       expect(snapshot.domain['intake.q3_recorded']).toBe(false);
-      expect(snapshot.domain['intake.q4_recorded']).toBe(false);
-      expect(snapshot.domain['intake.q5_recorded']).toBe(false);
-      expect(snapshot.domain['intake.q6_recorded']).toBe(false);
-      expect(snapshot.domain['intake.program_intake_finalized']).toBe(false);
+      expect(snapshot.domain['intake.q4_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q5_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q6_recorded']).toBe(true);
+      expect(snapshot.domain['intake.program_intake_finalized']).toBe(true);
       expect(snapshot.domain['program.design_confirmed']).toBe(false);
       expect(snapshot.domain['intake.last_question_asked']).toBe(3);
 
@@ -508,9 +509,17 @@ describe('foundry intake flow', () => {
       snapshot = await harness.snapshot();
 
       expect(snapshot.domain['intake.q3_recorded']).toBe(true);
-      expect(snapshot.domain['intake.q4_recorded']).toBe(false);
-      expect(snapshot.domain['intake.program_intake_finalized']).toBe(false);
+      expect(snapshot.domain['intake.q4_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q5_recorded']).toBe(true);
+      expect(snapshot.domain['intake.q6_recorded']).toBe(true);
+      expect(snapshot.domain['intake.program_intake_finalized']).toBe(true);
       expect(snapshot.domain['intake.stages_json']).toBe(JSON.stringify(revisedStages));
+
+      await harness.trigger(replConfirmation('/approve'));
+      snapshot = await harness.snapshot();
+
+      expect(snapshot.mode).toBe('repo_targeting');
+      expect(snapshot.domain['program.design_confirmed']).toBe(true);
     } finally {
       await harness.close();
     }

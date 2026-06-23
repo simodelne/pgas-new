@@ -444,10 +444,6 @@ describe('template renderer', () => {
       ]);
       expect(parsed.action_map.reject_design_and_revise_q3.mutations).toEqual([
         { op: 'MSet', path: 'intake.q3_recorded', value: false },
-        { op: 'MSet', path: 'intake.q4_recorded', value: false },
-        { op: 'MSet', path: 'intake.q5_recorded', value: false },
-        { op: 'MSet', path: 'intake.q6_recorded', value: false },
-        { op: 'MSet', path: 'intake.program_intake_finalized', value: false },
         { op: 'MSet', path: 'program.design_confirmed', value: false },
       ]);
       expect(parsed.action_map.synthesize_program_spec).toMatchObject({
