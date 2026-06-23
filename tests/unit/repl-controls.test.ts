@@ -81,6 +81,86 @@ describe('REPL controls', () => {
     }
   });
 
+  it('keeps text input live after a control status refresh reports the session active', async () => {
+    const fake = createFakePgasFetch({
+      sessionEnvelope: {
+        sessionId: 'session-1',
+        program: 'pgas-new',
+        status: 'Running',
+        state: {
+          mode: 'intake_intelligence',
+          running: true,
+          currentRoundNumber: 17,
+          rounds: Array.from({ length: 17 }, (_, index) => ({ number: index })),
+        },
+      },
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+      await stdout.waitFor('ready');
+
+      stdin.write('/reject please change Q3 stages\n');
+      await fake.waitForRequest('/controls/pgas-new/reject_design_and_revise_q3');
+      await fake.waitForRequest('/sessions/session-1');
+
+      stdin.write('intake, review, remediation, complete\n');
+      const revisedAnswer = await waitForMaybeRequest(fake, '/sessions/session-1/trigger/stream', 250, 2);
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(revisedAnswer).toMatchObject({
+        method: 'POST',
+        path: '/sessions/session-1/trigger/stream',
+        body: { channel: 'user_text', payload: 'intake, review, remediation, complete' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not trap queued text when a deterministic control response remains open', async () => {
+    const fake = createFakePgasFetch({ holdRejectControlOpen: true });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+      await stdout.waitFor('ready');
+
+      stdin.write('/reject please change Q3 stages\n');
+      await fake.waitForRequest('/controls/pgas-new/reject_design_and_revise_q3');
+      stdin.write('intake, review, remediation, complete\n');
+      const revisedAnswer = await waitForMaybeRequest(fake, '/sessions/session-1/trigger/stream', 250, 2);
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(revisedAnswer).toMatchObject({
+        method: 'POST',
+        path: '/sessions/session-1/trigger/stream',
+        body: { channel: 'user_text', payload: 'intake, review, remediation, complete' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('dispatches /approve even while a prior streamed round is still open', async () => {
     const fake = createFakePgasFetch({ holdFirstTriggerOpen: true });
     vi.stubGlobal('fetch', fake.fetch);
@@ -228,7 +308,11 @@ function captureStream(): Writable & { text(): string; waitFor(expected: string)
   return writable;
 }
 
-function createFakePgasFetch(options: { holdFirstTriggerOpen?: boolean } = {}): FakeFetch & { closeHeldTrigger(): void } {
+function createFakePgasFetch(options: {
+  holdFirstTriggerOpen?: boolean;
+  holdRejectControlOpen?: boolean;
+  sessionEnvelope?: Record<string, unknown>;
+} = {}): FakeFetch & { closeHeldTrigger(): void } {
   const requests: RequestRecord[] = [];
   const waiters = new Map<string, Array<{ seenCount: number; resolve(record: RequestRecord): void }>>();
   const encoder = new TextEncoder();
@@ -283,6 +367,14 @@ function createFakePgasFetch(options: { holdFirstTriggerOpen?: boolean } = {}): 
         headers: { 'content-type': 'text/event-stream' },
       });
     }
+    if (request.method === 'GET' && url.pathname === '/sessions/session-1') {
+      return json(options.sessionEnvelope ?? {
+        sessionId: 'session-1',
+        program: 'pgas-new',
+        status: 'Running',
+        state: { mode: 'intake_intelligence', running: false, currentRoundNumber: 1, rounds: [{ number: 0 }] },
+      });
+    }
     if (request.method === 'POST' && url.pathname === '/controls/pgas-new/abort') {
       return json({ ok: true });
     }
@@ -290,6 +382,9 @@ function createFakePgasFetch(options: { holdFirstTriggerOpen?: boolean } = {}): 
       return json({ ok: true, sessionId: 'session-1' });
     }
     if (request.method === 'POST' && url.pathname.startsWith('/controls/pgas-new/reject_design_and_revise_q')) {
+      if (options.holdRejectControlOpen === true) {
+        return await new Promise<Response>(() => {});
+      }
       return json({ ok: true, sessionId: 'session-1' });
     }
 
@@ -327,9 +422,14 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-async function waitForMaybeRequest(fake: FakeFetch, path: string, timeoutMs: number): Promise<RequestRecord | null> {
+async function waitForMaybeRequest(
+  fake: FakeFetch,
+  path: string,
+  timeoutMs: number,
+  seenCount = 1,
+): Promise<RequestRecord | null> {
   return Promise.race([
-    fake.waitForRequest(path),
+    fake.waitForRequest(path, seenCount),
     new Promise<null>((resolve) => {
       setTimeout(() => resolve(null), timeoutMs);
     }),

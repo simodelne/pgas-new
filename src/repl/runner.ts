@@ -121,8 +121,9 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   function dispatchInput(input: string): Promise<void> {
     const isText = !input.startsWith('/');
     const userConfirmation = parseUserConfirmationControl(input);
+    const isUserConfirmation = userConfirmation !== null;
     if (isText) textBusy = true;
-    inputBusy = true;
+    if (!isUserConfirmation) inputBusy = true;
     const handler = userConfirmation
       ? handleUserConfirmation(userConfirmation)
       : isText
@@ -132,7 +133,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       .catch((error) => renderer.renderError(errorMessage(error)))
       .finally(() => {
         if (isText) textBusy = false;
-        if (!textBusy) inputBusy = false;
+        if (!textBusy && !isUserConfirmation) inputBusy = false;
         if (state.abortRequested) {
           pendingInputs.length = 0;
         }
