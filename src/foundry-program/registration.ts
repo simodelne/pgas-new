@@ -34,7 +34,19 @@ const AUTO_CONTINUE_ACTIONS = new Set([
 export function createPgasNewFoundryProgramEntry(): ProgramEntry {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   const { spec: loaded } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
-  const spec = enableNotebook(loaded, { excludeTerminal: true });
+  // §10 Scenario A scaffold_plan /approve regression evidence:
+  // /tmp/pgas-new-debug-prompts-1782233715/unified-1782233906044-668lbq-request.json
+  // showed 14 tools available in scaffold_plan (vocabulary has 9 + 5 engine-
+  // added notebook tools). On user_confirmation:approve, Qwen picked
+  // `record_note` instead of `approve_artifact_plan`. The notebook tools
+  // (`pin_note`, `unpin_note`, `read_note`, `record_note`, `delete_note`)
+  // are useful only during the design interview where the user provides
+  // free-form context; every downstream mode is auto-driven or gate-critical
+  // and benefits from a narrower decision surface. Scope `enableNotebook`
+  // to `intake_intelligence` so the engine-added notebook vocabulary no
+  // longer competes with `approve_artifact_plan`, `confirm_design`, and the
+  // other gate-action tools in their respective modes.
+  const spec = enableNotebook(loaded, { modes: ['intake_intelligence'] });
   const toolRegistry = createToolRegistry();
   registerPgasNewTools(toolRegistry);
 

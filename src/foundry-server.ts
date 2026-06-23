@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createPgasServer, type PgasServer, type PgasServerConfig } from '@simodelne/pgas-server/create-server.js';
@@ -195,6 +195,9 @@ function createOpenAiUnifiedComplete(): UnifiedAuthorDriverOptions['complete'] {
     }
 
     const payload = createOpenAiUnifiedPayload(messages, tools);
+    const callId = `unified-${String(Date.now())}-${Math.random().toString(36).slice(2, 8)}`;
+    maybeDumpUnifiedRequest(callId, payload);
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -209,7 +212,9 @@ function createOpenAiUnifiedComplete(): UnifiedAuthorDriverOptions['complete'] {
       throw new Error(`OpenAI-compatible unified HTTP ${String(response.status)}: ${body.slice(0, 400)}`);
     }
 
-    return parseOpenAiUnifiedResponse(await response.json());
+    const rawBody = await response.json();
+    maybeDumpUnifiedResponse(callId, rawBody);
+    return parseOpenAiUnifiedResponse(rawBody);
   };
 }
 
@@ -307,4 +312,55 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, '');
+}
+
+/**
+ * Diagnostic-only: when PGAS_FOUNDRY_DEBUG_PROMPTS is set to a directory
+ * path, write each unified-driver request payload to <dir>/<callId>-request.json
+ * and the raw provider response to <dir>/<callId>-response.json. Wire payload
+ * is unchanged. Used to debug LLM tool-selection divergence at the
+ * scaffold_plan /approve gate — see .uat/codex-phase-5-v2-blocker-2.md.
+ */
+function maybeDumpUnifiedRequest(callId: string, payload: Record<string, unknown>): void {
+  const dir = nonEmpty(process.env.PGAS_FOUNDRY_DEBUG_PROMPTS);
+  if (dir === undefined) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    const filePath = join(dir, `${callId}-request.json`);
+    const tools = Array.isArray((payload as { tools?: unknown }).tools)
+      ? (payload as { tools: unknown[] }).tools
+      : [];
+    const summary = {
+      callId,
+      timestamp: new Date().toISOString(),
+      tool_choice: (payload as { tool_choice?: unknown }).tool_choice ?? null,
+      tools_count: tools.length,
+      tool_names: tools
+        .map((tool) => {
+          if (typeof tool !== 'object' || tool === null) return null;
+          const fn = (tool as { function?: { name?: string } }).function;
+          return typeof fn?.name === 'string' ? fn.name : null;
+        })
+        .filter((name): name is string => name !== null),
+      payload,
+    };
+    writeFileSyncSafe(filePath, JSON.stringify(summary, null, 2));
+  } catch {
+    // Diagnostic-only — never break the round on dump failure.
+  }
+}
+
+function maybeDumpUnifiedResponse(callId: string, body: unknown): void {
+  const dir = nonEmpty(process.env.PGAS_FOUNDRY_DEBUG_PROMPTS);
+  if (dir === undefined) return;
+  try {
+    const filePath = join(dir, `${callId}-response.json`);
+    writeFileSyncSafe(filePath, JSON.stringify({ callId, body }, null, 2));
+  } catch {
+    // Diagnostic-only.
+  }
+}
+
+function writeFileSyncSafe(filePath: string, content: string): void {
+  writeFileSync(filePath, content);
 }
