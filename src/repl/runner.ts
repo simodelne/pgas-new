@@ -11,7 +11,7 @@ const STEP_LABELS: Record<string, string> = {
   execution: 'applying action…',
 };
 
-const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'exit', 'help', 'history', 'quit', 'status']);
+const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'approve', 'exit', 'help', 'history', 'quit', 'reject', 'status']);
 
 export interface UserConfirmationPayload {
   decision: 'approve' | 'reject';

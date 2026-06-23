@@ -81,6 +81,37 @@ describe('REPL controls', () => {
     }
   });
 
+  it('dispatches /approve even while a prior streamed round is still open', async () => {
+    const fake = createFakePgasFetch({ holdFirstTriggerOpen: true });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+
+      stdin.write('/approve\n');
+      const deterministicControl = await waitForMaybeRequest(fake, '/controls/pgas-new/approve_artifact_plan', 250);
+      fake.closeHeldTrigger();
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(deterministicControl).toMatchObject({
+        method: 'POST',
+        path: '/controls/pgas-new/approve_artifact_plan',
+        body: { sessionId: 'session-1', channel: 'http' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps /abort routed through controls.invoke', async () => {
     const fake = createFakePgasFetch();
     vi.stubGlobal('fetch', fake.fetch);
@@ -294,4 +325,13 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+async function waitForMaybeRequest(fake: FakeFetch, path: string, timeoutMs: number): Promise<RequestRecord | null> {
+  return Promise.race([
+    fake.waitForRequest(path),
+    new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), timeoutMs);
+    }),
+  ]);
 }
