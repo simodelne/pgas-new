@@ -1,7 +1,13 @@
 process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
 
-import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { stdin, stdout } from 'node:process';
+import { createInterface as createReadlineInterface } from 'node:readline';
+import { createInterface as createReadlinePromisesInterface } from 'node:readline/promises';
+import { Writable } from 'node:stream';
 import { pathToFileURL } from 'node:url';
 import {
   createExistingRepoArtifactPlan,
@@ -26,9 +32,14 @@ export interface CliResult {
   stderr: string;
 }
 
+export interface CliIo {
+  prompt?(question: string): Promise<string>;
+  promptHidden?(question: string): Promise<string>;
+}
+
 interface ParsedOptions {
   _: string[];
-  [key: string]: string | string[];
+  [key: string]: string | boolean | string[];
 }
 
 interface AgentArgs {
@@ -58,6 +69,7 @@ export interface CreateSessionWithInitialStateOptions {
 
 const KNOWN_SUBCOMMANDS = new Set([
   'help',
+  'init',
   'version',
   'session',
   'plan-standalone',
@@ -68,7 +80,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   'curator-request',
 ]);
 
-export async function runCli(argv: string[]): Promise<CliResult> {
+export async function runCli(argv: string[], io: CliIo = {}): Promise<CliResult> {
   try {
     if (argv.includes('--help') || argv.includes('-h')) {
       return ok(helpText());
@@ -88,6 +100,8 @@ export async function runCli(argv: string[]): Promise<CliResult> {
     switch (command) {
       case 'help':
         return ok(helpText());
+      case 'init':
+        return await initCommand(parsed, io);
       case 'version':
         return ok(`pgas-new\nPGAS server: ${PGAS_SERVER_PACKAGE}@${PGAS_SERVER_VERSION}`);
       case 'session':
@@ -355,16 +369,138 @@ function parseArgs(argv: string[]): ParsedOptions {
       const key = token.slice(2);
       const value = argv[index + 1];
       if (!value || value.startsWith('--')) {
-        throw new Error(`missing value for --${key}`);
+        parsed[key] = true;
+      } else {
+        parsed[key] = value;
+        index += 1;
       }
-      parsed[key] = value;
-      index += 1;
     } else {
       parsed._.push(token);
     }
   }
 
   return parsed;
+}
+
+async function initCommand(options: ParsedOptions, io: CliIo): Promise<CliResult> {
+  const dir = dataDir();
+  const secretFile = join(dir, 'jwt.secret');
+  const adminFile = join(dir, 'initial-admin.json');
+  const force = flag(options, 'force');
+
+  if (!force && existsSync(secretFile) && existsSync(adminFile)) {
+    return ok('init already complete');
+  }
+
+  if (force) {
+    const answer = (await promptLine(io, 'Re-run init and overwrite staged credentials? (y/N) ')).trim().toLowerCase();
+    if (answer !== 'y' && answer !== 'yes') {
+      return fail('init aborted', 1);
+    }
+  }
+
+  const admin = await resolveInitialAdminInput(options, io);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+
+  const lines: string[] = [];
+  if (existsSync(secretFile) && !force) {
+    lines.push(`secret exists at ${secretFile} — keeping`);
+  } else {
+    writeSecret(secretFile);
+  }
+
+  writePrivateFile(adminFile, `${JSON.stringify(admin)}\n`);
+  lines.push('Admin credentials staged. The next `pgas-new` invocation will seed the user table.');
+  return ok(lines.join('\n'));
+}
+
+async function resolveInitialAdminInput(
+  options: ParsedOptions,
+  io: CliIo,
+): Promise<{ email: string; password: string }> {
+  const email = optional(options, 'email') ?? optional(options, 'admin-email') ?? await promptLine(io, 'Admin email: ');
+  if (!isValidEmail(email)) {
+    throw new Error('invalid admin email');
+  }
+
+  const passwordFile = optional(options, 'password-file') ?? optional(options, 'admin-password-file');
+  if (passwordFile) {
+    const password = readPasswordFile(passwordFile);
+    validatePassword(password);
+    return { email, password };
+  }
+
+  const password = await promptHidden(io, 'Admin password: ');
+  const confirmPassword = await promptHidden(io, 'Confirm admin password: ');
+  if (password !== confirmPassword) {
+    throw new Error('password confirmation does not match');
+  }
+  validatePassword(password);
+  return { email, password };
+}
+
+function dataDir(): string {
+  return join(homedir(), '.local/share/pgas-new');
+}
+
+function writeSecret(path: string): void {
+  writePrivateFile(path, randomBytes(32).toString('hex'));
+}
+
+function writePrivateFile(path: string, contents: string): void {
+  writeFileSync(path, contents, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+function readPasswordFile(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r?\n$/u, '');
+}
+
+function validatePassword(password: string): void {
+  if (password.length < 8) {
+    throw new Error('admin password must be at least 8 characters');
+  }
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+$/u.test(value);
+}
+
+function flag(options: ParsedOptions, key: string): boolean {
+  return options[key] === true || options[key] === 'true';
+}
+
+async function promptLine(io: CliIo, question: string): Promise<string> {
+  if (io.prompt) return io.prompt(question);
+  const rl = createReadlinePromisesInterface({ input: stdin, output: stdout });
+  try {
+    return await rl.question(question);
+  } finally {
+    rl.close();
+  }
+}
+
+async function promptHidden(io: CliIo, question: string): Promise<string> {
+  if (io.promptHidden) return io.promptHidden(question);
+  return new Promise((resolve) => {
+    let muted = false;
+    const mutedOutput = new Writable({
+      write(chunk, encoding, callback) {
+        if (!muted) {
+          stdout.write(chunk, encoding);
+        }
+        callback();
+      },
+    });
+    const rl = createReadlineInterface({ input: stdin, output: mutedOutput, terminal: true });
+    rl.question(question, (answer) => {
+      rl.close();
+      stdout.write('\n');
+      resolve(answer);
+    });
+    muted = true;
+  });
 }
 
 function parseAgentArgs(argv: string[]): AgentArgs {
@@ -536,6 +672,7 @@ function formatPlan(paths: string[]): string {
 function helpText(): string {
   return [
     'pgas-new commands:',
+    '  init [--email <email> --password-file <path>] [--force]',
     '  version',
     '  plan-standalone --slug <slug> --name <name>',
     '  render-standalone --slug <slug> --name <name> --out <dir> [--template pgas-new-foundry] [--mandate <text>] [--github-owner <owner> --github-repo <repo>]',
