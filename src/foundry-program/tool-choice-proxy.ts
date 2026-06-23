@@ -157,6 +157,10 @@ function deterministicToolChoice(payload: Record<string, unknown>): Record<strin
   const currentState = extractCurrentState(context);
   const decision = currentState ? userDecision(currentState) : fallbackDecision(context);
 
+  if (tools.includes('ask_design_question') && currentState && requestedDesignQuestionNumber(currentState) !== null) {
+    return functionToolChoice('ask_design_question');
+  }
+
   if (tools.includes('authorize_existing_repo_target') && hasValidExistingRepoManifest(currentState, context)) {
     return functionToolChoice('authorize_existing_repo_target');
   }
@@ -214,6 +218,14 @@ function userInstruction(state: Record<string, unknown>): string {
   return stringStateField(state, 'inputs.user_decision.instruction')
     ?? stringStateField(state, 'inputs.user_decision', 'instruction')
     ?? '';
+}
+
+function requestedDesignQuestionNumber(state: Record<string, unknown>): number | null {
+  const userText = stringStateField(state, 'inputs.user_text')
+    ?? stringStateField(state, 'inputs', 'user_text')
+    ?? '';
+  const match = /^\s*Ask\s+Q([1-6])\.?\s*$/iu.exec(userText);
+  return match ? Number(match[1]) : null;
 }
 
 function fallbackDecision(context: string): 'approve' | 'reject' | undefined {

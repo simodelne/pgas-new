@@ -252,6 +252,41 @@ describe('forwardToolChoiceProxyRequest', () => {
     ]);
   });
 
+  it('forces ask_design_question for explicit Ask QN user prompts', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Mode intake_intelligence.',
+              'Current state:',
+              '{',
+              '  "inputs.user_text": "Ask Q4.",',
+              '  "intake.q3_recorded": true,',
+              '  "intake.q4_recorded": false',
+              '}',
+            ].join('\n'),
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'ask_design_question', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'record_q4_transitions', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: { type: 'function', function: { name: 'ask_design_question' } },
+      }),
+    ]);
+  });
+
   it('forces the named reject_design_and_revise_qN tool when a rejection names Q1-Q6', async () => {
     await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
       method: 'POST',
