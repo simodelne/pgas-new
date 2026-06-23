@@ -195,6 +195,44 @@ describe('synthesize_program_spec handler', () => {
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 
+  it('synthesizes revised stages after stale Q4 default transitions are refreshed', async () => {
+    const sessionId = 'session-revised-stale-transitions';
+    clearSynthesizedArtifact(sessionId);
+
+    await handlers.synthesize_program_spec({
+      sessionId,
+      domain: domain({
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          { slug: 'review' },
+          { slug: 'remediation' },
+          { slug: 'resolved', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'triage', trigger: 'auto' },
+          { from: 'triage', to: 'resolved', trigger: 'auto' },
+        ]),
+        'intake.completion_json': JSON.stringify({
+          final_stage: 'resolved',
+          guard_field: 'triage.summary_ready',
+        }),
+      }),
+    });
+
+    const artifact = getSynthesizedArtifact(sessionId);
+    const parsed = load(artifact?.spec_yaml ?? '') as {
+      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+    };
+
+    expect(Object.keys(parsed.modes)).toEqual(['intake', 'review', 'remediation', 'resolved']);
+    expect(parsed.modes.intake.transitions).toEqual([{ target: 'review' }]);
+    expect(parsed.modes.review.transitions).toEqual([{ target: 'remediation' }]);
+    expect(parsed.modes.remediation.transitions).toEqual([
+      { target: 'resolved', guard: { kind: 'FieldTruthy', path: 'triage.summary_ready' } },
+    ]);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
   it('accepts completion before a later blocked terminal sink', async () => {
     const stageNames = ['intake', 'draft', 'review', 'complete', 'blocked'];
     clearSynthesizedArtifact('session-nonfinal-completion');

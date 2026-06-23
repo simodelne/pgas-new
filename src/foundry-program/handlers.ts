@@ -10,7 +10,7 @@ import {
   loadWiringManifest as readWiringManifest,
   type WiringManifest,
 } from '../pgas-new/wiring-manifest.js';
-import { synthesizeProgramSpecFromDomain } from './synthesizer.js';
+import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain } from './synthesizer.js';
 import { putSynthesizedArtifact, requireSynthesizedArtifact } from './synthesizer-store.js';
 
 const defaultStages = [
@@ -454,9 +454,43 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
       const canonical = normalized.canonical;
       return canonical === value ? [] : [{ op: 'MSet' as const, path, value: canonical }];
     });
-    return mutations.length > 0 ? { mutations } : undefined;
+    const transitionRefresh = staleTransitionRefreshMutation(snapshot);
+    const allMutations = [...mutations, ...transitionRefresh];
+    return allMutations.length > 0 ? { mutations: allMutations } : undefined;
   }],
 ]);
+
+function staleTransitionRefreshMutation(snapshot: ReadonlyMap<string, unknown>) {
+  const stagesRaw = snapshot.get('intake.stages_json');
+  const transitionsRaw = snapshot.get('intake.transitions_json');
+  const completionRaw = snapshot.get('intake.completion_json');
+  if (
+    typeof stagesRaw !== 'string' ||
+    typeof transitionsRaw !== 'string' ||
+    typeof completionRaw !== 'string'
+  ) {
+    return [];
+  }
+
+  const stages = parseAndNormalizeJson(stagesRaw, 'intake.stages_json');
+  const transitions = parseAndNormalizeJson(transitionsRaw, 'intake.transitions_json');
+  const completion = parseAndNormalizeJson(completionRaw, 'intake.completion_json');
+  assertJsonTopLevelType(stages.value, 'array', 'intake.stages_json');
+  assertJsonTopLevelType(transitions.value, 'array', 'intake.transitions_json');
+  assertJsonTopLevelType(completion.value, 'object', 'intake.completion_json');
+
+  const refreshed = refreshStaleTransitionsForStages(
+    stages.value as unknown[],
+    transitions.value as unknown[],
+    completion.value,
+  );
+  if (!refreshed) return [];
+
+  const canonical = canonicalJson(refreshed, 'intake.transitions_json');
+  return canonical === transitions.canonical
+    ? []
+    : [{ op: 'MSet' as const, path: 'intake.transitions_json', value: canonical }];
+}
 
 export const handlers: Record<string, ToolHandler> = {
   async synthesize_program_spec(payload) {

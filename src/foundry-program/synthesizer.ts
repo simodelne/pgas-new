@@ -18,6 +18,7 @@ type StageInput = Stage | string;
 interface IntakeTransition {
   from: string;
   to: string;
+  trigger?: string;
   guard?: Record<string, unknown>;
   guard_field?: string;
 }
@@ -46,13 +47,14 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = stringDomainField(domain, 'intake.entry_channel');
   const stages = normalizeStages(parseJsonDomainField<StageInput[]>(domain, 'intake.stages_json'));
-  const transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
+  let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
   const completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
 
   assertStages(stages);
   assertTransitions(transitions);
   assertCompletion(completion);
+  transitions = refreshStaleTransitionsForStages(stages, transitions, completion) ?? transitions;
 
   const modeNames = stages.map((stage) => stage.slug);
   const firstMode = modeNames[0] as string;
@@ -210,6 +212,44 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
   };
+}
+
+export function refreshStaleTransitionsForStages(
+  stagesInput: unknown[],
+  transitionsInput: unknown[],
+  completionInput: unknown,
+): IntakeTransition[] | undefined {
+  const stages = normalizeStages(stagesInput as StageInput[]);
+  const transitions = transitionsInput as IntakeTransition[];
+  const completion = completionInput as Completion;
+
+  assertStages(stages);
+  assertTransitions(transitions);
+  assertCompletion(completion);
+
+  const modeNames = stages.map((stage) => stage.slug);
+  const finalMode = modeNames.at(-1);
+  if (!finalMode || completion.final_stage !== finalMode) {
+    return undefined;
+  }
+
+  const modeNameSet = new Set(modeNames);
+  const hasStaleEndpoint = transitions.some(
+    (transition) => !modeNameSet.has(transition.from) || !modeNameSet.has(transition.to),
+  );
+  const missingCompletionIncoming = !transitions.some((transition) => transition.to === completion.final_stage);
+  if (transitions.length > 0 && !hasStaleEndpoint && !missingCompletionIncoming) {
+    return undefined;
+  }
+
+  return modeNames.slice(0, -1).map((from, index) => {
+    const to = modeNames[index + 1] as string;
+    const transition: IntakeTransition = { from, to, trigger: 'auto' };
+    if (to === completion.final_stage) {
+      transition.guard_field = completion.guard_field;
+    }
+    return transition;
+  });
 }
 
 function transformMode(mode: MutableRecord, options: {

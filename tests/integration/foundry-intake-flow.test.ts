@@ -163,7 +163,7 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
       {
         kind: 'EffectAction',
         name,
-        channel: 'widget_output',
+        channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
         payload,
       },
     ],
@@ -457,7 +457,13 @@ describe('foundry intake flow', () => {
     const revisedStages = [
       { slug: 'intake', is_bootstrap: true },
       { slug: 'review' },
-      { slug: 'complete', is_terminal: true },
+      { slug: 'remediation' },
+      { slug: 'done', is_terminal: true },
+    ];
+    const revisedTransitions = [
+      { from: 'intake', to: 'review', trigger: 'auto' },
+      { from: 'review', to: 'remediation', trigger: 'auto' },
+      { from: 'remediation', to: 'done', trigger: 'auto', guard_field: designCompletion.guard_field },
     ];
     const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
       programName: 'pgas-new',
@@ -478,6 +484,9 @@ describe('foundry intake flow', () => {
         }),
         effect('record_q3_stages', { stages_json: JSON.stringify(revisedStages) }),
         effect('confirm_design', { approved: true }),
+        effect('authorize_standalone_target', {}),
+        effect('synthesize_program_spec', {}),
+        effect('plan_artifacts', {}),
       ],
     });
 
@@ -514,12 +523,21 @@ describe('foundry intake flow', () => {
       expect(snapshot.domain['intake.q6_recorded']).toBe(true);
       expect(snapshot.domain['intake.program_intake_finalized']).toBe(true);
       expect(snapshot.domain['intake.stages_json']).toBe(JSON.stringify(revisedStages));
+      expect(snapshot.domain['intake.transitions_json']).toBe(JSON.stringify(revisedTransitions));
 
       await harness.trigger(replConfirmation('/approve'));
-      snapshot = await harness.snapshot();
+      snapshot = await waitForSnapshot(
+        harness,
+        (candidate) =>
+          candidate.mode === 'scaffold_plan' &&
+          candidate.domain['program.synthesis_complete'] === true &&
+          candidate.domain['artifact_plan.status'] === 'draft',
+        'Q3 revision to synthesize with refreshed transitions',
+      );
 
-      expect(snapshot.mode).toBe('repo_targeting');
+      expect(snapshot.mode).toBe('scaffold_plan');
       expect(snapshot.domain['program.design_confirmed']).toBe(true);
+      expect(snapshot.domain['repo.write_authorized']).toBe(true);
     } finally {
       await harness.close();
     }
