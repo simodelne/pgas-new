@@ -12,6 +12,8 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'approve', 'exit', 'help', 'history', 'quit', 'reject', 'status']);
+const CONTROL_IDLE_POLL_INTERVAL_MS = 250;
+const CONTROL_IDLE_TIMEOUT_MS = 120_000;
 
 export interface UserConfirmationPayload {
   decision: 'approve' | 'reject';
@@ -329,7 +331,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       channel: 'http',
       ...(args && Object.keys(args).length > 0 ? { args } : {}),
     });
-    await refreshLiveState();
+    await waitForSessionIdleAfterControl();
   }
 
   async function refreshLiveState(): Promise<void> {
@@ -344,6 +346,16 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       // Controls are already committed; a status refresh failure should not
       // turn an accepted slash command into a user-facing error.
     }
+  }
+
+  async function waitForSessionIdleAfterControl(): Promise<void> {
+    const deadline = Date.now() + CONTROL_IDLE_TIMEOUT_MS;
+
+    do {
+      await refreshLiveState();
+      if (!state.running || exiting) return;
+      await sleep(CONTROL_IDLE_POLL_INTERVAL_MS);
+    } while (Date.now() < deadline);
   }
 
   async function runTrigger(sessionId: string, channel: string, payload: unknown): Promise<void> {
@@ -439,6 +451,12 @@ function booleanField(value: unknown): boolean | undefined {
 
 function numberField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function buildUserConfirmationPayload(

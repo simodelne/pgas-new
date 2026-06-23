@@ -161,6 +161,69 @@ describe('REPL controls', () => {
     }
   });
 
+  it('drains text queued while a deterministic control waits for auto-continuation to go idle', async () => {
+    const fake = createFakePgasFetch({
+      sessionEnvelopes: [
+        {
+          sessionId: 'session-1',
+          program: 'pgas-new',
+          status: 'Running',
+          state: {
+            mode: 'intake_intelligence',
+            running: true,
+            currentRoundNumber: 17,
+            rounds: Array.from({ length: 17 }, (_, index) => ({ number: index })),
+          },
+        },
+        {
+          sessionId: 'session-1',
+          program: 'pgas-new',
+          status: 'Running',
+          state: {
+            mode: 'intake_intelligence',
+            running: false,
+            currentRoundNumber: 17,
+            rounds: Array.from({ length: 17 }, (_, index) => ({ number: index })),
+          },
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+      await stdout.waitFor('ready');
+
+      stdin.write('/reject please change Q3 stages\n');
+      await fake.waitForRequest('/sessions/session-1');
+      await sleep(0);
+
+      stdin.write('intake, review, remediation, complete\n');
+      const revisedAnswer = await waitForMaybeRequest(fake, '/sessions/session-1/trigger/stream', 1000, 2);
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(fake.requests.filter((request) => request.path === '/sessions/session-1').length).toBeGreaterThanOrEqual(
+        2,
+      );
+      expect(revisedAnswer).toMatchObject({
+        method: 'POST',
+        path: '/sessions/session-1/trigger/stream',
+        body: { channel: 'user_text', payload: 'intake, review, remediation, complete' },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('dispatches /approve even while a prior streamed round is still open', async () => {
     const fake = createFakePgasFetch({ holdFirstTriggerOpen: true });
     vi.stubGlobal('fetch', fake.fetch);
@@ -312,12 +375,14 @@ function createFakePgasFetch(options: {
   holdFirstTriggerOpen?: boolean;
   holdRejectControlOpen?: boolean;
   sessionEnvelope?: Record<string, unknown>;
+  sessionEnvelopes?: Array<Record<string, unknown>>;
 } = {}): FakeFetch & { closeHeldTrigger(): void } {
   const requests: RequestRecord[] = [];
   const waiters = new Map<string, Array<{ seenCount: number; resolve(record: RequestRecord): void }>>();
   const encoder = new TextEncoder();
   let heldTriggerClosed = false;
   let releaseHeldTrigger: (() => void) | undefined;
+  let sessionGetCount = 0;
 
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -368,7 +433,11 @@ function createFakePgasFetch(options: {
       });
     }
     if (request.method === 'GET' && url.pathname === '/sessions/session-1') {
-      return json(options.sessionEnvelope ?? {
+      const sequencedEnvelope = options.sessionEnvelopes?.[
+        Math.min(sessionGetCount, Math.max(options.sessionEnvelopes.length - 1, 0))
+      ];
+      sessionGetCount += 1;
+      return json(sequencedEnvelope ?? options.sessionEnvelope ?? {
         sessionId: 'session-1',
         program: 'pgas-new',
         status: 'Running',
@@ -434,4 +503,10 @@ async function waitForMaybeRequest(
       setTimeout(() => resolve(null), timeoutMs);
     }),
   ]);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
