@@ -88,6 +88,10 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<CliResult>
       return ok(helpText());
     }
 
+    if (argv.includes('--version')) {
+      return ok(versionText());
+    }
+
     if (argv.length === 0) {
       return runAgentSession({});
     }
@@ -109,7 +113,7 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<CliResult>
       case 'logout':
         return logoutCommand();
       case 'version':
-        return ok(`pgas-new\nPGAS server: ${PGAS_SERVER_PACKAGE}@${PGAS_SERVER_VERSION}`);
+        return ok(versionText());
       case 'session':
         return sessionCommand(subcommand);
       case 'plan-standalone':
@@ -130,6 +134,10 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<CliResult>
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error), 1);
   }
+}
+
+function versionText(): string {
+  return `pgas-new\nPGAS server: ${PGAS_SERVER_PACKAGE}@${PGAS_SERVER_VERSION}`;
 }
 
 async function runAgentSession(args: AgentArgs): Promise<CliResult> {

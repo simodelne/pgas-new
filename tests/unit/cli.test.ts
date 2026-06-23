@@ -48,9 +48,12 @@ describe('pgas-new CLI', () => {
 
   it('prints version contract information', async () => {
     const result = await runCli(['version']);
+    const flagResult = await runCli(['--version']);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('@simodelne/pgas-server@2.13.4');
+    expect(flagResult.exitCode).toBe(0);
+    expect(flagResult.stdout).toContain('@simodelne/pgas-server@2.13.4');
   });
 
   it('defaults engine OpenAI tool choice to required when no override is configured', () => {
