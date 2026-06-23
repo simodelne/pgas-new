@@ -18,6 +18,22 @@ Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`.
 - [PGAS-new architecture](./docs/PGAS-NEW-ARCHITECTURE.md)
 - [Live graduation procedure](./docs/PGAS-NEW-LIVE-GRADUATION.md)
 
+## Quickstart
+
+```bash
+npm run pgas-new
+```
+
+v3.0 ships the foundry REPL only. Per-domain scaffolds are no longer selected
+with `--template policy-drafting`, `--template web-scraper`, or
+`--template social-media-agent`; generate those programs by walking the
+foundry's design interview in the bare `pgas-new` REPL.
+
+The canonical v3 design is [docs/PGAS-NEW-ARCHITECTURE.md](./docs/PGAS-NEW-ARCHITECTURE.md).
+The files under [docs/graduation-evidence/](./docs/graduation-evidence/) are a
+read-only regression corpus and historical examples from earlier graduation
+runs, not active scaffold templates.
+
 ## Governance
 
 Architecture changes must update [docs/PGAS-NEW-ARCHITECTURE.md](./docs/PGAS-NEW-ARCHITECTURE.md) in the same PR. The architecture-diff CI gate enforces this on pull requests against `main` by requiring a `## Architectural changes` PR-body section whenever that doc differs from the latest release tag.
@@ -28,12 +44,13 @@ Re-platforming PRs should use the re-platforming pull request template and inclu
 
 ```bash
 npm run pgas-new -- version
+npm run pgas-new
+npm run pgas-new -- --slug my-agent --name "My Agent" --out /tmp/my-agent
 npm run pgas-new -- plan-standalone --slug pgas-new --name "PGAS New"
 npm run pgas-new -- render-standalone --slug pgas-new --name "PGAS New" --out /tmp/pgas-new
-npm run pgas-new -- render-standalone --slug my-agent --name "My Agent" --out /tmp/my-agent --template social-media-agent --mandate "Post scheduling agent for SimoneOS"
 npm run pgas-new -- validate-manifest --repo /path/to/repo
 npm run pgas-new -- plan-attach --repo /path/to/repo --slug review --name Review
-npm run pgas-new -- render-attach --repo /path/to/repo --slug draft-policy --name "Draft Policy" --template policy-drafting --mandate "risk-based policy drafting ..."
+# Per-domain standalone and existing-repo scaffolds are generated in the REPL.
 npm run pgas-new -- curator-request --repo /path/to/repo --slug review --name Review --github-owner simodelne --github-repo simoneos
 ```
 
@@ -54,6 +71,6 @@ npm run pgas-new -- session help
 npm test
 ```
 
-The default test path typechecks this package, runs the unit/static suite, renders a standalone v2 scaffold, checks for banned imports, parses the generated spec, and optionally installs/tests the generated scaffold when GitHub Packages access is available.
+The default test path typechecks this package, runs the unit/static suite, renders a standalone foundry scaffold, checks for banned imports, parses the generated spec, and optionally installs/tests the generated scaffold when GitHub Packages access is available.
 
 Final graduation still requires a user-selected live test with a real provider round trip through the generated external API.
