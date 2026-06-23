@@ -82,7 +82,7 @@ function optionalJsonField(
 }
 
 function parseAndNormalizeJson(rawValue: string, label: string): NormalizedJsonField {
-  const normalizedRawValue = unescapeCommonHtmlEntities(rawValue);
+  const normalizedRawValue = normalizeSmartQuotes(unescapeCommonHtmlEntities(rawValue));
   let value: unknown;
   try {
     value = JSON.parse(normalizedRawValue) as unknown;
@@ -99,6 +99,10 @@ function parseAndNormalizeJson(rawValue: string, label: string): NormalizedJsonF
     value,
     canonical: canonicalJson(value, label),
   };
+}
+
+function normalizeSmartQuotes(value: string): string {
+  return value.replace(/[\u201c\u201d]/gu, '"').replace(/[\u2018\u2019]/gu, '\'');
 }
 
 function unescapeCommonHtmlEntities(value: string): string {
