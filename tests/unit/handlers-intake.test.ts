@@ -10,6 +10,7 @@ describe('intake Q-action handlers', () => {
     ).resolves.toEqual({
       kind: 'pgas_new_q3_stages_recorded',
       stages,
+      stages_json: JSON.stringify(stages),
     });
   });
 
@@ -21,6 +22,7 @@ describe('intake Q-action handlers', () => {
     ).resolves.toEqual({
       kind: 'pgas_new_q3_stages_recorded',
       stages: ['triage_intake', 'root_cause_analysis', 'mitigation', 'resolution'],
+      stages_json: '["triage_intake","root_cause_analysis","mitigation","resolution"]',
     });
   });
 
@@ -41,6 +43,7 @@ describe('intake Q-action handlers', () => {
     ).resolves.toEqual({
       kind: 'pgas_new_q4_transitions_recorded',
       transitions,
+      transitions_json: JSON.stringify(transitions),
     });
   });
 
@@ -52,6 +55,7 @@ describe('intake Q-action handlers', () => {
     ).resolves.toEqual({
       kind: 'pgas_new_q4_transitions_recorded',
       transitions: ['triage_intake->root_cause_analysis', 'root_cause_analysis->mitigation'],
+      transitions_json: '["triage_intake->root_cause_analysis","root_cause_analysis->mitigation"]',
     });
   });
 
@@ -69,6 +73,7 @@ describe('intake Q-action handlers', () => {
     ).resolves.toEqual({
       kind: 'pgas_new_q5_delegation_recorded',
       delegation,
+      delegation_json: JSON.stringify(delegation),
     });
   });
 
@@ -89,6 +94,7 @@ describe('intake Q-action handlers', () => {
     ).resolves.toEqual({
       kind: 'pgas_new_q6_completion_recorded',
       completion,
+      completion_json: JSON.stringify(completion),
     });
   });
 

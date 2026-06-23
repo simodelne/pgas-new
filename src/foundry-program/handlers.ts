@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
-import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import {
@@ -49,57 +49,307 @@ function numberField(payload: Record<string, unknown>, key: string): number {
   return value;
 }
 
+interface NormalizedJsonField {
+  value: unknown;
+  canonical: string;
+}
+
+type JsonTopLevelType = 'array' | 'object';
+
 function optionalJsonField(
   payload: Record<string, unknown>,
   structuredKey: string,
   jsonKey: string,
-  options: { allowBracketedCommaList?: boolean } = {},
-): unknown {
+  expectedType: JsonTopLevelType,
+): NormalizedJsonField {
   const structuredValue = payload[structuredKey];
-  if (structuredValue !== undefined) return structuredValue;
+  if (structuredValue !== undefined) {
+    assertJsonTopLevelType(structuredValue, expectedType, jsonKey);
+    return {
+      value: structuredValue,
+      canonical: canonicalJson(structuredValue, jsonKey),
+    };
+  }
 
   const jsonValue = payload[jsonKey];
   if (typeof jsonValue !== 'string') {
     throw new Error(`missing JSON-string payload field: ${jsonKey}`);
   }
+  const normalized = parseAndNormalizeJson(jsonValue, jsonKey);
+  assertJsonTopLevelType(normalized.value, expectedType, jsonKey);
+  return normalized;
+}
+
+function parseAndNormalizeJson(rawValue: string, label: string): NormalizedJsonField {
+  let value: unknown;
   try {
-    return JSON.parse(jsonValue) as unknown;
-  } catch (error) {
-    if (!options.allowBracketedCommaList) throw error;
-    return parseBracketedCommaList(jsonValue);
-  }
-}
-
-function parseBracketedCommaList(value: string): string[] {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
-    throw new Error('JSON parse failed and payload is not a bracketed comma-list');
-  }
-
-  // Degraded recovery for Section 10 Round 14 Qwen output like
-  // [triage_intake, root_cause_analysis]. Q5/Q6 object fields stay strict.
-  const inner = trimmed.slice(1, -1).trim();
-  if (inner.length === 0) return [];
-
-  return inner.split(',').map((rawItem) => {
-    const item = stripOptionalQuotes(rawItem.trim());
-    if (item.length === 0) {
-      throw new Error('JSON parse failed and bracketed comma-list contained an empty item');
-    }
-    return item;
-  });
-}
-
-function stripOptionalQuotes(value: string): string {
-  if (value.length >= 2) {
-    const first = value[0];
-    const last = value[value.length - 1];
-    if ((first === '"' && last === '"') || (first === '\'' && last === '\'')) {
-      return value.slice(1, -1).trim();
+    value = JSON.parse(rawValue) as unknown;
+  } catch (strictError) {
+    try {
+      value = new JsonishParser(rawValue).parse();
+    } catch (tolerantError) {
+      throw new Error(
+        `invalid JSON-string payload field: ${label}; strict JSON.parse failed (${errorMessage(strictError)}) and tolerant JSON5-style parse failed (${errorMessage(tolerantError)})`,
+      );
     }
   }
-  return value;
+  return {
+    value,
+    canonical: canonicalJson(value, label),
+  };
 }
+
+function canonicalJson(value: unknown, label: string): string {
+  const canonical = JSON.stringify(value);
+  if (canonical === undefined) {
+    throw new Error(`JSON payload field ${label} cannot be canonicalized`);
+  }
+  return canonical;
+}
+
+function assertJsonTopLevelType(value: unknown, expectedType: JsonTopLevelType, label: string): void {
+  if (expectedType === 'array') {
+    if (!Array.isArray(value)) {
+      throw new Error(`invalid JSON-string payload field: ${label}; expected a JSON array`);
+    }
+    return;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`invalid JSON-string payload field: ${label}; expected a JSON object`);
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+class JsonishParser {
+  private offset = 0;
+
+  constructor(private readonly source: string) {}
+
+  parse(): unknown {
+    const value = this.parseValue();
+    this.skipWhitespace();
+    if (!this.isDone()) {
+      throw new Error(`unexpected token ${JSON.stringify(this.current())} at position ${this.offset}`);
+    }
+    return value;
+  }
+
+  private parseValue(): unknown {
+    this.skipWhitespace();
+    if (this.isDone()) {
+      throw new Error('unexpected end of input');
+    }
+
+    const char = this.current();
+    if (char === '{') return this.parseObject();
+    if (char === '[') return this.parseArray();
+    if (char === '"' || char === '\'') return this.parseString();
+    return this.parseBareValue();
+  }
+
+  private parseObject(): Record<string, unknown> {
+    this.consume('{');
+    const object: Record<string, unknown> = {};
+    this.skipWhitespace();
+    if (this.current() === '}') {
+      this.offset += 1;
+      return object;
+    }
+
+    while (true) {
+      const key = this.parseObjectKey();
+      this.skipWhitespace();
+      this.consume(':');
+      object[key] = this.parseValue();
+      this.skipWhitespace();
+      if (this.current() === ',') {
+        this.offset += 1;
+        this.skipWhitespace();
+        if (this.current() === '}') {
+          this.offset += 1;
+          return object;
+        }
+        continue;
+      }
+      if (this.current() === '}') {
+        this.offset += 1;
+        return object;
+      }
+      throw new Error(`expected "," or "}" at position ${this.offset}`);
+    }
+  }
+
+  private parseArray(): unknown[] {
+    this.consume('[');
+    const array: unknown[] = [];
+    this.skipWhitespace();
+    if (this.current() === ']') {
+      this.offset += 1;
+      return array;
+    }
+
+    while (true) {
+      array.push(this.parseValue());
+      this.skipWhitespace();
+      if (this.current() === ',') {
+        this.offset += 1;
+        this.skipWhitespace();
+        if (this.current() === ']') {
+          this.offset += 1;
+          return array;
+        }
+        continue;
+      }
+      if (this.current() === ']') {
+        this.offset += 1;
+        return array;
+      }
+      throw new Error(`expected "," or "]" at position ${this.offset}`);
+    }
+  }
+
+  private parseObjectKey(): string {
+    this.skipWhitespace();
+    const char = this.current();
+    if (char === '"' || char === '\'') {
+      return this.parseString();
+    }
+
+    const start = this.offset;
+    while (!this.isDone() && this.current() !== ':') {
+      this.offset += 1;
+    }
+    const key = this.source.slice(start, this.offset).trim();
+    if (key.length === 0) {
+      throw new Error(`empty object key at position ${start}`);
+    }
+    if (/[,\[\]{}]/u.test(key)) {
+      throw new Error(`invalid unquoted object key ${JSON.stringify(key)} at position ${start}`);
+    }
+    return key;
+  }
+
+  private parseString(): string {
+    const quote = this.current();
+    this.offset += 1;
+    let value = '';
+    while (!this.isDone()) {
+      const char = this.current();
+      this.offset += 1;
+      if (char === quote) return value;
+      if (char !== '\\') {
+        value += char;
+        continue;
+      }
+      if (this.isDone()) {
+        throw new Error('unterminated string escape');
+      }
+      const escaped = this.current();
+      this.offset += 1;
+      switch (escaped) {
+        case '"':
+        case '\'':
+        case '\\':
+        case '/':
+          value += escaped;
+          break;
+        case 'b':
+          value += '\b';
+          break;
+        case 'f':
+          value += '\f';
+          break;
+        case 'n':
+          value += '\n';
+          break;
+        case 'r':
+          value += '\r';
+          break;
+        case 't':
+          value += '\t';
+          break;
+        case 'u': {
+          const hex = this.source.slice(this.offset, this.offset + 4);
+          if (!/^[0-9a-fA-F]{4}$/u.test(hex)) {
+            throw new Error(`invalid unicode escape at position ${this.offset - 2}`);
+          }
+          value += String.fromCharCode(Number.parseInt(hex, 16));
+          this.offset += 4;
+          break;
+        }
+        default:
+          value += escaped;
+          break;
+      }
+    }
+    throw new Error('unterminated string');
+  }
+
+  private parseBareValue(): unknown {
+    const start = this.offset;
+    while (!this.isDone() && !/[\s,\]}]/u.test(this.current())) {
+      this.offset += 1;
+    }
+    const token = this.source.slice(start, this.offset).trim();
+    if (token.length === 0) {
+      throw new Error(`expected value at position ${start}`);
+    }
+    if (token === 'true') return true;
+    if (token === 'false') return false;
+    if (token === 'null') return null;
+    if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/u.test(token)) {
+      return Number(token);
+    }
+    return token;
+  }
+
+  private consume(expected: string): void {
+    this.skipWhitespace();
+    if (this.current() !== expected) {
+      throw new Error(`expected ${JSON.stringify(expected)} at position ${this.offset}`);
+    }
+    this.offset += 1;
+  }
+
+  private skipWhitespace(): void {
+    while (!this.isDone() && /\s/u.test(this.current())) {
+      this.offset += 1;
+    }
+  }
+
+  private current(): string {
+    return this.source[this.offset] ?? '';
+  }
+
+  private isDone(): boolean {
+    return this.offset >= this.source.length;
+  }
+}
+
+const intakeJsonPaths = [
+  'intake.stages_json',
+  'intake.transitions_json',
+  'intake.delegation_json',
+  'intake.completion_json',
+] as const;
+
+export const reactionHandlers: Map<string, ReactionHandler> = new Map([
+  ['normalize_intake_json_fields', (snapshot) => {
+    const mutations = intakeJsonPaths.flatMap((path) => {
+      const value = snapshot.get(path);
+      if (typeof value !== 'string') return [];
+      const expectedType = path === 'intake.stages_json' || path === 'intake.transitions_json' ? 'array' : 'object';
+      const normalized = parseAndNormalizeJson(value, path);
+      assertJsonTopLevelType(normalized.value, expectedType, path);
+      const canonical = normalized.canonical;
+      return canonical === value ? [] : [{ op: 'MSet' as const, path, value: canonical }];
+    });
+    return mutations.length > 0 ? { mutations } : undefined;
+  }],
+]);
 
 export const handlers: Record<string, ToolHandler> = {
   async synthesize_program_spec(payload) {
@@ -169,30 +419,38 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async record_q3_stages(payload) {
+    const stages = optionalJsonField(payload, 'stages', 'stages_json', 'array');
     return {
       kind: 'pgas_new_q3_stages_recorded',
-      stages: optionalJsonField(payload, 'stages', 'stages_json', { allowBracketedCommaList: true }),
+      stages: stages.value,
+      stages_json: stages.canonical,
     };
   },
 
   async record_q4_transitions(payload) {
+    const transitions = optionalJsonField(payload, 'transitions', 'transitions_json', 'array');
     return {
       kind: 'pgas_new_q4_transitions_recorded',
-      transitions: optionalJsonField(payload, 'transitions', 'transitions_json', { allowBracketedCommaList: true }),
+      transitions: transitions.value,
+      transitions_json: transitions.canonical,
     };
   },
 
   async record_q5_delegation(payload) {
+    const delegation = optionalJsonField(payload, 'delegation', 'delegation_json', 'object');
     return {
       kind: 'pgas_new_q5_delegation_recorded',
-      delegation: optionalJsonField(payload, 'delegation', 'delegation_json'),
+      delegation: delegation.value,
+      delegation_json: delegation.canonical,
     };
   },
 
   async record_q6_completion(payload) {
+    const completion = optionalJsonField(payload, 'completion', 'completion_json', 'object');
     return {
       kind: 'pgas_new_q6_completion_recorded',
-      completion: optionalJsonField(payload, 'completion', 'completion_json'),
+      completion: completion.value,
+      completion_json: completion.canonical,
     };
   },
 

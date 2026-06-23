@@ -67,6 +67,10 @@ describe('foundry intake tool-call protocol guidance', () => {
       toolNames: string[];
       targetTool?: Record<string, unknown>;
       questionTool?: Record<string, unknown>;
+      stagesTool?: Record<string, unknown>;
+      transitionsTool?: Record<string, unknown>;
+      delegationTool?: Record<string, unknown>;
+      completionTool?: Record<string, unknown>;
     } = {
       toolNames: [],
     };
@@ -75,6 +79,10 @@ describe('foundry intake tool-call protocol guidance', () => {
       captured.toolNames = tools.map((tool) => tool.function.name);
       captured.targetTool = tools.find((tool) => tool.function.name === 'record_program_target')?.function.parameters;
       captured.questionTool = tools.find((tool) => tool.function.name === 'ask_design_question')?.function.parameters;
+      captured.stagesTool = tools.find((tool) => tool.function.name === 'record_q3_stages')?.function.parameters;
+      captured.transitionsTool = tools.find((tool) => tool.function.name === 'record_q4_transitions')?.function.parameters;
+      captured.delegationTool = tools.find((tool) => tool.function.name === 'record_q5_delegation')?.function.parameters;
+      captured.completionTool = tools.find((tool) => tool.function.name === 'record_q6_completion')?.function.parameters;
 
       return {
         tool_calls: [{
@@ -126,6 +134,27 @@ describe('foundry intake tool-call protocol guidance', () => {
         },
         required: expect.arrayContaining(['slug', 'name', 'target_dir']),
       });
+      expect(stringPropertyDescription(captured.stagesTool, 'stages_json')).toContain(
+        'Array (Q3 stages_json): "[\\"intake\\", \\"analysis\\", \\"complete\\"]"',
+      );
+      expect(stringPropertyDescription(captured.transitionsTool, 'transitions_json')).toContain(
+        'Array (Q4 transitions_json): "[{\\"from\\":\\"intake\\",\\"to\\":\\"analysis\\",\\"guard_field\\":\\"intake.ready\\"}]"',
+      );
+      expect(stringPropertyDescription(captured.delegationTool, 'delegation_json')).toContain(
+        'Object (Q5 delegation_json): "{\\"enabled\\": false, \\"target\\": \\"team-X\\"}"',
+      );
+      expect(stringPropertyDescription(captured.completionTool, 'completion_json')).toContain(
+        'Object (Q6 completion_json): "{\\"final_stage\\": \\"complete\\", \\"guard_field\\": \\"work.done\\"}"',
+      );
+      for (const description of [
+        stringPropertyDescription(captured.stagesTool, 'stages_json'),
+        stringPropertyDescription(captured.transitionsTool, 'transitions_json'),
+        stringPropertyDescription(captured.delegationTool, 'delegation_json'),
+        stringPropertyDescription(captured.completionTool, 'completion_json'),
+      ]) {
+        expect(description).toContain('JSON5-style input as a fallback');
+        expect(description).toContain('emits canonical JSON in governed state');
+      }
       expect(world.domain['program.slug']).toBe('native-target');
       expect(world.domain['program.name']).toBe('Native Target');
       expect(world.domain['program.target_dir']).toBe('/tmp/native-target');
@@ -241,6 +270,22 @@ async function createUnifiedServer(complete: UnifiedComplete) {
     telemetry: { enabled: false },
     port: 0,
   });
+}
+
+function stringPropertyDescription(parameters: Record<string, unknown> | undefined, key: string): string {
+  const properties = parameters?.properties;
+  if (!properties || typeof properties !== 'object') {
+    throw new Error(`missing schema properties for ${key}`);
+  }
+  const property = (properties as Record<string, unknown>)[key];
+  if (!property || typeof property !== 'object') {
+    throw new Error(`missing schema property ${key}`);
+  }
+  const description = (property as Record<string, unknown>).description;
+  if (typeof description !== 'string') {
+    throw new Error(`missing string schema description for ${key}`);
+  }
+  return description;
 }
 
 async function fetchJson<T = unknown>(server: Awaited<ReturnType<typeof createUnifiedServer>>, path: string, init?: RequestInit): Promise<T> {

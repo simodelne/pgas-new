@@ -7,7 +7,7 @@ import {
   loadSpecWithPatterns,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
-import { handlers } from './handlers.js';
+import { handlers, reactionHandlers } from './handlers.js';
 import { registerPgasNewTools } from './tools.js';
 
 export function createPgasNewFoundryProgramEntry(): ProgramEntry {
@@ -19,6 +19,7 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
 
   return {
     spec,
+    reactionHandlers,
     createAdapters: (ctx) => {
       const adapters = createProgramAdapters(spec, ctx, handlers);
       if (spec.tools) {

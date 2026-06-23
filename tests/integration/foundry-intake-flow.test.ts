@@ -258,18 +258,22 @@ describe('foundry intake flow', () => {
     await expect(handlers.record_q3_stages({ stages_json: JSON.stringify(designStages) })).resolves.toEqual({
       kind: 'pgas_new_q3_stages_recorded',
       stages: designStages,
+      stages_json: JSON.stringify(designStages),
     });
     await expect(handlers.record_q4_transitions({ transitions_json: JSON.stringify(designTransitions) })).resolves.toEqual({
       kind: 'pgas_new_q4_transitions_recorded',
       transitions: designTransitions,
+      transitions_json: JSON.stringify(designTransitions),
     });
     await expect(handlers.record_q5_delegation({ delegation_json: JSON.stringify(designDelegation) })).resolves.toEqual({
       kind: 'pgas_new_q5_delegation_recorded',
       delegation: designDelegation,
+      delegation_json: JSON.stringify(designDelegation),
     });
     await expect(handlers.record_q6_completion({ completion_json: JSON.stringify(designCompletion) })).resolves.toEqual({
       kind: 'pgas_new_q6_completion_recorded',
       completion: designCompletion,
+      completion_json: JSON.stringify(designCompletion),
     });
     await expect(handlers.record_program_intake_finalize({})).resolves.toEqual({
       kind: 'pgas_new_intake_finalized',

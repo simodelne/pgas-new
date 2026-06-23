@@ -14,6 +14,7 @@ terminal: [pr_graduation]
 
 features:
   - base
+  - reactions
   - runtime_control
 
 channels:
@@ -407,12 +408,14 @@ action_map:
     description: "Capture Q3 (stage list -- the named modes the program transitions through)."
     arg_descriptions:
       stages_json: |
-        A JSON-encoded array of stage name strings.
-        MUST be valid JSON parseable by JSON.parse.
-        Example: "[\"intake\", \"analysis\", \"complete\"]"
-        NOT a bare bracketed list like "[intake, analysis, complete]".
-        NOT a comma-separated string like "intake, analysis, complete".
-        The brackets and quotes are required.
+        Provide a JSON-encoded value. The strict format is required for
+        downstream synthesis.
+
+        Valid example:
+        - Array (Q3 stages_json): "[\"intake\", \"analysis\", \"complete\"]"
+
+        The foundry accepts JSON5-style input as a fallback (unquoted keys,
+        bare identifiers), but emits canonical JSON in governed state.
     mutations:
       - { op: MSet, path: intake.stages_json, from_arg: stages_json }
       - { op: MSet, path: intake.q3_recorded, value: true }
@@ -421,12 +424,14 @@ action_map:
     description: "Capture Q4 (transition list -- how stages advance, branch, loop, or guard)."
     arg_descriptions:
       transitions_json: |
-        A JSON-encoded array of transition objects.
-        MUST be valid JSON parseable by JSON.parse.
-        Example: "[{\"from\":\"intake\",\"to\":\"analysis\",\"guard_field\":\"intake.ready\"}]"
-        NOT a bare bracketed list like "[intake->analysis, analysis->complete]".
-        NOT a comma-separated string like "intake->analysis, analysis->complete".
-        The brackets, quotes, and object syntax are required.
+        Provide a JSON-encoded value. The strict format is required for
+        downstream synthesis.
+
+        Valid example:
+        - Array (Q4 transitions_json): "[{\"from\":\"intake\",\"to\":\"analysis\",\"guard_field\":\"intake.ready\"}]"
+
+        The foundry accepts JSON5-style input as a fallback (unquoted keys,
+        bare identifiers), but emits canonical JSON in governed state.
     mutations:
       - { op: MSet, path: intake.transitions_json, from_arg: transitions_json }
       - { op: MSet, path: intake.q4_recorded, value: true }
@@ -435,12 +440,14 @@ action_map:
     description: "Capture Q5 (delegation design -- whether and how work delegates)."
     arg_descriptions:
       delegation_json: |
-        A JSON-encoded delegation object, or {} if there is no delegation.
-        MUST be valid JSON parseable by JSON.parse.
-        Example: "{\"enabled\":false}"
-        NOT a bare bracketed list like "[none, human_review]".
-        NOT a comma-separated string like "none, human_review".
-        The braces and quotes are required for object fields.
+        Provide a JSON-encoded value. The strict format is required for
+        downstream synthesis.
+
+        Valid example:
+        - Object (Q5 delegation_json): "{\"enabled\": false, \"target\": \"team-X\"}"
+
+        The foundry accepts JSON5-style input as a fallback (unquoted keys,
+        bare identifiers), but emits canonical JSON in governed state.
     mutations:
       - { op: MSet, path: intake.delegation_json, from_arg: delegation_json }
       - { op: MSet, path: intake.q5_recorded, value: true }
@@ -449,12 +456,14 @@ action_map:
     description: "Capture Q6 (completion criteria -- terminal stage and completion guard)."
     arg_descriptions:
       completion_json: |
-        A JSON-encoded completion object.
-        MUST be valid JSON parseable by JSON.parse.
-        Example: "{\"final_stage\":\"complete\",\"guard_field\":\"work.done\"}"
-        NOT a bare bracketed list like "[complete, work.done]".
-        NOT a comma-separated string like "complete, work.done".
-        The braces and quotes are required for object fields.
+        Provide a JSON-encoded value. The strict format is required for
+        downstream synthesis.
+
+        Valid example:
+        - Object (Q6 completion_json): "{\"final_stage\": \"complete\", \"guard_field\": \"work.done\"}"
+
+        The foundry accepts JSON5-style input as a fallback (unquoted keys,
+        bare identifiers), but emits canonical JSON in governed state.
     mutations:
       - { op: MSet, path: intake.completion_json, from_arg: completion_json }
       - { op: MSet, path: intake.q6_recorded, value: true }
@@ -584,6 +593,20 @@ action_map:
       - { op: MSet, path: graduation.rebase_static_evidence_id, from_arg: evidence_id }
     channel: widget_output
   open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
+
+reactions:
+  normalize_intake_json_fields:
+    event: AfterMutation
+    watch:
+      - intake.q3_recorded
+      - intake.q4_recorded
+      - intake.q5_recorded
+      - intake.q6_recorded
+    write_scope:
+      - intake.stages_json
+      - intake.transitions_json
+      - intake.delegation_json
+      - intake.completion_json
 
 schema:
   inputs.user_text: string

@@ -13,6 +13,8 @@ interface Stage {
   is_terminal?: boolean;
 }
 
+type StageInput = Stage | string;
+
 interface IntakeTransition {
   from: string;
   to: string;
@@ -43,7 +45,7 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   const name = stringDomainField(domain, 'program.name');
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = stringDomainField(domain, 'intake.entry_channel');
-  const stages = parseJsonDomainField<Stage[]>(domain, 'intake.stages_json');
+  const stages = normalizeStages(parseJsonDomainField<StageInput[]>(domain, 'intake.stages_json'));
   const transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
   const completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
@@ -309,6 +311,21 @@ function assertStages(stages: Stage[]): void {
       throw new Error('each stage must declare a non-empty slug');
     }
   }
+}
+
+function normalizeStages(stages: StageInput[]): Stage[] {
+  if (!Array.isArray(stages)) {
+    throw new Error('intake.stages_json must decode to an array');
+  }
+  return stages.map((stage, index) => {
+    if (typeof stage !== 'string') return stage;
+    const slug = stage.trim();
+    return {
+      slug,
+      ...(index === 0 ? { is_bootstrap: true } : {}),
+      ...(index === stages.length - 1 ? { is_terminal: true } : {}),
+    };
+  });
 }
 
 function assertTransitions(transitions: IntakeTransition[]): void {
