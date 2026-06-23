@@ -59,6 +59,7 @@ describe('foundry architecture_design to scaffold_plan flow', () => {
         }),
         effect('record_program_intake_finalize', {}),
         effect('confirm_design', { approved: true }),
+        effect('authorize_standalone_target', {}),
         effect('synthesize_program_spec', {}),
         effect('plan_artifacts', {}),
       ],

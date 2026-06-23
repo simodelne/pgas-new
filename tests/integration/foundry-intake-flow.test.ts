@@ -285,10 +285,10 @@ describe('foundry intake flow', () => {
     });
   });
 
-  it('drives the Q1-Q6 design fork to architecture_design', async () => {
+  it('drives the Q1-Q6 design fork to repo_targeting', async () => {
     const snapshot = await driveIntakeFork('design');
 
-    expect(snapshot.mode).toBe('architecture_design');
+    expect(snapshot.mode).toBe('repo_targeting');
     expect(snapshot.domain['program.design_path']).toBe('design');
     expect(snapshot.domain['program.target_dir_confirmed']).toBe(true);
     for (let q = 1; q <= 6; q += 1) {
@@ -442,10 +442,10 @@ describe('foundry intake flow', () => {
     }
   });
 
-  it('drives the default skeleton fork to architecture_design', async () => {
+  it('drives the default skeleton fork to repo_targeting', async () => {
     const snapshot = await driveIntakeFork('default');
 
-    expect(snapshot.mode).toBe('architecture_design');
+    expect(snapshot.mode).toBe('repo_targeting');
     expect(snapshot.domain['program.design_path']).toBe('default');
     expect(snapshot.domain['program.target_dir_confirmed']).toBe(true);
     for (let q = 1; q <= 6; q += 1) {

@@ -52,6 +52,7 @@ describe('intake normalization synthesis integration', () => {
       }),
       effect('record_program_intake_finalize', {}),
       effect('confirm_design', {}),
+      effect('authorize_standalone_target', {}),
       effect('synthesize_program_spec', {}),
     ];
 

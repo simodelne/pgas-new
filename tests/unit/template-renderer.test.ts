@@ -253,7 +253,7 @@ describe('template renderer', () => {
       expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
       expect(parsed.modes.intake_intelligence.transitions).toEqual(
         expect.arrayContaining([
-          { target: 'architecture_design', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
+          { target: 'repo_targeting', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
         ]),
       );
       expect(parsed.modes.intake_intelligence.preconditions?.record_program_target).toEqual(
@@ -513,6 +513,8 @@ describe('template renderer', () => {
       );
       expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
       expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
+      expect(parsed.guidance.repo_targeting.join('\n')).toContain('mandatory between confirm_design and architecture_design');
+      expect(parsed.guidance.repo_targeting.join('\n')).toContain('call authorize_standalone_target');
       expect(parsed.guidance.intake_intelligence).toEqual(
         expect.arrayContaining([
           expect.stringContaining('program.target_dir_confirmed is not true'),
@@ -1186,6 +1188,8 @@ describe('template renderer', () => {
       expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
       expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
       expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
+      expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
+      expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
       expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
       expect(parsed.proceed_to.run_static_verification).toBeUndefined();
       expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
@@ -1237,8 +1241,16 @@ describe('template renderer', () => {
           expect.objectContaining({ path: 'repo.blocked', value: false }),
         ]),
       );
+      expect(parsed.action_map.authorize_standalone_target.mutations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: 'repo.target_kind', value: 'standalone_repo' }),
+          expect.objectContaining({ path: 'repo.write_authorized', value: true }),
+          expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'not_required' }),
+        ]),
+      );
       expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
         expect.arrayContaining([
+          expect.objectContaining({ path: 'repo.target_kind', value: 'existing_repo' }),
           expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'valid' }),
           expect.objectContaining({ path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' }),
           expect.objectContaining({ path: 'repo.write_authorized', value: true }),

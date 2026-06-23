@@ -73,6 +73,7 @@ describe('foundry end-to-end acceptance gate', () => {
       expect(terminalActionNames(snapshot.rounds)).toEqual(
         expect.arrayContaining([
           'confirm_design',
+          'authorize_standalone_target',
           'synthesize_program_spec',
           'plan_artifacts',
           'approve_artifact_plan',
@@ -102,7 +103,9 @@ describe('foundry end-to-end acceptance gate', () => {
       const seenModes = [await harness.getMode()];
 
       await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Attach to an existing repo.' });
-      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the design path.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the default skeleton.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Apply the default.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
 
       expect(await harness.getMode()).toBe('curator_request');
       const requestPath = join(targetDir, 'audit', 'PGAS-NEW-incident-triage.md');
@@ -145,9 +148,10 @@ function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] 
     }),
     effect('record_program_intake_finalize'),
     effect('confirm_design', { approved: true }),
+    effect('authorize_standalone_target'),
     effect('synthesize_program_spec'),
     effect('plan_artifacts'),
-    effect('plan_artifacts'),
+    effect('session_status'),
     effect('approve_artifact_plan'),
     effect('write_scaffold_artifacts', { cwd: targetDir }),
     effect('run_static_verification', { status: 'passed', evidence_id: 'static-e2e' }),
@@ -161,7 +165,9 @@ function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] 
 function refusalAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] {
   return [
     seedBlockedExistingRepoTarget(targetDir),
-    effect('choose_design_path', { choice: 'design' }),
+    effect('choose_design_path', { choice: 'default' }),
+    effect('apply_default_skeleton'),
+    effect('confirm_design', { approved: true }),
     effect('create_curator_request', {
       repo_root: targetDir,
       slug: 'incident-triage',
@@ -178,8 +184,6 @@ function seedStandaloneTarget(targetDir: string): TestHarnessAuthorResponse {
       mutation('record_program_target', 'program.name', 'Incident Triage'),
       mutation('record_program_target', 'program.target_dir', targetDir),
       mutation('record_program_target', 'program.target_dir_confirmed', true),
-      mutation('record_program_target', 'repo.write_authorized', true),
-      mutation('record_program_target', 'repo.wiring_manifest.status', 'not_required'),
       terminal('record_program_target', { slug: 'incident-triage', name: 'Incident Triage', target_dir: targetDir }),
     ],
   };

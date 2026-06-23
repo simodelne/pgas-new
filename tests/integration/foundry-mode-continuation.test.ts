@@ -45,6 +45,7 @@ describe('foundry mode-entry continuation', () => {
         }),
         effect('record_program_intake_finalize', {}),
         effect('confirm_design', { approved: true }),
+        effect('authorize_standalone_target', {}),
         effect('synthesize_program_spec', {}),
       ],
     });
@@ -65,9 +66,16 @@ describe('foundry mode-entry continuation', () => {
 
       expect(snapshot.mode).toBe('scaffold_plan');
       expect(snapshot.domain['program.design_confirmed']).toBe(true);
+      expect(snapshot.domain['repo.write_authorized']).toBe(true);
       expect(snapshot.domain['program.synthesis_complete']).toBe(true);
       expect(snapshot.rounds).toEqual(
         expect.arrayContaining([
+          expect.objectContaining({
+            trigger: 'system_mode_entry',
+            result: expect.objectContaining({
+              terminal: expect.objectContaining({ name: 'authorize_standalone_target' }),
+            }),
+          }),
           expect.objectContaining({
             trigger: 'system_mode_entry',
             result: expect.objectContaining({

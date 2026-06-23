@@ -32,9 +32,61 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
           }
         }
       }
+      exposeSynthesisMarkerInTerminalPayload(adapters);
       return adapters;
     },
   };
 }
 
 export const createPgasNewProgramEntry = createPgasNewFoundryProgramEntry;
+
+type ProgramAdapters = ReturnType<typeof createProgramAdapters>;
+
+function exposeSynthesisMarkerInTerminalPayload(adapters: ProgramAdapters): void {
+  for (const adapter of adapters.outputs.values()) {
+    const dispatch = adapter.dispatch.bind(adapter) as typeof adapter.dispatch;
+    adapter.dispatch = async (payload: Parameters<typeof adapter.dispatch>[0]) => {
+      const result = await dispatch(payload);
+      if (isSynthesizeProgramSpecEffect(payload) && isSynthesisMarker(result)) {
+        payload.payload = mergePayloadMarker(payload.payload, result);
+      }
+      return result;
+    };
+  }
+}
+
+function isSynthesizeProgramSpecEffect(
+  payload: unknown,
+): payload is { kind: 'EffectAction'; name: 'synthesize_program_spec'; payload: unknown } {
+  return (
+    !!payload &&
+    typeof payload === 'object' &&
+    !Array.isArray(payload) &&
+    (payload as { kind?: unknown }).kind === 'EffectAction' &&
+    (payload as { name?: unknown }).name === 'synthesize_program_spec'
+  );
+}
+
+function isSynthesisMarker(result: unknown): result is {
+  kind: 'mechanical_synthesis';
+  no_llm_call: true;
+  mode_names: unknown;
+  sha256: string;
+} {
+  return (
+    !!result &&
+    typeof result === 'object' &&
+    !Array.isArray(result) &&
+    (result as { kind?: unknown }).kind === 'mechanical_synthesis' &&
+    (result as { no_llm_call?: unknown }).no_llm_call === true &&
+    Array.isArray((result as { mode_names?: unknown }).mode_names) &&
+    typeof (result as { sha256?: unknown }).sha256 === 'string'
+  );
+}
+
+function mergePayloadMarker(payload: unknown, marker: Record<string, unknown>): Record<string, unknown> {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return { ...(payload as Record<string, unknown>), ...marker };
+  }
+  return marker;
+}

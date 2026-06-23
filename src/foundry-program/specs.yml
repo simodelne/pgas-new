@@ -72,18 +72,20 @@ modes:
       web_research:
         - { kind: FieldTruthy, path: intake.user_research_authorized }
     transitions:
-      - target: architecture_design
-        guard: { kind: FieldTruthy, path: program.design_confirmed }
       - target: repo_targeting
-        guard: { kind: FieldTruthy, path: repo.target_kind }
+        guard: { kind: FieldTruthy, path: program.design_confirmed }
   repo_targeting:
     vocabulary: [select_repo_target, authorize_standalone_target, load_wiring_manifest, authorize_existing_repo_target, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [system_mode_entry, widget_output]
     preconditions:
+      select_repo_target:
+        - { kind: FieldTruthy, path: program.target_dir_confirmed }
       authorize_standalone_target:
-        - { kind: FieldEquals, path: repo.target_kind, value: standalone_repo }
+        - { kind: FieldTruthy, path: program.target_dir_confirmed }
+        - { kind: FieldFalsy, path: repo.write_authorized }
       load_wiring_manifest:
-        - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
+        - { kind: FieldTruthy, path: program.target_dir_confirmed }
+        - { kind: FieldFalsy, path: repo.write_authorized }
       authorize_existing_repo_target:
         - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
         - { kind: FieldEquals, path: repo.wiring_manifest.status, value: valid }
@@ -172,7 +174,7 @@ proceed_to:
   authorize_existing_repo_target: architecture_design
   design_architecture: scaffold_plan
   synthesize_program_spec: scaffold_plan
-  confirm_design: architecture_design
+  confirm_design: repo_targeting
   approve_artifact_plan: branch_write
   write_scaffold_artifacts: static_verify
   confirm_live_provider_intent: live_verify
@@ -216,7 +218,7 @@ projection:
       - notebook.pins
     exclude: []
   repo_targeting:
-    include: [repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.wiring_manifest_json, repo.allowed_imports, repo.write_authorized, repo.required_facilities_missing]
+    include: [program.slug, program.name, program.target_dir, program.target_dir_confirmed, repo.target_kind, repo.wiring_manifest.status, repo.wiring_manifest.path, repo.wiring_manifest_json, repo.allowed_imports, repo.write_authorized, repo.required_facilities_missing]
     exclude: []
   architecture_design:
     include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
@@ -303,10 +305,31 @@ prompts:
     4. If `choice = "design"`: ask Q1-Q6 by calling `ask_design_question`,
        recording each answer with its corresponding Q-action, then call
        `record_program_intake_finalize`.
-    5. Finally call `confirm_design` to gate transition to architecture_design.
+    5. Finally call `confirm_design` to gate transition to repo_targeting.
 
     Do not pre-fill or batch multiple tool calls in one response.
-  repo_targeting: "Validate target mode and fixed .pgas/wiring.yml if attaching to an existing repo."
+  repo_targeting: |
+    Output protocol (MUST follow):
+    - Emit exactly one NATIVE OpenAI tool_call from the repo_targeting vocabulary.
+    - Do not emit free-form JSON action objects or multiple tool calls.
+
+    Resolve repository write authorization before architecture_design.
+    - If `program.target_dir` is set and the target is a standalone/new repo
+      with no known `.pgas/wiring.yml`, call `authorize_standalone_target`.
+      This action selects `repo.target_kind = standalone_repo` and sets
+      `repo.write_authorized = true`.
+    - If `program.target_dir` is set and the target is an existing repo with
+      `.pgas/wiring.yml`, call `load_wiring_manifest` with
+      `{ "repo_root": "<program.target_dir>" }`. After it succeeds, call
+      `authorize_existing_repo_target`.
+    - If `repo.target_kind` is already `standalone_repo`, call
+      `authorize_standalone_target`.
+    - If `repo.target_kind` is already `existing_repo`, call
+      `load_wiring_manifest` first unless `repo.wiring_manifest.status` is
+      already `valid`; then call `authorize_existing_repo_target`.
+    - If the target kind or target directory is unclear, ask the user to
+      clarify whether this is a standalone repo or an existing-repo attach
+      before any write authorization.
   architecture_design: "Run the deterministic program-spec synthesizer."
   scaffold_plan: |
     Output protocol (MUST follow):
@@ -474,7 +497,7 @@ action_map:
       - { op: MSet, path: intake.program_intake_finalized, value: true }
     channel: widget_output
   confirm_design:
-    description: "Tool call after explicit user approval. Confirms the proposed mode and transition list before architecture_design."
+    description: "Tool call after explicit user approval. Confirms the proposed mode and transition list before repo_targeting."
     mutations:
       - { op: MSet, path: program.design_confirmed, value: true }
     channel: widget_output
@@ -504,6 +527,8 @@ action_map:
   session_help: { description: "Control-plane help command.", mutations: [], channel: widget_output }
   select_repo_target:
     description: "Select standalone or existing-repo target."
+    arg_descriptions:
+      target_kind: "Either 'standalone_repo' for a new generated repo or 'existing_repo' for attachment to a repo with .pgas/wiring.yml."
     mutations:
       - { op: MSet, path: repo.target_kind, from_arg: target_kind }
       - { op: MSet, path: repo.write_authorized, value: false }
@@ -512,12 +537,17 @@ action_map:
   authorize_standalone_target:
     description: "Authorize standalone repo writes after target selection."
     mutations:
+      - { op: MSet, path: repo.target_kind, value: standalone_repo }
       - { op: MSet, path: repo.write_authorized, value: true }
+      - { op: MSet, path: repo.blocked, value: false }
       - { op: MSet, path: repo.wiring_manifest.status, value: not_required }
     channel: widget_output
   load_wiring_manifest:
     description: "Load and validate fixed .pgas/wiring.yml for existing-repo writes."
+    arg_descriptions:
+      repo_root: "Existing repository root; pass program.target_dir exactly."
     mutations:
+      - { op: MSet, path: repo.target_kind, value: existing_repo }
       - { op: MSet, path: repo.wiring_manifest.status, value: valid }
       - { op: MSet, path: repo.wiring_manifest.path, value: .pgas/wiring.yml }
       - { op: MSet, path: repo.blocked, value: false }
@@ -711,6 +741,11 @@ guidance:
     - "On user_confirmation with decision='approve', call confirm_design."
     - "On user_confirmation with decision='reject' or decision='edit', do NOT call confirm_design. Ask which dimension to revise, re-run the relevant step, and re-emit the echo-back."
     - "Don't re-ask anything you already extracted from the user's free-text introduction."
+  repo_targeting:
+    - "This mode is mandatory between confirm_design and architecture_design; do not skip it."
+    - "If program.target_dir is set and the target is standalone/no .pgas/wiring.yml is known, call authorize_standalone_target. That action sets repo.target_kind='standalone_repo' and repo.write_authorized=true."
+    - "If program.target_dir points to an existing repo with .pgas/wiring.yml, call load_wiring_manifest with repo_root=program.target_dir, then call authorize_existing_repo_target after the manifest status is valid."
+    - "Only leave repo_targeting after repo.write_authorized is true; the transition to architecture_design is guarded on that field."
   scaffold_plan:
     - "Call plan_artifacts to produce the artifact plan from the synthesized spec in in-process transit. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
     - "Echo the artifact-plan list (paths + purposes) to the user as plain text and instruct them to type /approve or /reject."
