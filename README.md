@@ -26,13 +26,20 @@ Existing-repo attachment requires a repo-curator manifest at `.pgas/wiring.yml`.
 bash scripts/provision.sh
 ```
 
-The script handles a fresh host end-to-end: verifies Node ≥20, npm, git, GitHub Packages auth, and vLLM reachability; clones (or updates) the repo at `$HOME/pgas-new`; installs npm dependencies; runs `npm test` for verification; writes env defaults to `$HOME/.config/pgas-new/env`; and installs a global shim at `$HOME/.local/bin/pgas-new`. Idempotent — safe to re-run.
+The script handles a fresh host end-to-end: verifies Node >=20, npm, git, GitHub Packages auth, and vLLM reachability; clones (or updates) the repo at `$HOME/pgas-new`; installs npm dependencies; runs `npm test` for verification; stages auth bootstrap material with `pgas-new init`; writes env defaults to `$HOME/.config/pgas-new/env`; and installs a global shim at `$HOME/.local/bin/pgas-new`. Idempotent -- safe to re-run.
 
-Flags: `--repo-dir DIR`, `--ref TAG`, `--base-url URL`, `--model NAME`, `--skip-tests`, `--skip-vllm-check`. Run `bash scripts/provision.sh --help` for details.
+For non-interactive admin bootstrap:
+
+```bash
+bash scripts/provision.sh --admin-email you@example.com --admin-password-file /path/to/password
+```
+
+Flags: `--repo-dir DIR`, `--ref TAG`, `--base-url URL`, `--model NAME`, `--admin-email EMAIL`, `--admin-password-file PATH`, `--skip-tests`, `--skip-vllm-check`. Run `bash scripts/provision.sh --help` for details.
 
 After provisioning succeeds, ensure `$HOME/.local/bin` is on PATH, then:
 
 ```bash
+pgas-new login
 pgas-new
 ```
 
@@ -40,17 +47,23 @@ pgas-new
 
 ```bash
 npm install
+npm run pgas-new -- init
+npm run pgas-new -- login
 npm run pgas-new
 ```
 
-v3.0 ships the foundry REPL only. Per-domain scaffolds are no longer selected
+v3 ships the foundry REPL only. Per-domain scaffolds are no longer selected
 with `--template policy-drafting`, `--template web-scraper`, or
 `--template social-media-agent`; generate those programs by walking the
 foundry's design interview in the bare `pgas-new` REPL.
 
-### Known v3.0 limitation
+### Auth and persistence
 
-Sessions are ephemeral (in-memory). No login, no DB-backed session persistence. v3.1 will add auth + persistent sessions once `@simodelne/pgas-server` ships the `SqliteStore` / `JwtAuthProvider` public exports tracked at <https://github.com/simodelne/pgas/issues/499>.
+`pgas-new init` creates `$HOME/.local/share/pgas-new/jwt.secret` and stages a single-use `$HOME/.local/share/pgas-new/initial-admin.json`. The next server startup seeds the initial admin through the engine's public `auth.initialAdmin` config and removes that staged file after successful startup.
+
+`pgas-new login` authenticates through the engine HTTP auth route and caches the returned JWT at `$HOME/.local/share/pgas-new/token`. `pgas-new logout` deletes that token. The REPL requires a non-expired cached token and uses the engine client with bearer auth.
+
+Sessions are DB-backed by default at `$HOME/.local/share/pgas-new/pgas-new.db`, so they survive process restarts.
 
 The canonical v3 design is [docs/PGAS-NEW-ARCHITECTURE.md](./docs/PGAS-NEW-ARCHITECTURE.md).
 The files under [docs/graduation-evidence/](./docs/graduation-evidence/) are a
@@ -67,6 +80,9 @@ Re-platforming PRs should use the re-platforming pull request template and inclu
 
 ```bash
 npm run pgas-new -- version
+npm run pgas-new -- init
+npm run pgas-new -- login
+npm run pgas-new -- logout
 npm run pgas-new
 npm run pgas-new -- --slug my-agent --name "My Agent" --out /tmp/my-agent
 npm run pgas-new -- plan-standalone --slug pgas-new --name "PGAS New"
@@ -76,6 +92,24 @@ npm run pgas-new -- plan-attach --repo /path/to/repo --slug review --name Review
 # Per-domain standalone and existing-repo scaffolds are generated in the REPL.
 npm run pgas-new -- curator-request --repo /path/to/repo --slug review --name Review --github-owner simodelne --github-repo simoneos
 ```
+
+`init` supports `--email <email>` / `--password-file <path>` and aliases `--admin-email <email>` / `--admin-password-file <path>` for provisioning.
+
+## Environment
+
+Runtime storage/auth:
+
+- `PGAS_DB`: SQLite database path. Default: `$HOME/.local/share/pgas-new/pgas-new.db`.
+- `PGAS_JWT_SECRET`: JWT signing secret. If unset, `pgas-new` reads `$HOME/.local/share/pgas-new/jwt.secret`.
+- `PGAS_JWT_ISSUER`: JWT issuer. Default: `pgas-new`.
+- `PGAS_JWT_EXPIRES_IN`: token lifetime passed to the engine. Default: `7d`.
+
+OpenAI-compatible provider:
+
+- `PGAS_OPENAI_BASE_URL`: upstream OpenAI-compatible `/v1` endpoint.
+- `PGAS_OPENAI_MODEL`: model name for the engine provider.
+- `PGAS_OPENAI_API_KEY`: API key value for the upstream provider.
+- `PGAS_OPENAI_TOOL_CHOICE`: defaults to `required` in the CLI unless already set; override if the upstream provider needs a different engine tool-choice policy.
 
 Session lifecycle commands map to the generated PGAS `control_plane` vocabulary:
 

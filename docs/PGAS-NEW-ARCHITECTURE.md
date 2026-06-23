@@ -1,8 +1,15 @@
 # PGAS-New Architecture
 
-Status: v3.0 release candidate on `v3-rebuild`; current release target v3.0.0.
+Status: v3.1 release candidate on `v3.1-auth-v2`; current release target v3.1.0.
 
 ## Changelog
+
+### v3.1.0
+
+- Added DB-backed foundry session persistence through `createPgasServer({ storage: { dbPath } })`.
+- Added engine-backed auth bootstrap through `auth.initialAdmin`, plus CLI `init`, `login`, and `logout`.
+- Retired the local tool-choice proxy. The CLI now defaults `PGAS_OPENAI_TOOL_CHOICE=required`, while preserving explicit env overrides.
+- Confirmed the engine's zero-internals stance: `SqliteStore` and `JwtAuthProvider` remain private, so pgas-new uses only public server config and HTTP auth routes.
 
 ### v3.0.0
 
@@ -20,7 +27,7 @@ The only remaining `--template` value is `pgas-new-foundry`, retained for the le
 
 ## PGAS Contract
 
-Generated consumers target `@simodelne/pgas-server@2.13.0` and use only these public imports:
+Generated consumers target `@simodelne/pgas-server@2.13.4` and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
@@ -73,7 +80,32 @@ If a repo has no manifest, the correct output is a request for the repo curator 
 
 Code artifacts are primary objects, not incidental side effects. The artifact plan records each artifact's path, kind, purpose, owner, introducing mode, and verification gate. Standalone scaffolds include server, REPL, program spec, registration, handlers, tools, tests, wiring manifest, dossier, artifact manifest, and graduation audit. Existing-repo plans use the repo manifest paths and request registration patch points instead of editing arbitrary files.
 
-`pgas-new` intentionally stubs frontend, auth, database, persistence, and external services. Those are attachment points for the target repo or for a general coding agent after graduation.
+Generated programs intentionally stub frontend, auth, database, persistence, and external services. Those remain attachment points for the target repo or for a general coding agent after graduation. The foundry's own v3.1 runtime is DB-backed and authenticated.
+
+## v3.1: Auth + DB Persistence
+
+The foundry server persists sessions by resolving a SQLite path and passing it through the engine's public server config:
+
+```ts
+createPgasServer({
+  storage: { dbPath },
+  auth: {
+    jwtSecret,
+    issuer,
+    expiresIn,
+    ...(initialAdmin ? { initialAdmin } : {}),
+  },
+  programs: [{ name: 'pgas-new', entry }],
+});
+```
+
+`dbPath` resolves from `PGAS_DB`, or defaults to `$HOME/.local/share/pgas-new/pgas-new.db`. The parent directory is created before server startup. JWT config resolves from `PGAS_JWT_SECRET` or `$HOME/.local/share/pgas-new/jwt.secret`, `PGAS_JWT_ISSUER` or `pgas-new`, and `PGAS_JWT_EXPIRES_IN` or `7d`.
+
+`pgas-new init` creates the data directory, writes `jwt.secret`, and stages `initial-admin.json`. On the next successful server startup, pgas-new passes the staged credentials as `auth.initialAdmin`; the engine seeds the first admin only when the user table is empty, and pgas-new deletes the staged file after startup. Subsequent users and logins use the engine's public HTTP auth routes. `pgas-new login` caches the returned JWT at `$HOME/.local/share/pgas-new/token`; the REPL refuses to start without a non-expired cached token and passes that token to `createPgasClient` as bearer auth.
+
+The engine still does not export `SqliteStore` or `JwtAuthProvider` classes. That is intentional per the engine team's zero-internals design, and pgas-new does not import those classes. Storage and auth are configured only through `createPgasServer`; authentication after bootstrap flows through HTTP routes.
+
+The v3.0 local tool-choice proxy has been removed. Engine v2.13.4 supports tool-choice resolution directly, so the CLI sets `PGAS_OPENAI_TOOL_CHOICE=required` by default before engine imports. Explicit env values still win.
 
 ## Control Plane And CLI
 
@@ -81,6 +113,9 @@ The generated program declares a PGAS `control_plane` with free text routed thro
 
 The CLI is a bootstrap/control surface. With no subcommand, `pgas-new` starts the foundry REPL. The legacy render commands remain for the foundry bootstrap path only and accept no per-domain template flags.
 
+- `pgas-new init`
+- `pgas-new login`
+- `pgas-new logout`
 - `pgas-new session new`
 - `pgas-new session abort`
 - `pgas-new session status`
@@ -88,7 +123,7 @@ The CLI is a bootstrap/control surface. With no subcommand, `pgas-new` starts th
 - `pgas-new session resume`
 - `pgas-new session help`
 
-These commands emit the semantic control id and are aligned with the generated control-plane vocabulary. The REPL scaffold uses `controlCliAdapter` from `@simodelne/pgas-server/channels/index.js` so the interactive UI remains a projection of the PGAS control catalog rather than an independent parser.
+The `init`, `login`, and `logout` commands manage foundry auth bootstrap and the cached JWT. Session commands emit the semantic control id and are aligned with the generated control-plane vocabulary. The REPL scaffold uses `controlCliAdapter` from `@simodelne/pgas-server/channels/index.js` so the interactive UI remains a projection of the PGAS control catalog rather than an independent parser.
 
 ## Research And User Decisions
 
@@ -113,4 +148,4 @@ The static ladder is:
 
 Post-rebase verification reruns the static ladder after `gitStatus` and `gitRebaseLatest`. Live-provider evidence is separate from command-runner evidence and is recorded as `liveProviderRoundTrip`.
 
-The v3.0 release candidate has fresh static gates and section 10 live-provider evidence. Release branches must re-run the full static ladder after rebase.
+The v3.1 release candidate must keep the v3.0 section 10 behavior gate green while adding authenticated transport and persistent sessions. Release branches must re-run the full static ladder after rebase and rerun section 10 against the authenticated REPL flow.
