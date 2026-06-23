@@ -1,7 +1,7 @@
 process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
 
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
@@ -70,6 +70,8 @@ export interface CreateSessionWithInitialStateOptions {
 const KNOWN_SUBCOMMANDS = new Set([
   'help',
   'init',
+  'login',
+  'logout',
   'version',
   'session',
   'plan-standalone',
@@ -102,6 +104,10 @@ export async function runCli(argv: string[], io: CliIo = {}): Promise<CliResult>
         return ok(helpText());
       case 'init':
         return await initCommand(parsed, io);
+      case 'login':
+        return await loginCommand(parsed, io);
+      case 'logout':
+        return logoutCommand();
       case 'version':
         return ok(`pgas-new\nPGAS server: ${PGAS_SERVER_PACKAGE}@${PGAS_SERVER_VERSION}`);
       case 'session':
@@ -415,6 +421,39 @@ async function initCommand(options: ParsedOptions, io: CliIo): Promise<CliResult
   return ok(lines.join('\n'));
 }
 
+async function loginCommand(options: ParsedOptions, io: CliIo): Promise<CliResult> {
+  const credentials = await resolveLoginInput(options, io);
+  const server = await startFoundryServer({});
+  try {
+    const response = await fetch(`${server.url}/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(credentials),
+    });
+    const body = await response.json().catch(() => ({})) as unknown;
+
+    if (response.status === 401) {
+      return fail('login failed: invalid credentials', 1);
+    }
+    if (!response.ok) {
+      return fail(`login failed (${String(response.status)})`, 1);
+    }
+    if (!isRecord(body) || typeof body.token !== 'string' || body.token.length === 0) {
+      return fail('login failed: response did not include a token', 1);
+    }
+
+    writeCachedToken(body.token);
+    return ok(['login ok', tokenExpiryLine(body.token)].join('\n'));
+  } finally {
+    await server.kill();
+  }
+}
+
+function logoutCommand(): CliResult {
+  rmSync(tokenFile(), { force: true });
+  return ok('logged out');
+}
+
 async function resolveInitialAdminInput(
   options: ParsedOptions,
   io: CliIo,
@@ -444,8 +483,36 @@ function dataDir(): string {
   return join(homedir(), '.local/share/pgas-new');
 }
 
+function tokenFile(): string {
+  return join(dataDir(), 'token');
+}
+
+async function resolveLoginInput(options: ParsedOptions, io: CliIo): Promise<{ email: string; password: string }> {
+  const email = optional(options, 'email') ?? optional(options, 'admin-email') ?? await promptLine(io, 'Email: ');
+  if (!isValidEmail(email)) {
+    throw new Error('invalid email');
+  }
+
+  const passwordFile = optional(options, 'password-file') ?? optional(options, 'admin-password-file');
+  const password = passwordFile ? readPasswordFile(passwordFile) : await promptHidden(io, 'Password: ');
+  if (password.length === 0) {
+    throw new Error('password is required');
+  }
+  return { email, password };
+}
+
 function writeSecret(path: string): void {
   writePrivateFile(path, randomBytes(32).toString('hex'));
+}
+
+function writeCachedToken(token: string): void {
+  const dir = dataDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const tmpPath = join(dir, `.token.${String(process.pid)}.${randomBytes(6).toString('hex')}.tmp`);
+  writePrivateFile(tmpPath, token);
+  renameSync(tmpPath, tokenFile());
+  chmodSync(tokenFile(), 0o600);
 }
 
 function writePrivateFile(path: string, contents: string): void {
@@ -469,6 +536,32 @@ function isValidEmail(value: string): boolean {
 
 function flag(options: ParsedOptions, key: string): boolean {
   return options[key] === true || options[key] === 'true';
+}
+
+function tokenExpiryLine(token: string): string {
+  const exp = decodeJwtExp(token);
+  return exp === undefined
+    ? 'token expiry unknown'
+    : `token expires at ${new Date(exp * 1000).toISOString()}`;
+}
+
+function decodeJwtExp(token: string): number | undefined {
+  const [, payload] = token.split('.');
+  if (!payload) return undefined;
+
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
+    if (isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)) {
+      return decoded.exp;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function promptLine(io: CliIo, question: string): Promise<string> {
@@ -673,6 +766,8 @@ function helpText(): string {
   return [
     'pgas-new commands:',
     '  init [--email <email> --password-file <path>] [--force]',
+    '  login [--email <email> --password-file <path>]',
+    '  logout',
     '  version',
     '  plan-standalone --slug <slug> --name <name>',
     '  render-standalone --slug <slug> --name <name> --out <dir> [--template pgas-new-foundry] [--mandate <text>] [--github-owner <owner> --github-repo <repo>]',
