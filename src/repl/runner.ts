@@ -318,7 +318,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     }
 
     if (payload.decision === 'approve') {
-      await invokeSessionControl('approve_artifact_plan');
+      await invokeSessionControl(resolveApproveControlForMode(state.mode));
       return;
     }
 
@@ -528,4 +528,34 @@ function buildUserConfirmationPayload(
 function parseRejectQuestionNumber(instruction: string | undefined): number | null {
   const match = /\bq([1-6])\b/iu.exec(instruction ?? '');
   return match ? Number(match[1]) : null;
+}
+
+/**
+ * Maps the current foundry mode to the correct `/approve` control action.
+ * Each mode that gates on user_confirmation has its own approval action
+ * — using a single action regardless of mode fails the engine's
+ * precondition check, the trigger falls through to an LLM round, and
+ * Qwen has been observed to pick a different tool (record_note) instead
+ * of the expected confirm action.
+ *
+ * See §10 Scenario A blocker at HEAD `51eef801` (Phase 5 v2 §10 rerun):
+ * `/approve` after `record_program_intake_finalize` invoked
+ * `approve_artifact_plan`, whose preconditions are not yet satisfiable
+ * in `intake_intelligence` mode (artifact_plan.status is not 'draft'
+ * until `plan_artifacts` runs in `scaffold_plan`), causing the engine
+ * to fall back to a user_confirmation LLM round where Qwen emitted
+ * `record_note` (.uat/session-logs-current/pgas-new-1782230910268/session-log.ndjson:465-476).
+ */
+export function resolveApproveControlForMode(mode: string | null): string {
+  switch (mode) {
+    case 'intake_intelligence':
+      return 'confirm_design';
+    case 'scaffold_plan':
+      return 'approve_artifact_plan';
+    default:
+      // Modes without a registered confirmation control fall back to
+      // approve_artifact_plan; the engine will reject if not applicable
+      // and surface a clear error rather than misroute the action.
+      return 'approve_artifact_plan';
+  }
 }

@@ -1,6 +1,6 @@
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import { runRepl } from '../../src/repl/runner.js';
+import { resolveApproveControlForMode, runRepl } from '../../src/repl/runner.js';
 
 interface RequestRecord {
   method: string;
@@ -388,6 +388,41 @@ describe('REPL controls', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('resolveApproveControlForMode (regression: §10 Scenario A intake_intelligence /approve)', () => {
+  // Source-of-failure evidence: at HEAD 51eef801 (Phase 5 v2 §10 rerun) the
+  // pre-fix runner unconditionally fired `approve_artifact_plan` on /approve.
+  // In `intake_intelligence` mode, that action's precondition requires
+  // `artifact_plan.status='draft'` (set only by plan_artifacts in scaffold_plan),
+  // so it failed; engine fell back to a user_confirmation LLM round; Qwen
+  // emitted `record_note` instead of `confirm_design`. See
+  // .uat/session-logs-current/pgas-new-1782230910268/session-log.ndjson:465-476.
+
+  it("maps mode='intake_intelligence' to confirm_design (Phase 3.14 chain-end action)", () => {
+    expect(resolveApproveControlForMode('intake_intelligence')).toBe('confirm_design');
+  });
+
+  it("maps mode='scaffold_plan' to approve_artifact_plan (unchanged behavior)", () => {
+    expect(resolveApproveControlForMode('scaffold_plan')).toBe('approve_artifact_plan');
+  });
+
+  it.each([
+    ['repo_targeting'],
+    ['architecture_design'],
+    ['branch_write'],
+    ['static_verify'],
+    ['live_verify'],
+    ['rebase_verify'],
+    ['pr_graduation'],
+    ['curator_request'],
+  ] as const)('falls back to approve_artifact_plan for mode=%s (engine surfaces precondition error)', (mode) => {
+    expect(resolveApproveControlForMode(mode)).toBe('approve_artifact_plan');
+  });
+
+  it('falls back to approve_artifact_plan when mode is null (pre-session boot, edge case)', () => {
+    expect(resolveApproveControlForMode(null)).toBe('approve_artifact_plan');
   });
 });
 
