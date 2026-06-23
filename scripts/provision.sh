@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# pgas-new v3.0 provisioning script
+# pgas-new v3.1 provisioning script
 #
 # Sets up a fresh host so `pgas-new` is runnable from anywhere on PATH.
 # Idempotent: safe to re-run.
 #
 # Usage:
-#   bash scripts/provision.sh [--repo-dir DIR] [--ref REF] [--base-url URL] [--model MODEL] [--skip-tests] [--skip-vllm-check]
+#   bash scripts/provision.sh [--repo-dir DIR] [--ref REF] [--base-url URL] [--model MODEL] [--admin-email EMAIL] [--admin-password-file PATH] [--skip-tests] [--skip-vllm-check]
 #
 # Defaults:
 #   --repo-dir        $HOME/pgas-new (or current dir if it's a pgas-new checkout)
-#   --ref             v3.0.0
+#   --ref             v3.1.0, or this checkout's current HEAD when run from a local checkout
 #   --base-url        http://localhost:8000/v1
 #   --model           qwen36-27b
 #
@@ -18,39 +18,43 @@
 #   - npm dependencies installed
 #   - npm test green (unless --skip-tests)
 #   - vLLM reachable (unless --skip-vllm-check)
+#   - JWT secret generated and initial admin credentials staged
 #   - $HOME/.local/bin/pgas-new shim installed and PATH-friendly
 #   - Env defaults written to $HOME/.config/pgas-new/env
-#
-# NOTE: This script ships v3.0 (CLI + ephemeral sessions). Auth + DB-backed
-# session persistence is blocked on engine-side exports — see
-# https://github.com/simodelne/pgas/issues/499. v3.1 will add auth.
 
 set -euo pipefail
 
 # ---------- argument parsing ----------
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR_DEFAULT="${HOME}/pgas-new"
-REF_DEFAULT="v3.0.0"
+REF_DEFAULT="v3.1.0"
 BASE_URL_DEFAULT="http://localhost:8000/v1"
 MODEL_DEFAULT="qwen36-27b"
 
 REPO_DIR=""
 REF="$REF_DEFAULT"
+REF_EXPLICIT=0
 BASE_URL="$BASE_URL_DEFAULT"
 MODEL="$MODEL_DEFAULT"
+ADMIN_EMAIL=""
+ADMIN_PASSWORD_FILE=""
 SKIP_TESTS=0
 SKIP_VLLM_CHECK=0
 
 print_usage() {
-  sed -n '2,18p' "$0"
+  sed -n '2,23p' "$0"
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo-dir)        REPO_DIR="$2"; shift 2 ;;
-    --ref)             REF="$2"; shift 2 ;;
+    --ref)             REF="$2"; REF_EXPLICIT=1; shift 2 ;;
     --base-url)        BASE_URL="$2"; shift 2 ;;
     --model)           MODEL="$2"; shift 2 ;;
+    --admin-email)     ADMIN_EMAIL="$2"; shift 2 ;;
+    --admin-password-file) ADMIN_PASSWORD_FILE="$2"; shift 2 ;;
     --skip-tests)      SKIP_TESTS=1; shift ;;
     --skip-vllm-check) SKIP_VLLM_CHECK=1; shift ;;
     -h|--help)         print_usage; exit 0 ;;
@@ -69,6 +73,21 @@ fi
 
 # Resolve to absolute path.
 REPO_DIR="$(cd "$(dirname "$REPO_DIR")" 2>/dev/null && pwd)/$(basename "$REPO_DIR")" || REPO_DIR="$REPO_DIR"
+
+CLONE_SOURCE="https://github.com/simodelne/pgas-new.git"
+if [ "$REF_EXPLICIT" -eq 0 ] \
+   && [ -d "$SCRIPT_REPO/.git" ] \
+   && [ -f "$SCRIPT_REPO/package.json" ] \
+   && grep -q '"name": "pgas-new"' "$SCRIPT_REPO/package.json"; then
+  CLONE_SOURCE="$SCRIPT_REPO"
+  REF="$(git -C "$SCRIPT_REPO" rev-parse HEAD)"
+fi
+
+if { [ -n "$ADMIN_EMAIL" ] && [ -z "$ADMIN_PASSWORD_FILE" ]; } \
+   || { [ -z "$ADMIN_EMAIL" ] && [ -n "$ADMIN_PASSWORD_FILE" ]; }; then
+  echo "ERR: --admin-email and --admin-password-file must be provided together for non-interactive init." >&2
+  exit 2
+fi
 
 # ---------- helpers ----------
 
@@ -90,7 +109,7 @@ require_cmd() {
 
 # ---------- 1. preflight ----------
 
-step "1/8 Preflight"
+step "1/9 Preflight"
 
 require_cmd node
 require_cmd npm
@@ -142,14 +161,14 @@ fi
 
 # ---------- 2. repo setup ----------
 
-step "2/8 Repo setup at $REPO_DIR"
+step "2/9 Repo setup at $REPO_DIR"
 
 if [ ! -d "$REPO_DIR/.git" ]; then
   # Allow REPO_DIR to be created.
   PARENT="$(dirname "$REPO_DIR")"
   [ -d "$PARENT" ] || die "Parent dir does not exist: $PARENT"
-  step "  cloning simodelne/pgas-new into $REPO_DIR"
-  git clone https://github.com/simodelne/pgas-new.git "$REPO_DIR"
+  step "  cloning $CLONE_SOURCE into $REPO_DIR"
+  git clone "$CLONE_SOURCE" "$REPO_DIR"
   ok "cloned"
 else
   step "  fetching latest refs"
@@ -170,26 +189,36 @@ ok "HEAD now at $ACTUAL_HEAD"
 
 # ---------- 3. dependencies ----------
 
-step "3/8 Installing npm dependencies"
+step "3/9 Installing npm dependencies"
 ( cd "$REPO_DIR" && npm install --no-audit --no-fund )
 ok "dependencies installed"
 
 # ---------- 4. tests ----------
 
 if [ "$SKIP_TESTS" -eq 0 ]; then
-  step "4/8 Verifying installation with npm test"
+  step "4/9 Verifying installation with npm test"
   ( cd "$REPO_DIR" && npm test )
   ok "npm test passed"
 else
-  step "4/8 Skipping npm test (--skip-tests)"
+  step "4/9 Skipping npm test (--skip-tests)"
   warn "Tests skipped — verifying only typecheck."
   ( cd "$REPO_DIR" && npm run typecheck )
   ok "typecheck passed"
 fi
 
-# ---------- 5. environment defaults ----------
+# ---------- 5. init ----------
 
-step "5/8 Writing environment defaults"
+step "5/9 Initializing auth state"
+INIT_ARGS=(init)
+if [ -n "$ADMIN_EMAIL" ]; then
+  INIT_ARGS+=(--admin-email "$ADMIN_EMAIL" --admin-password-file "$ADMIN_PASSWORD_FILE")
+fi
+( cd "$REPO_DIR" && node --import "$REPO_DIR/node_modules/tsx/dist/loader.mjs" "$REPO_DIR/src/cli.ts" "${INIT_ARGS[@]}" )
+ok "JWT secret ready and initial admin credentials staged"
+
+# ---------- 6. environment defaults ----------
+
+step "6/9 Writing environment defaults"
 CONFIG_DIR="${HOME}/.config/pgas-new"
 mkdir -p "$CONFIG_DIR"
 chmod 700 "$CONFIG_DIR"
@@ -203,17 +232,20 @@ cat > "$ENV_FILE" <<EOF
 export PGAS_OPENAI_BASE_URL="${PGAS_OPENAI_BASE_URL:-$BASE_URL}"
 export PGAS_OPENAI_MODEL="${PGAS_OPENAI_MODEL:-$MODEL}"
 export PGAS_OPENAI_API_KEY="${PGAS_OPENAI_API_KEY:-dummy}"
+export PGAS_OPENAI_TOOL_CHOICE="${PGAS_OPENAI_TOOL_CHOICE:-required}"
 
 # Optional:
 # export PGAS_FOUNDRY_PORT=4500
-# export PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT=1  # set automatically by foundry-server
+# export PGAS_DB="\$HOME/.local/share/pgas-new/pgas-new.db"
+# export PGAS_JWT_ISSUER=pgas-new
+# export PGAS_JWT_EXPIRES_IN=7d
 EOF
 chmod 600 "$ENV_FILE"
 ok "env defaults at $ENV_FILE"
 
-# ---------- 6. global shim ----------
+# ---------- 7. global shim ----------
 
-step "6/8 Installing global shim at \$HOME/.local/bin/pgas-new"
+step "7/9 Installing global shim at \$HOME/.local/bin/pgas-new"
 BIN_DIR="${HOME}/.local/bin"
 mkdir -p "$BIN_DIR"
 
@@ -237,9 +269,9 @@ case ":$PATH:" in
        export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
 esac
 
-# ---------- 7. verify shim ----------
+# ---------- 8. verify shim ----------
 
-step "7/8 Verifying shim invocation"
+step "8/9 Verifying shim invocation"
 if "$SHIM" --help >/dev/null 2>&1; then
   ok "\`pgas-new --help\` ran successfully"
 else
@@ -252,24 +284,22 @@ else
   fi
 fi
 
-# ---------- 8. summary ----------
+# ---------- 9. summary ----------
 
-step "8/8 Provisioning complete"
+step "9/9 Provisioning complete"
 echo
 echo "  Repo:       $REPO_DIR @ $ACTUAL_HEAD ($REF)"
 echo "  Env file:   $ENV_FILE"
 echo "  Shim:       $SHIM"
 echo "  vLLM:       $BASE_URL ($MODEL)"
+echo "  Admin:      staged for first server startup"
 echo
 echo "Next steps:"
 echo "  1. Ensure $BIN_DIR is on your PATH (see warning above if applicable)."
-echo "  2. Run: pgas-new"
-echo "     The foundry REPL opens, walks Q1-Q6 design interview against your vLLM,"
+echo "  2. Run: pgas-new login"
+echo "     This performs the first server boot if needed, seeds the staged admin, and caches your JWT."
+echo "  3. Run: pgas-new"
+echo "     The authenticated foundry REPL opens, walks Q1-Q6 design interview against your vLLM,"
 echo "     synthesizes a program, and writes scaffold files to the target dir."
-echo
-echo "Known limitation in v3.0:"
-echo "  - Sessions are ephemeral (in-memory). No login, no DB persistence."
-echo "  - v3.1 will add auth + DB-backed sessions once engine ships SqliteStore/JwtAuthProvider exports."
-echo "  - Tracking: https://github.com/simodelne/pgas/issues/499"
 echo
 printf "${C_GRN}ready.${C_END}\n"
