@@ -72,13 +72,9 @@ describe('intake normalization synthesis integration', () => {
       await harness.trigger('Q6 answer.');
       await harness.trigger('Finalize intake.');
       await harness.trigger(replConfirmation('/approve'));
-      const result = await harness.trigger('Synthesize the program spec.');
       const snapshot = await harness.snapshot();
 
-      expect(result).toMatchObject({
-        kind: 'EffectAction',
-        name: 'synthesize_program_spec',
-      });
+      expect(terminalActionNames(snapshot.rounds)).toContain('synthesize_program_spec');
       expect(snapshot.mode).toBe('scaffold_plan');
       expect(snapshot.domain['program.synthesis_complete']).toBe(true);
 
@@ -106,3 +102,15 @@ describe('intake normalization synthesis integration', () => {
     }
   });
 });
+
+function terminalActionNames(rounds: unknown[]): string[] {
+  return rounds.flatMap((round) => {
+    if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+    const result = (round as { result?: unknown }).result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+    const terminal = (result as { terminal?: unknown }).terminal;
+    if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+    const name = (terminal as { name?: unknown }).name;
+    return typeof name === 'string' ? [name] : [];
+  });
+}

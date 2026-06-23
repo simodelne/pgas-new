@@ -20,6 +20,9 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
   return {
     spec,
     reactionHandlers,
+    continuationPolicy: {
+      modeEntryAutoContinue: true,
+    },
     createAdapters: (ctx) => {
       const adapters = createProgramAdapters(spec, ctx, handlers);
       if (spec.tools) {

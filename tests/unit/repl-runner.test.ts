@@ -133,6 +133,52 @@ describe('runRepl', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('renders /status from the live session state envelope', async () => {
+    const fake = createFakePgasFetch({
+      sessionEnvelope: {
+        sessionId: 'session-1',
+        program: 'pgas-new',
+        status: 'Running',
+        state: {
+          mode: 'architecture_design',
+          running: false,
+          currentRoundNumber: 16,
+          rounds: Array.from({ length: 16 }, (_, index) => ({ number: index })),
+        },
+      },
+      sseEvents: [
+        {
+          event: 'round_complete',
+          data: { result: { name: 'confirm_design', payload: { approved: true } } },
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new' });
+      await stdout.waitFor('Connected');
+      stdin.write('start design\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream');
+      await stdout.waitFor('approved');
+      stdin.write('/status\n');
+      await fake.waitForRequest('/sessions/session-1');
+      await stdout.waitFor('rounds:');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      await repl;
+
+      expect(stdout.text()).toContain('mode: architecture_design');
+      expect(stdout.text()).toContain('running: false');
+      expect(stdout.text()).toContain('rounds: 16');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 function captureStream(): Writable & { text(): string; waitFor(expected: string): Promise<void> } {
@@ -163,6 +209,7 @@ function captureStream(): Writable & { text(): string; waitFor(expected: string)
 function createFakePgasFetch(options: {
   sseEvents: Array<{ event: string; data: unknown }>;
   beforeRoundComplete?: () => Promise<void>;
+  sessionEnvelope?: Record<string, unknown>;
 }): FakeFetch {
   const requests: RequestRecord[] = [];
   const waiters = new Map<string, Array<(record: RequestRecord) => void>>();
@@ -201,6 +248,14 @@ function createFakePgasFetch(options: {
       return new Response(stream, {
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
+      });
+    }
+    if (request.method === 'GET' && url.pathname === '/sessions/session-1') {
+      return json(options.sessionEnvelope ?? {
+        sessionId: 'session-1',
+        program: 'pgas-new',
+        status: 'Running',
+        state: { mode: 'intake_intelligence', running: false, currentRoundNumber: 1, rounds: [{ number: 0 }] },
       });
     }
     if (request.method === 'POST' && url.pathname === '/controls/pgas-new/abort') {

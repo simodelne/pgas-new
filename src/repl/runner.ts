@@ -210,12 +210,13 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
 
     try {
       const envelope = await client.sessions.get(state.sessionId);
-      state.mode = envelope.mode ?? state.mode;
-      state.running = envelope.running === true;
+      const live = readLiveSessionFields(envelope);
+      state.mode = live.mode ?? state.mode;
+      state.running = live.running === true;
       renderer.renderInfo(
         `session: ${state.sessionId}  status: ${String(envelope.status ?? 'unknown')}  ` +
-          `mode: ${String(envelope.mode ?? '?')}  running: ${String(envelope.running === true)}  ` +
-          `rounds: ${String(envelope.roundCount ?? 0)}`,
+          `mode: ${String(live.mode ?? '?')}  running: ${String(live.running === true)}  ` +
+          `rounds: ${String(live.roundCount ?? 0)}`,
       );
     } catch (error) {
       renderer.renderError(`Status fetch failed: ${errorMessage(error)}`);
@@ -264,9 +265,10 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
         return;
       }
       const envelope = await client.sessions.get(resume.sessionId);
+      const live = readLiveSessionFields(envelope);
       state.sessionId = envelope.sessionId;
-      state.mode = envelope.mode ?? null;
-      state.running = envelope.running === true;
+      state.mode = live.mode ?? null;
+      state.running = live.running === true;
       renderer.renderStep(`Resumed session ${envelope.sessionId} (mode: ${state.mode ?? '?'}).`);
     } catch (error) {
       renderer.renderError(`Resume failed: ${errorMessage(error)}`);
@@ -351,6 +353,41 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   return String(error);
+}
+
+function readLiveSessionFields(envelope: Record<string, unknown>): {
+  mode: string | null;
+  running: boolean;
+  roundCount: number;
+} {
+  const liveState = isRecord(envelope.state) ? envelope.state : {};
+  const rounds = Array.isArray(liveState.rounds) ? liveState.rounds.length : undefined;
+  return {
+    mode: stringField(liveState.mode) ?? stringField(envelope.mode) ?? null,
+    running: booleanField(liveState.running) ?? booleanField(envelope.running) ?? false,
+    roundCount:
+      rounds
+      ?? numberField(liveState.roundCount)
+      ?? numberField(envelope.roundCount)
+      ?? numberField(liveState.currentRoundNumber)
+      ?? 0,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function buildUserConfirmationPayload(
