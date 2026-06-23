@@ -437,6 +437,8 @@ action_map:
         Valid example:
         - Array (Q3 stages_json): "[\"intake\", \"analysis\", \"complete\"]"
 
+        Do NOT HTML-escape the string. Use raw " characters, not &quot;.
+
         The foundry accepts JSON5-style input as a fallback (unquoted keys,
         bare identifiers), but emits canonical JSON in governed state.
     mutations:
@@ -452,6 +454,8 @@ action_map:
 
         Valid example:
         - Array (Q4 transitions_json): "[{\"from\":\"intake\",\"to\":\"analysis\",\"guard_field\":\"intake.ready\"}]"
+
+        Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 
         The foundry accepts JSON5-style input as a fallback (unquoted keys,
         bare identifiers), but emits canonical JSON in governed state.
@@ -469,6 +473,8 @@ action_map:
         Valid example:
         - Object (Q5 delegation_json): "{\"enabled\": false, \"target\": \"team-X\"}"
 
+        Do NOT HTML-escape the string. Use raw " characters, not &quot;.
+
         The foundry accepts JSON5-style input as a fallback (unquoted keys,
         bare identifiers), but emits canonical JSON in governed state.
     mutations:
@@ -484,6 +490,8 @@ action_map:
 
         Valid example:
         - Object (Q6 completion_json): "{\"final_stage\": \"complete\", \"guard_field\": \"work.done\"}"
+
+        Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 
         The foundry accepts JSON5-style input as a fallback (unquoted keys,
         bare identifiers), but emits canonical JSON in governed state.

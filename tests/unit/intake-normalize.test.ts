@@ -149,6 +149,56 @@ describe('intake JSON normalization', () => {
     });
   });
 
+  it('unescapes HTML-escaped quotes before storing canonical Q4 transition JSON', async () => {
+    const expected = [
+      { from: 'intake', to: 'analysis', guard_field: 'intake.ready' },
+    ];
+    const escapedTransitions = '[{&quot;from&quot;: &quot;intake&quot;, &quot;to&quot;: &quot;analysis&quot;, &quot;guard_field&quot;: &quot;intake.ready&quot;}]';
+    const domain = await recordIntake([
+      effect('record_q3_stages', { stages_json: canonicalStages }),
+      effect('record_q4_transitions', { transitions_json: escapedTransitions }),
+    ]);
+
+    expectCanonicalJson(domain['intake.transitions_json'], expected);
+
+    await expect(
+      handlers.record_q4_transitions({ transitions_json: escapedTransitions }),
+    ).resolves.toMatchObject({
+      transitions_json: JSON.stringify(expected),
+    });
+  });
+
+  it('unescapes amp-escaped quote entities before parsing intake JSON', async () => {
+    const expected = [
+      { from: 'intake', to: 'analysis', guard_field: 'intake.ready' },
+    ];
+    const doubleEscapedTransitions = '[{&amp;quot;from&amp;quot;: &amp;quot;intake&amp;quot;, &amp;quot;to&amp;quot;: &amp;quot;analysis&amp;quot;, &amp;quot;guard_field&amp;quot;: &amp;quot;intake.ready&amp;quot;}]';
+
+    await expect(
+      handlers.record_q4_transitions({ transitions_json: doubleEscapedTransitions }),
+    ).resolves.toMatchObject({
+      transitions_json: JSON.stringify(expected),
+    });
+  });
+
+  it('unescapes HTML entities inside object literals before tolerant parsing', async () => {
+    await expect(
+      handlers.record_q5_delegation({ delegation_json: '{&quot;enabled&quot;: false}' }),
+    ).resolves.toMatchObject({
+      delegation_json: JSON.stringify({ enabled: false }),
+    });
+  });
+
+  it('unescapes common numeric entities before parsing intake JSON', async () => {
+    await expect(
+      handlers.record_q6_completion({
+        completion_json: '{&#34;final_stage&#34;: &#34;complete&#34;, &#x22;guard_field&#x22;: &#x22;work&lt;done&gt;&#38;ready&#x22;}',
+      }),
+    ).resolves.toMatchObject({
+      completion_json: JSON.stringify({ final_stage: 'complete', guard_field: 'work<done>&ready' }),
+    });
+  });
+
   it('throws clearly for truly garbled intake JSON', async () => {
     await expect(
       handlers.record_q5_delegation({ delegation_json: '{enabled false' }),

@@ -81,12 +81,13 @@ function optionalJsonField(
 }
 
 function parseAndNormalizeJson(rawValue: string, label: string): NormalizedJsonField {
+  const normalizedRawValue = unescapeCommonHtmlEntities(rawValue);
   let value: unknown;
   try {
-    value = JSON.parse(rawValue) as unknown;
+    value = JSON.parse(normalizedRawValue) as unknown;
   } catch (strictError) {
     try {
-      value = new JsonishParser(rawValue).parse();
+      value = new JsonishParser(normalizedRawValue).parse();
     } catch (tolerantError) {
       throw new Error(
         `invalid JSON-string payload field: ${label}; strict JSON.parse failed (${errorMessage(strictError)}) and tolerant JSON5-style parse failed (${errorMessage(tolerantError)})`,
@@ -97,6 +98,62 @@ function parseAndNormalizeJson(rawValue: string, label: string): NormalizedJsonF
     value,
     canonical: canonicalJson(value, label),
   };
+}
+
+function unescapeCommonHtmlEntities(value: string): string {
+  let decoded = value;
+  for (let pass = 0; pass < 5; pass += 1) {
+    const previous = decoded;
+    decoded = decodeAmpNumericEntities(
+      decodeNonAmpNumericEntities(
+        decoded
+          .replace(/&quot;/giu, '"')
+          .replace(/&lt;/giu, '<')
+          .replace(/&gt;/giu, '>')
+          .replace(/&apos;/giu, '\''),
+      )
+        .replace(/&amp;/giu, '&'),
+    );
+    if (decoded === previous) {
+      return decoded;
+    }
+  }
+  return decoded;
+}
+
+function decodeNonAmpNumericEntities(value: string): string {
+  return decodeNumericEntities(value, false);
+}
+
+function decodeAmpNumericEntities(value: string): string {
+  return decodeNumericEntities(value, true);
+}
+
+function decodeNumericEntities(value: string, ampersandOnly: boolean): string {
+  return value.replace(
+    /&#(?:x([0-9a-f]+)|(\d+));/giu,
+    (entity: string, hex: string | undefined, decimal: string | undefined) => {
+      const codePoint = Number.parseInt(hex ?? decimal ?? '', hex === undefined ? 10 : 16);
+      if (codePoint === 38) {
+        return '&';
+      }
+      if (ampersandOnly) {
+        return entity;
+      }
+      switch (codePoint) {
+        case 34:
+          return '"';
+        case 39:
+          return '\'';
+        case 60:
+          return '<';
+        case 62:
+          return '>';
+        default:
+          return entity;
+      }
+    },
+  );
 }
 
 function canonicalJson(value: unknown, label: string): string {
