@@ -311,6 +311,145 @@ describe('startFoundryServer', () => {
     expect(createPgasServerMock).toHaveBeenCalledOnce();
   });
 
+  describe('unified OpenAI author driver (regression: Phase 5 v2 §10 fix)', () => {
+    const originalOpenAiKey = process.env.PGAS_OPENAI_API_KEY;
+    const originalOpenAiAltKey = process.env.OPENAI_API_KEY;
+    const originalGoogleKey = process.env.GOOGLE_API_KEY;
+    const originalProvider = process.env.PGAS_PROVIDER;
+    const originalToolChoice = process.env.PGAS_OPENAI_TOOL_CHOICE;
+
+    afterEach(() => {
+      restoreEnv('PGAS_OPENAI_API_KEY', originalOpenAiKey);
+      restoreEnv('OPENAI_API_KEY', originalOpenAiAltKey);
+      restoreEnv('GOOGLE_API_KEY', originalGoogleKey);
+      restoreEnv('PGAS_PROVIDER', originalProvider);
+      restoreEnv('PGAS_OPENAI_TOOL_CHOICE', originalToolChoice);
+    });
+
+    it('wires drivers.authorMode=unified when PGAS_OPENAI_API_KEY is set (the load-bearing fix lost in Task 5.2)', async () => {
+      const engine = mockPgasServer({ boundPort: 4570 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_OPENAI_API_KEY = 'unit-openai-key';
+      delete process.env.GOOGLE_API_KEY;
+      delete process.env.PGAS_PROVIDER;
+
+      await startFoundryServer({ port: 4570, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      expect(config.drivers).toBeDefined();
+      expect(config.drivers).toEqual(expect.objectContaining({
+        authorMode: 'unified',
+        unified: expect.objectContaining({
+          complete: expect.any(Function),
+        }),
+      }));
+    });
+
+    it('omits drivers when no OpenAI key and no explicit openai provider (Gemini/default path)', async () => {
+      const engine = mockPgasServer({ boundPort: 4571 });
+      createPgasServerMock.mockResolvedValue(engine);
+      delete process.env.PGAS_OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.GOOGLE_API_KEY;
+      delete process.env.PGAS_PROVIDER;
+
+      await startFoundryServer({ port: 4571, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      expect(config.drivers).toBeUndefined();
+    });
+
+    it('omits drivers when PGAS_PROVIDER=gemini even with an OpenAI key present', async () => {
+      const engine = mockPgasServer({ boundPort: 4572 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_OPENAI_API_KEY = 'unit-openai-key';
+      process.env.PGAS_PROVIDER = 'gemini';
+
+      await startFoundryServer({ port: 4572, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      expect(config.drivers).toBeUndefined();
+    });
+
+    it("forces tool_choice='required' in the unified payload when PGAS_OPENAI_TOOL_CHOICE=required", async () => {
+      const engine = mockPgasServer({ boundPort: 4573 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_OPENAI_API_KEY = 'unit-openai-key';
+      process.env.PGAS_OPENAI_TOOL_CHOICE = 'required';
+      process.env.PGAS_OPENAI_BASE_URL = 'http://upstream.local/v1';
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: '' } }],
+        }),
+      } as Response);
+
+      try {
+        await startFoundryServer({ port: 4573, hostname: '127.0.0.1' });
+        const complete = serverConfig().drivers?.unified?.complete;
+        if (!complete) throw new Error('unified.complete missing — drivers block not wired');
+
+        const messages = [{ role: 'user', content: 'test' }] as Parameters<typeof complete>[0];
+        const tools = [{
+          type: 'function',
+          function: { name: 'record_program_target', parameters: {} },
+        }] as Parameters<typeof complete>[1];
+
+        await complete(messages, tools);
+
+        expect(fetchSpy).toHaveBeenCalledOnce();
+        const [, init] = fetchSpy.mock.calls[0];
+        const body = JSON.parse((init?.body as string) ?? '{}');
+        expect(body.tool_choice).toBe('required');
+        expect(body.tools).toHaveLength(1);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it("defaults tool_choice to 'auto' in the unified payload when PGAS_OPENAI_TOOL_CHOICE is unset", async () => {
+      const engine = mockPgasServer({ boundPort: 4574 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_OPENAI_API_KEY = 'unit-openai-key';
+      delete process.env.PGAS_OPENAI_TOOL_CHOICE;
+      process.env.PGAS_OPENAI_BASE_URL = 'http://upstream.local/v1';
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '' } }] }),
+      } as Response);
+
+      try {
+        await startFoundryServer({ port: 4574, hostname: '127.0.0.1' });
+        const complete = serverConfig().drivers?.unified?.complete;
+        if (!complete) throw new Error('unified.complete missing — drivers block not wired');
+
+        const messages = [{ role: 'user', content: 'test' }] as Parameters<typeof complete>[0];
+        const tools = [{
+          type: 'function',
+          function: { name: 'record_program_target', parameters: {} },
+        }] as Parameters<typeof complete>[1];
+
+        await complete(messages, tools);
+
+        const [, init] = fetchSpy.mock.calls[0];
+        const body = JSON.parse((init?.body as string) ?? '{}');
+        expect(body.tool_choice).toBe('auto');
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+  });
+
+  function restoreEnv(name: string, original: string | undefined): void {
+    if (original === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = original;
+    }
+  }
+
   function serverConfig(): PgasServerConfig {
     const [config] = createPgasServerMock.mock.calls.at(-1) ?? [];
     if (!config) throw new Error('createPgasServer was not called');
