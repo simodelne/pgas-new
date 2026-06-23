@@ -117,6 +117,40 @@ describe('forwardToolChoiceProxyRequest', () => {
     ]);
   });
 
+  it('forces approve_artifact_plan for approval rounds even when the prompt omits artifact plan state', async () => {
+    await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'qwen36-27b',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'Mode scaffold_plan.',
+              'Current state:',
+              '{',
+              '  "inputs.user_decision.decision": "approve"',
+              '}',
+            ].join('\n'),
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'approve_artifact_plan', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'plan_artifacts', parameters: { type: 'object' } } },
+          { type: 'function', function: { name: 'record_note', parameters: { type: 'object' } } },
+        ],
+        tool_choice: 'auto',
+      }),
+    }));
+
+    expect(upstreamRequests).toEqual([
+      expect.objectContaining({
+        tool_choice: { type: 'function', function: { name: 'approve_artifact_plan' } },
+      }),
+    ]);
+  });
+
   it('forces confirm_design for intake approval rounds', async () => {
     await forwardToolChoiceProxyRequest('http://provider.local/v1', new Request('http://127.0.0.1:9001/v1/chat/completions', {
       method: 'POST',

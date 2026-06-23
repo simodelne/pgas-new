@@ -167,7 +167,7 @@ function deterministicToolChoice(payload: Record<string, unknown>): Record<strin
   }
 
   if (decision !== 'approve') return undefined;
-  if (tools.includes('approve_artifact_plan') && hasDraftArtifactPlan(currentState, context)) {
+  if (tools.includes('approve_artifact_plan')) {
     return functionToolChoice('approve_artifact_plan');
   }
   if (tools.includes('confirm_design')) {
@@ -221,14 +221,6 @@ function fallbackDecision(context: string): 'approve' | 'reject' | undefined {
 function hasDecisionText(context: string, decision: 'approve' | 'reject'): boolean {
   const escaped = decision.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   return new RegExp(`(?:inputs\\.user_decision\\.decision|\\bdecision\\b)[^A-Za-z0-9_]+${escaped}\\b`, 'iu').test(context);
-}
-
-function hasDraftArtifactPlan(state: Record<string, unknown> | null, context: string): boolean {
-  if (state) {
-    return stringStateField(state, 'artifact_plan.status') === 'draft'
-      || stringStateField(state, 'artifact_plan', 'status') === 'draft';
-  }
-  return /artifact_plan\.status[^A-Za-z0-9_]+draft\b/iu.test(context);
 }
 
 function rejectQuestionNumber(context: string): number | null {
