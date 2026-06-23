@@ -139,6 +139,25 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders existing-repo registrations without Node ambient type dependencies', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-registration-'));
+    try {
+      renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'audit-trail',
+        name: 'Audit Trail',
+      });
+
+      const registration = readFileSync(join(repoRoot, 'programs/audit-trail/registration.ts'), 'utf8');
+      expect(registration).toContain("new URL('./specs.yml', import.meta.url).pathname");
+      expect(registration).not.toContain("from 'node:path'");
+      expect(registration).not.toContain("from 'node:url'");
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('declares control-plane session commands, modes, notebook pins, and verification gates', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-spec-'));
     try {

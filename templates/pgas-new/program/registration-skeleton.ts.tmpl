@@ -1,5 +1,3 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   createProgramAdapters,
   createToolRegistry,
@@ -10,8 +8,8 @@ import { handlers } from './handlers.js';
 import { register{{PASCAL_NAME}}Tools } from './tools.js';
 
 export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
-  const dirname = path.dirname(fileURLToPath(import.meta.url));
-  const { spec } = loadSpecWithPatterns(path.join(dirname, 'specs.yml'));
+  const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
+  const { spec } = loadSpecWithPatterns(specPath);
   const toolRegistry = createToolRegistry();
   register{{PASCAL_NAME}}Tools(toolRegistry);
 

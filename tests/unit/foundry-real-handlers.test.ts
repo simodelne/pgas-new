@@ -158,12 +158,23 @@ describe('load_wiring_manifest', () => {
     }
   });
 
-  it('throws the fixed missing-manifest refusal', async () => {
+  it('throws the fixed missing-manifest refusal and writes a curator request artifact', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-no-manifest-'));
     try {
-      await expect(handlers.load_wiring_manifest({ repo_root: repoRoot })).rejects.toThrow(
+      await expect(
+        handlers.load_wiring_manifest({
+          repo_root: repoRoot,
+          domain: {
+            'program.slug': 'missing-manifest-test',
+          },
+        }),
+      ).rejects.toThrow(
         new RegExp(`no wiring manifest at ${repoRoot}/\\.pgas/wiring\\.yml; foundry must lodge a curator request instead of writing`),
       );
+      const artifact = readFileSync(join(repoRoot, 'audit/PGAS-NEW-missing-manifest-test.md'), 'utf8');
+      expect(artifact).toContain('PGAS-New Wiring Request');
+      expect(artifact).toContain(`no wiring manifest at ${repoRoot}/.pgas/wiring.yml`);
+      expect(artifact).toContain('No local writes were performed');
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

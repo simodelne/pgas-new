@@ -259,7 +259,7 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/specs.yml'];
   }
   if (artifact.kind === 'registration') {
-    return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/registration.ts'];
+    return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
   if (artifact.kind === 'handler') {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];

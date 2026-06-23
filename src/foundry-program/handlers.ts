@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
+import { renderMissingWiringRequest } from '../pgas-new/curator-request.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import {
   WIRING_MANIFEST_PATH,
@@ -817,6 +818,7 @@ export const handlers: Record<string, ToolHandler> = {
     }
     const manifestPath = join(repoRoot, WIRING_MANIFEST_PATH);
     if (!existsSync(manifestPath)) {
+      writeMissingWiringCuratorRequest(repoRoot, manifestPath, domain, payload);
       throw new Error(`no wiring manifest at ${manifestPath}; foundry must lodge a curator request instead of writing`);
     }
     const result = readWiringManifest(repoRoot);
@@ -906,6 +908,54 @@ function domainFromPayload(payload: Record<string, unknown>): Record<string, unk
     throw new Error('synthesize_program_spec requires payload.domain from the engine domain snapshot');
   }
   return domain as Record<string, unknown>;
+}
+
+function writeMissingWiringCuratorRequest(
+  repoRoot: string,
+  manifestPath: string,
+  domain: Record<string, unknown> | undefined,
+  payload: Record<string, unknown>,
+): void {
+  const slug = safeArtifactSlug(
+    optionalStringPayloadField(payload, 'slug')
+      ?? (domain ? optionalStringDomainField(domain, 'program.slug') : undefined)
+      ?? 'missing-wiring',
+  );
+  const target = resolveCuratorTarget(repoRoot, slug);
+  const relativePath = `audit/PGAS-NEW-${slug}.md`;
+  const outPath = join(repoRoot, relativePath);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(
+    outPath,
+    renderMissingWiringRequest({
+      githubOwner: target.githubOwner,
+      githubRepo: target.githubRepo,
+      reason: `missing ${WIRING_MANIFEST_PATH}: no wiring manifest at ${manifestPath}`,
+      action: 'Publish or correct the binding wiring manifest at .pgas/wiring.yml.',
+    }),
+  );
+}
+
+function resolveCuratorTarget(repoRoot: string, fallbackRepo: string): { githubOwner: string; githubRepo: string } {
+  const remote = readOriginRemote(repoRoot);
+  if (remote) return remote;
+  const repoName = safeArtifactSlug(basename(resolve(repoRoot))) || fallbackRepo;
+  return { githubOwner: 'unknown', githubRepo: repoName };
+}
+
+function readOriginRemote(repoRoot: string): { githubOwner: string; githubRepo: string } | undefined {
+  try {
+    const config = readFileSync(join(repoRoot, '.git/config'), 'utf8');
+    const match = config.match(/url\s*=\s*(?:git@github\.com:|https:\/\/github\.com\/)([^/\s]+)\/([^\s]+?)(?:\.git)?(?:\s|$)/u);
+    if (!match) return undefined;
+    return { githubOwner: match[1], githubRepo: match[2] };
+  } catch {
+    return undefined;
+  }
+}
+
+function safeArtifactSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'missing-wiring';
 }
 
 function optionalDomainFromPayload(payload: Record<string, unknown>): Record<string, unknown> | undefined {
