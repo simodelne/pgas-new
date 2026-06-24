@@ -500,8 +500,11 @@ describe('foundry intake flow', () => {
       await harness.trigger(replConfirmation('/reject please change Q3 stages'));
       let snapshot = await waitForSnapshot(
         harness,
-        (candidate) => terminalActionNames(candidate.rounds).includes('ask_design_question'),
-        'Q3 revision rejection to re-ask Q3',
+        (candidate) =>
+          terminalActionNames(candidate.rounds).includes('ask_design_question') &&
+          candidate.domain['intake.q3_recorded'] === false &&
+          candidate.domain['intake.last_question_asked'] === 3,
+        'Q3 revision rejection to re-ask Q3 and mutate last_question_asked',
       );
 
       expect(snapshot.domain['intake.q1_recorded']).toBe(true);

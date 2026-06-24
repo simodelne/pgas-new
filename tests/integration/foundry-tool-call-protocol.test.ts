@@ -229,6 +229,16 @@ describe('foundry intake tool-call protocol guidance', () => {
         }),
       });
 
+      // After confirm_design mode-transitions to repo_targeting, the next LLM
+      // call (where load_wiring_manifest appears in the tool list) is
+      // dispatched asynchronously by the engine via system_mode_entry. Poll
+      // until the mock has observed it, with a generous deadline for CI
+      // parallel-worker contention.
+      const pollDeadline = Date.now() + 5_000;
+      while (loadWiringManifestTool === undefined && Date.now() < pollDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
       expect(loadWiringManifestTool).toMatchObject({
         type: 'object',
         properties: {
