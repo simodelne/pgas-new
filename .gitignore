@@ -35,3 +35,9 @@ tests/**/*.js
 .claude/
 .remember/
 .uat/
+
+# Foundry runtime spillover when PGAS_SESSION_LOG_DIR / PGAS_UPLOADS_DIR are
+# unset (the repo-root CLI dumps session logs and upload staging into the
+# working tree — bulky, transient, never committed).
+session-logs/
+uploads/
