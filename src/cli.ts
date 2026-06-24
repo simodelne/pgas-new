@@ -1,7 +1,7 @@
 process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
 
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
@@ -795,7 +795,7 @@ function fail(stderr: string, exitCode: number): CliResult {
   return { exitCode, stdout: '', stderr };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+if (isMainEntry(import.meta.url, process.argv[1])) {
   const result = await runCli(process.argv.slice(2));
   if (result.stderr) {
     process.stderr.write(`${result.stderr}\n`);
@@ -804,4 +804,15 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     process.stdout.write(`${result.stdout}\n`);
   }
   process.exitCode = result.exitCode;
+}
+
+export function isMainEntry(metaUrl: string, argvPath: string | undefined): boolean {
+  if (!argvPath) return false;
+  const direct = pathToFileURL(argvPath).href;
+  if (metaUrl === direct) return true;
+  try {
+    return metaUrl === pathToFileURL(realpathSync(argvPath)).href;
+  } catch {
+    return false;
+  }
 }
