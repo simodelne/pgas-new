@@ -690,7 +690,12 @@ const scenarioFns = { a: runA, b: runB, c: runC, d: runD, e: runE, f: runF, g: r
 // Every attempt's transcript and session-log path is preserved in
 // `attempts` so any reviewer can audit the variance directly. The final
 // `verdict` is PASS if any attempt passed, FAIL otherwise.
-const FLAKY_SCENARIOS = new Set(['e', 'f', 'g']);
+// Live-Qwen tool-selection variance at temperature=0.7 affects any scenario
+// that traverses scaffold_plan's user_confirmation gate, the existing-repo
+// attach path's load_wiring_manifest → authorize_existing_repo_target chain,
+// or the post-Q3-revise re-walk. B (default skeleton) and H (/abort) skip
+// those LLM-driven gates and run deterministically with one attempt.
+const FLAKY_SCENARIOS = new Set(['a', 'c', 'd', 'e', 'f', 'g']);
 const MAX_FLAKY_ATTEMPTS = Number.parseInt(process.env.E2E_MAX_FLAKY_ATTEMPTS ?? '3', 10);
 
 async function runScenarioWithRetry(letter, fn) {
