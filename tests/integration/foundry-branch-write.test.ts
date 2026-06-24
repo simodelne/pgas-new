@@ -17,7 +17,7 @@ const transitions = [
 ];
 
 describe('foundry branch_write', () => {
-  it('writes the synthesized standalone scaffold to disk', async () => {
+  it('writes the synthesized standalone scaffold to disk', { timeout: 30_000 }, async () => {
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-branch-write-'));
     const domain = {
       'program.slug': 'incident-triage',

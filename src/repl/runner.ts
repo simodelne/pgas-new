@@ -1,3 +1,7 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
 import { createReplRenderer, REPL_CONTROL_HINT } from './renderer.js';
@@ -38,10 +42,15 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   const stdin = options.stdin ?? process.stdin;
   const stdout = options.stdout ?? process.stdout;
   const apiBase = options.apiBase ?? options.baseUrl ?? 'http://localhost:3000';
-  const token = options.token ?? 'dev-token';
   const program = options.program ?? options.slug ?? 'pgas-new';
   const displayName = options.programDisplayName ?? program;
-  const renderer = createReplRenderer(stdout);
+  const tty = Boolean((stdin as NodeJS.ReadStream).isTTY) && Boolean((stdout as NodeJS.WriteStream).isTTY);
+  const renderer = createReplRenderer(stdout, { tty });
+  const token = options.token ?? readActiveCachedToken();
+  if (token === undefined) {
+    renderer.renderError('no active session — run `pgas-new login`');
+    return { reason: 'error', sessionId: null, finalMode: null, exitCode: 1 };
+  }
   const client = createPgasClient(fetchTransport({ baseUrl: apiBase, token }));
   const state: ReplState = {
     sessionId: null,
@@ -70,25 +79,25 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     activeSpinner?.stop();
     activeSpinner = null;
     rl.close();
-    renderer.write('  Bye.');
+    renderer.renderGoodbye(state.sessionId, state.mode);
     resolveExit({ reason, sessionId: state.sessionId, finalMode: state.mode, exitCode });
   };
 
-  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: false });
+  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: tty });
   options.abortSignal?.addEventListener('abort', () => {
     void finish('sigint');
   });
 
-  renderer.write(`\n  ${displayName} — PGAS REPL\n`);
+  renderer.renderBanner(displayName, resolvePackageVersion());
 
   try {
     await client.programs.list();
   } catch (error) {
-    renderer.renderError(renderStartupError(error, apiBase));
+    renderer.renderError(isUnauthorizedError(error) ? 'session expired, re-run `pgas-new login`' : renderStartupError(error, apiBase));
     return { reason: 'error', sessionId: null, finalMode: null, exitCode: 1 };
   }
 
-  renderer.renderStep(`Connected  program: ${program}`);
+  renderer.renderStep(`Connected to ${apiBase} · program ${program}`);
   updatePrompt();
 
   rl.on('line', (line: string) => {
@@ -132,7 +141,14 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
         ? handleText(input)
         : handleCommand(input);
     return handler
-      .catch((error) => renderer.renderError(errorMessage(error)))
+      .catch(async (error) => {
+        if (isUnauthorizedError(error)) {
+          renderer.renderError('session expired, re-run `pgas-new login`');
+          await finish('error', 1);
+          return;
+        }
+        renderer.renderError(errorMessage(error));
+      })
       .finally(() => {
         if (isText) textBusy = false;
         if (!textBusy && !isUserConfirmation) inputBusy = false;
@@ -304,7 +320,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     }
 
     if (payload.decision === 'approve') {
-      await invokeSessionControl('approve_artifact_plan');
+      await invokeSessionControl(resolveApproveControlForMode(state.mode));
       return;
     }
 
@@ -339,7 +355,13 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     try {
       const envelope = await client.sessions.get(state.sessionId);
       const live = readLiveSessionFields(envelope);
-      state.mode = live.mode ?? state.mode;
+      const nextMode = live.mode ?? state.mode;
+      if (nextMode && nextMode !== state.mode) {
+        state.mode = nextMode;
+        renderer.renderModeChange(nextMode);
+      } else {
+        state.mode = nextMode;
+      }
       return live;
     } catch {
       // Controls are already committed; a status refresh failure should not
@@ -398,6 +420,11 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     } catch (error) {
       if (!state.abortRequested) {
         spinner.stop();
+        if (isUnauthorizedError(error)) {
+          renderer.renderError('session expired, re-run `pgas-new login`');
+          await finish('error', 1);
+          return;
+        }
         renderer.renderError(errorMessage(error));
       }
     } finally {
@@ -408,6 +435,50 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   }
 
   return exitPromise;
+}
+
+let cachedPackageVersion: string | undefined;
+function resolvePackageVersion(): string {
+  if (cachedPackageVersion !== undefined) return cachedPackageVersion;
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const candidate of [join(here, '..', '..', 'package.json'), join(here, '..', '..', '..', 'package.json')]) {
+      if (!existsSync(candidate)) continue;
+      const pkg = JSON.parse(readFileSync(candidate, 'utf8')) as { name?: string; version?: string };
+      if (pkg.name === 'pgas-new' && typeof pkg.version === 'string') {
+        cachedPackageVersion = pkg.version;
+        return pkg.version;
+      }
+    }
+  } catch {
+    // fall through
+  }
+  cachedPackageVersion = '0.0.0';
+  return cachedPackageVersion;
+}
+
+function readActiveCachedToken(): string | undefined {
+  const tokenPath = join(homedir(), '.local/share/pgas-new/token');
+  if (!existsSync(tokenPath)) return undefined;
+
+  const token = readFileSync(tokenPath, 'utf8').trim();
+  if (token.length === 0) return undefined;
+  const exp = decodeJwtExp(token);
+  if (exp === undefined || exp <= Math.floor(Date.now() / 1000)) return undefined;
+  return token;
+}
+
+function decodeJwtExp(token: string): number | undefined {
+  const [, payload] = token.split('.');
+  if (!payload) return undefined;
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
+    return isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)
+      ? decoded.exp
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function renderStartupError(error: unknown, apiBase: string): string {
@@ -427,6 +498,11 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   return String(error);
+}
+
+function isUnauthorizedError(error: unknown): boolean {
+  const maybeStatus = error as { status?: unknown } | undefined;
+  return maybeStatus?.status === 401;
 }
 
 function readLiveSessionFields(envelope: Record<string, unknown>): {
@@ -480,4 +556,34 @@ function buildUserConfirmationPayload(
 function parseRejectQuestionNumber(instruction: string | undefined): number | null {
   const match = /\bq([1-6])\b/iu.exec(instruction ?? '');
   return match ? Number(match[1]) : null;
+}
+
+/**
+ * Maps the current foundry mode to the correct `/approve` control action.
+ * Each mode that gates on user_confirmation has its own approval action
+ * — using a single action regardless of mode fails the engine's
+ * precondition check, the trigger falls through to an LLM round, and
+ * Qwen has been observed to pick a different tool (record_note) instead
+ * of the expected confirm action.
+ *
+ * See §10 Scenario A blocker at HEAD `51eef801` (Phase 5 v2 §10 rerun):
+ * `/approve` after `record_program_intake_finalize` invoked
+ * `approve_artifact_plan`, whose preconditions are not yet satisfiable
+ * in `intake_intelligence` mode (artifact_plan.status is not 'draft'
+ * until `plan_artifacts` runs in `scaffold_plan`), causing the engine
+ * to fall back to a user_confirmation LLM round where Qwen emitted
+ * `record_note` (.uat/session-logs-current/pgas-new-1782230910268/session-log.ndjson:465-476).
+ */
+export function resolveApproveControlForMode(mode: string | null): string {
+  switch (mode) {
+    case 'intake_intelligence':
+      return 'confirm_design';
+    case 'scaffold_plan':
+      return 'approve_artifact_plan';
+    default:
+      // Modes without a registered confirmation control fall back to
+      // approve_artifact_plan; the engine will reject if not applicable
+      // and surface a clear error rather than misroute the action.
+      return 'approve_artifact_plan';
+  }
 }

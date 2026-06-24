@@ -1,6 +1,6 @@
 {
   "name": "pgas-new",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "description": "PGAS-specific foundry for creating TypeScript/Node PGAS programs",
@@ -12,8 +12,11 @@
     "test": "npm run typecheck && npm run test:manifest && npm run test:unit && npm run test:static",
     "pgas-new": "node --import tsx src/cli.ts"
   },
+  "bin": {
+    "pgas-new": "./bin/pgas-new"
+  },
   "dependencies": {
-    "@simodelne/pgas-server": "^2.13.0"
+    "@simodelne/pgas-server": "^2.13.5"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",

@@ -21,8 +21,8 @@ else
   fail ".claude-plugin/plugin.json missing or invalid JSON"
 fi
 
-echo "[2/5] plugin.json + package.json version pinned to 3.0.0"
-EXPECTED_VERSION="3.0.0"
+echo "[2/5] plugin.json + package.json version pinned to 3.1.0"
+EXPECTED_VERSION="3.1.0"
 MANIFEST_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version ?? '')" 2>/dev/null)
 PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version ?? '')" 2>/dev/null)
 if [[ "$MANIFEST_VERSION" == "$EXPECTED_VERSION" ]]; then
@@ -34,6 +34,17 @@ if [[ "$PKG_VERSION" == "$EXPECTED_VERSION" ]]; then
   pass "package.json version = $PKG_VERSION"
 else
   fail "package.json version = '$PKG_VERSION' (expected $EXPECTED_VERSION)"
+fi
+BIN_ENTRY=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).bin?.['pgas-new'] ?? '')" 2>/dev/null)
+if [[ "$BIN_ENTRY" == "./bin/pgas-new" ]]; then
+  pass "package.json bin pgas-new = $BIN_ENTRY"
+else
+  fail "package.json bin pgas-new = '$BIN_ENTRY' (expected ./bin/pgas-new)"
+fi
+if [[ -x bin/pgas-new ]]; then
+  pass "bin/pgas-new is executable"
+else
+  fail "bin/pgas-new missing or not executable"
 fi
 
 echo "[3/5] pgas-new foundry sources exist"

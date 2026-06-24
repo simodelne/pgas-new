@@ -921,6 +921,19 @@ control_plane:
           mode: async
       presentation:
         priority: primary
+    confirm_design:
+      title: Confirm design intake
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: approve
+          mode: async
+      presentation:
+        priority: contextual
     reject_design_and_revise_q1:
       title: Reject and revise Q1
       aliases: ["/reject-q1"]

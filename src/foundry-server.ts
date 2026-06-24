@@ -1,7 +1,14 @@
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { createPgasServer, type PgasServer, type PgasServerConfig } from '@simodelne/pgas-server/create-server.js';
-import type { CompletionResponse, ConversationMessage, OpenAIToolDefinition, UnifiedAuthorDriverOptions } from '@simodelne/pgas-server/plugin.js';
+import type {
+  CompletionResponse,
+  ConversationMessage,
+  OpenAIToolDefinition,
+  UnifiedAuthorDriverOptions,
+} from '@simodelne/pgas-server/plugin.js';
 import { createPgasNewFoundryProgramEntry } from './foundry-program/registration.js';
-import { startToolChoiceProxy } from './foundry-program/tool-choice-proxy.js';
 
 export interface FoundryServerOptions {
   port?: number;
@@ -17,30 +24,22 @@ const DEFAULT_HOSTNAME = '127.0.0.1';
 const DEFAULT_OPENAI_BASE_URL = 'http://100.100.74.6:8000/v1';
 const DEFAULT_OPENAI_MODEL = 'glm-4.7';
 const PROGRAM_NAME = 'pgas-new';
+const DATA_DIR_RELATIVE = '.local/share/pgas-new';
+const JWT_SECRET_FILE = 'jwt.secret';
+const INITIAL_ADMIN_FILE = 'initial-admin.json';
+const VALID_TOOL_CHOICES = new Set(['auto', 'required', 'none']);
 
-export function ensureOpenAiJsonResponseFormatDisabled(): void {
-  if (process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT === undefined) {
-    process.env.PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT = '1';
-  }
+interface ResolvedFoundryConfig {
+  dbPath: string;
+  auth: NonNullable<PgasServerConfig['auth']>;
+  initialAdminPath?: string;
 }
 
 export async function startFoundryServer(options: FoundryServerOptions = {}): Promise<StartedFoundryServer> {
   applyFoundryLiveProviderDefaults();
   const requestedPort = resolvePort(options);
   const hostname = options.hostname ?? DEFAULT_HOSTNAME;
-  const originalOpenAiBaseUrl = process.env.PGAS_OPENAI_BASE_URL;
-  const upstreamOpenAiBaseUrl = originalOpenAiBaseUrl ?? DEFAULT_OPENAI_BASE_URL;
-  const toolChoiceProxy = await startToolChoiceProxy(upstreamOpenAiBaseUrl);
-  process.env.PGAS_OPENAI_BASE_URL = toolChoiceProxy.url;
-  /**
-   * Phase 3.16 tightened native tool schemas, but Section 10 Round 9 still
-   * captured Qwen emitting legacy MutationAction content with hadToolCalls=false.
-   * The installed PGAS server forces OpenAI JSON response_format unless this env
-   * var is set, and JSON mode + tools pulls Qwen into content instead of
-   * native tool_calls. Default it off for foundry launches while honoring an
-   * explicit override such as =0 for diagnostics.
-   */
-  ensureOpenAiJsonResponseFormatDisabled();
+  const resolvedConfig = resolveFoundryConfig();
 
   let server: PgasServer;
   try {
@@ -48,6 +47,8 @@ export async function startFoundryServer(options: FoundryServerOptions = {}): Pr
       programs: [{ name: PROGRAM_NAME, entry: createPgasNewFoundryProgramEntry() }],
       port: requestedPort,
       devMode: true,
+      storage: { dbPath: resolvedConfig.dbPath },
+      auth: resolvedConfig.auth,
     };
     if (shouldUseUnifiedOpenAiDriver()) {
       serverConfig.drivers = {
@@ -59,6 +60,9 @@ export async function startFoundryServer(options: FoundryServerOptions = {}): Pr
     }
     server = await createPgasServer(serverConfig);
     const started = await server.start();
+    if (resolvedConfig.initialAdminPath) {
+      rmSync(resolvedConfig.initialAdminPath, { force: true });
+    }
     const actualPort = server.info.port ?? started.port;
 
     return {
@@ -70,21 +74,80 @@ export async function startFoundryServer(options: FoundryServerOptions = {}): Pr
         } catch (error) {
           thrown = error;
         }
-        try {
-          await toolChoiceProxy.kill();
-        } catch (error) {
-          thrown ??= error;
-        } finally {
-          restoreOpenAiBaseUrl(originalOpenAiBaseUrl, toolChoiceProxy.url);
-        }
         if (thrown) throw thrown;
       },
     };
   } catch (error) {
-    restoreOpenAiBaseUrl(originalOpenAiBaseUrl, toolChoiceProxy.url);
-    await toolChoiceProxy.kill();
     throw error;
   }
+}
+
+function resolveFoundryConfig(): ResolvedFoundryConfig {
+  const dataDir = defaultDataDir();
+  const dbPath = process.env.PGAS_DB ?? join(dataDir, 'pgas-new.db');
+  ensureParentDir(dbPath);
+
+  const jwtSecret = resolveJwtSecret(dataDir);
+  const initialAdmin = resolveInitialAdmin(dataDir);
+  const auth: NonNullable<PgasServerConfig['auth']> = {
+    jwtSecret,
+    issuer: process.env.PGAS_JWT_ISSUER ?? 'pgas-new',
+    expiresIn: process.env.PGAS_JWT_EXPIRES_IN ?? '7d',
+    ...(initialAdmin ? { initialAdmin: initialAdmin.credentials } : {}),
+  };
+
+  return {
+    dbPath,
+    auth,
+    ...(initialAdmin ? { initialAdminPath: initialAdmin.path } : {}),
+  };
+}
+
+function defaultDataDir(): string {
+  return join(homedir(), DATA_DIR_RELATIVE);
+}
+
+function ensureParentDir(filePath: string): void {
+  if (filePath === ':memory:') return;
+  mkdirSync(dirname(filePath), { recursive: true });
+}
+
+function resolveJwtSecret(dataDir: string): string {
+  const envSecret = process.env.PGAS_JWT_SECRET?.trim();
+  if (envSecret) return envSecret;
+
+  const secretPath = join(dataDir, JWT_SECRET_FILE);
+  if (existsSync(secretPath)) {
+    const fileSecret = readFileSync(secretPath, 'utf8').trim();
+    if (fileSecret.length > 0) return fileSecret;
+  }
+
+  throw new Error('no JWT secret configured; run `pgas-new init`');
+}
+
+function resolveInitialAdmin(dataDir: string): { path: string; credentials: { email: string; password: string } } | undefined {
+  const initialAdminPath = join(dataDir, INITIAL_ADMIN_FILE);
+  if (!existsSync(initialAdminPath)) return undefined;
+
+  const parsed = JSON.parse(readFileSync(initialAdminPath, 'utf8')) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error(`invalid initial admin file at ${initialAdminPath}: expected object`);
+  }
+
+  const email = typeof parsed.email === 'string' ? parsed.email.trim() : '';
+  const password = typeof parsed.passwordHash === 'string' && parsed.passwordHash.length > 0
+    ? parsed.passwordHash
+    : typeof parsed.password === 'string'
+      ? parsed.password
+      : '';
+  if (email.length === 0 || password.length === 0) {
+    throw new Error(`invalid initial admin file at ${initialAdminPath}: expected email and password`);
+  }
+
+  return {
+    path: initialAdminPath,
+    credentials: { email, password },
+  };
 }
 
 function resolvePort(options: FoundryServerOptions): number {
@@ -95,16 +158,6 @@ function resolvePort(options: FoundryServerOptions): number {
 
   const parsedPort = Number.parseInt(envPort, 10);
   return Number.isNaN(parsedPort) ? 0 : parsedPort;
-}
-
-function restoreOpenAiBaseUrl(originalValue: string | undefined, proxyUrl: string): void {
-  if (process.env.PGAS_OPENAI_BASE_URL !== proxyUrl) return;
-
-  if (originalValue === undefined) {
-    delete process.env.PGAS_OPENAI_BASE_URL;
-  } else {
-    process.env.PGAS_OPENAI_BASE_URL = originalValue;
-  }
 }
 
 function applyFoundryLiveProviderDefaults(): void {
@@ -119,6 +172,10 @@ function setDefaultEnv(name: string, value: string): void {
   if ((process.env[name] ?? '').trim().length === 0) {
     process.env[name] = value;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function shouldUseUnifiedOpenAiDriver(): boolean {
@@ -138,6 +195,9 @@ function createOpenAiUnifiedComplete(): UnifiedAuthorDriverOptions['complete'] {
     }
 
     const payload = createOpenAiUnifiedPayload(messages, tools);
+    const callId = `unified-${String(Date.now())}-${Math.random().toString(36).slice(2, 8)}`;
+    maybeDumpUnifiedRequest(callId, payload);
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -152,7 +212,9 @@ function createOpenAiUnifiedComplete(): UnifiedAuthorDriverOptions['complete'] {
       throw new Error(`OpenAI-compatible unified HTTP ${String(response.status)}: ${body.slice(0, 400)}`);
     }
 
-    return parseOpenAiUnifiedResponse(await response.json());
+    const rawBody = await response.json();
+    maybeDumpUnifiedResponse(callId, rawBody);
+    return parseOpenAiUnifiedResponse(rawBody);
   };
 }
 
@@ -182,10 +244,18 @@ function createOpenAiUnifiedPayload(
   if (presencePenalty !== undefined) payload.presence_penalty = presencePenalty;
   if (tools.length > 0) {
     payload.tools = tools;
-    payload.tool_choice = 'auto';
+    payload.tool_choice = resolveToolChoiceFromEnv();
   }
 
   return payload;
+}
+
+function resolveToolChoiceFromEnv(): 'auto' | 'required' | 'none' {
+  const fromEnv = process.env.PGAS_OPENAI_TOOL_CHOICE?.trim().toLowerCase();
+  if (fromEnv !== undefined && VALID_TOOL_CHOICES.has(fromEnv)) {
+    return fromEnv as 'auto' | 'required' | 'none';
+  }
+  return 'auto';
 }
 
 function parseOpenAiUnifiedResponse(body: unknown): CompletionResponse {
@@ -242,4 +312,55 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, '');
+}
+
+/**
+ * Diagnostic-only: when PGAS_FOUNDRY_DEBUG_PROMPTS is set to a directory
+ * path, write each unified-driver request payload to <dir>/<callId>-request.json
+ * and the raw provider response to <dir>/<callId>-response.json. Wire payload
+ * is unchanged. Used to debug LLM tool-selection divergence at the
+ * scaffold_plan /approve gate — see .uat/codex-phase-5-v2-blocker-2.md.
+ */
+function maybeDumpUnifiedRequest(callId: string, payload: Record<string, unknown>): void {
+  const dir = nonEmpty(process.env.PGAS_FOUNDRY_DEBUG_PROMPTS);
+  if (dir === undefined) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    const filePath = join(dir, `${callId}-request.json`);
+    const tools = Array.isArray((payload as { tools?: unknown }).tools)
+      ? (payload as { tools: unknown[] }).tools
+      : [];
+    const summary = {
+      callId,
+      timestamp: new Date().toISOString(),
+      tool_choice: (payload as { tool_choice?: unknown }).tool_choice ?? null,
+      tools_count: tools.length,
+      tool_names: tools
+        .map((tool) => {
+          if (typeof tool !== 'object' || tool === null) return null;
+          const fn = (tool as { function?: { name?: string } }).function;
+          return typeof fn?.name === 'string' ? fn.name : null;
+        })
+        .filter((name): name is string => name !== null),
+      payload,
+    };
+    writeFileSyncSafe(filePath, JSON.stringify(summary, null, 2));
+  } catch {
+    // Diagnostic-only — never break the round on dump failure.
+  }
+}
+
+function maybeDumpUnifiedResponse(callId: string, body: unknown): void {
+  const dir = nonEmpty(process.env.PGAS_FOUNDRY_DEBUG_PROMPTS);
+  if (dir === undefined) return;
+  try {
+    const filePath = join(dir, `${callId}-response.json`);
+    writeFileSyncSafe(filePath, JSON.stringify({ callId, body }, null, 2));
+  } catch {
+    // Diagnostic-only.
+  }
+}
+
+function writeFileSyncSafe(filePath: string, content: string): void {
+  writeFileSync(filePath, content);
 }
