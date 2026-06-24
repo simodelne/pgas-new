@@ -27,7 +27,7 @@ The only remaining `--template` value is `pgas-new-foundry`, retained for the le
 
 ## PGAS Contract
 
-Generated consumers target `@simodelne/pgas-server@2.13.4` and use only these public imports:
+Generated consumers target `@simodelne/pgas-server@2.13.5` and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
@@ -105,7 +105,7 @@ createPgasServer({
 
 The engine still does not export `SqliteStore` or `JwtAuthProvider` classes. That is intentional per the engine team's zero-internals design, and pgas-new does not import those classes. Storage and auth are configured only through `createPgasServer`; authentication after bootstrap flows through HTTP routes.
 
-The v3.0 local tool-choice proxy has been removed. Engine v2.13.4 supports tool-choice resolution directly, so the CLI sets `PGAS_OPENAI_TOOL_CHOICE=required` by default before engine imports. Explicit env values still win.
+The v3.0 local tool-choice proxy has been removed. Engine v2.13.5 supports tool-choice resolution directly, so the CLI sets `PGAS_OPENAI_TOOL_CHOICE=required` by default before engine imports. Explicit env values still win.
 
 ## Control Plane And CLI
 
