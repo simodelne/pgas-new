@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
 import { createReplRenderer, REPL_CONTROL_HINT } from './renderer.js';
@@ -43,7 +44,8 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   const apiBase = options.apiBase ?? options.baseUrl ?? 'http://localhost:3000';
   const program = options.program ?? options.slug ?? 'pgas-new';
   const displayName = options.programDisplayName ?? program;
-  const renderer = createReplRenderer(stdout);
+  const tty = Boolean((stdin as NodeJS.ReadStream).isTTY) && Boolean((stdout as NodeJS.WriteStream).isTTY);
+  const renderer = createReplRenderer(stdout, { tty });
   const token = options.token ?? readActiveCachedToken();
   if (token === undefined) {
     renderer.renderError('no active session — run `pgas-new login`');
@@ -77,16 +79,16 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     activeSpinner?.stop();
     activeSpinner = null;
     rl.close();
-    renderer.write('  Bye.');
+    renderer.renderGoodbye(state.sessionId, state.mode);
     resolveExit({ reason, sessionId: state.sessionId, finalMode: state.mode, exitCode });
   };
 
-  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: false });
+  const rl = readline.createInterface({ input: stdin, output: stdout, terminal: tty });
   options.abortSignal?.addEventListener('abort', () => {
     void finish('sigint');
   });
 
-  renderer.write(`\n  ${displayName} — PGAS REPL\n`);
+  renderer.renderBanner(displayName, resolvePackageVersion());
 
   try {
     await client.programs.list();
@@ -95,7 +97,7 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     return { reason: 'error', sessionId: null, finalMode: null, exitCode: 1 };
   }
 
-  renderer.renderStep(`Connected  program: ${program}`);
+  renderer.renderStep(`Connected to ${apiBase} · program ${program}`);
   updatePrompt();
 
   rl.on('line', (line: string) => {
@@ -353,7 +355,13 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     try {
       const envelope = await client.sessions.get(state.sessionId);
       const live = readLiveSessionFields(envelope);
-      state.mode = live.mode ?? state.mode;
+      const nextMode = live.mode ?? state.mode;
+      if (nextMode && nextMode !== state.mode) {
+        state.mode = nextMode;
+        renderer.renderModeChange(nextMode);
+      } else {
+        state.mode = nextMode;
+      }
       return live;
     } catch {
       // Controls are already committed; a status refresh failure should not
@@ -427,6 +435,26 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   }
 
   return exitPromise;
+}
+
+let cachedPackageVersion: string | undefined;
+function resolvePackageVersion(): string {
+  if (cachedPackageVersion !== undefined) return cachedPackageVersion;
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const candidate of [join(here, '..', '..', 'package.json'), join(here, '..', '..', '..', 'package.json')]) {
+      if (!existsSync(candidate)) continue;
+      const pkg = JSON.parse(readFileSync(candidate, 'utf8')) as { name?: string; version?: string };
+      if (pkg.name === 'pgas-new' && typeof pkg.version === 'string') {
+        cachedPackageVersion = pkg.version;
+        return pkg.version;
+      }
+    }
+  } catch {
+    // fall through
+  }
+  cachedPackageVersion = '0.0.0';
+  return cachedPackageVersion;
 }
 
 function readActiveCachedToken(): string | undefined {
