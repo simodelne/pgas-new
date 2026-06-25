@@ -13,7 +13,6 @@ import { PGAS_SERVER_VERSION } from './version.js';
 import type { WiringManifest } from './wiring-manifest.js';
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new');
-const FOUNDRY_PROGRAM_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../foundry-program');
 
 export type ProgramTemplate = 'pgas-new-foundry';
 
@@ -42,7 +41,6 @@ export interface RenderResult {
 interface TemplateSpec {
   file: string;
   tokens: readonly string[];
-  root?: 'templates' | 'foundry';
   substitute?: boolean;
   content?: string;
 }
@@ -60,12 +58,12 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'src/server.ts': spec('standalone/src/server.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'src/repl/index.ts': spec('standalone/src/repl/index.ts.tmpl', ['NAME', 'SLUG']),
   'src/repl/renderer.ts': spec('standalone/src/repl/renderer.ts.tmpl', []),
-  'src/programs/{{SLUG}}/specs.yml': foundrySpec('specs.yml'),
-  'src/programs/{{SLUG}}/registration.ts': foundrySpec('registration.ts'),
+  'src/programs/{{SLUG}}/specs.yml': spec('program/spec-skeleton.yml.tmpl', ['NAME', 'SLUG']),
+  'src/programs/{{SLUG}}/registration.ts': spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']),
   'src/programs/{{SLUG}}/handlers.ts': spec('program/handlers-skeleton.ts.tmpl', []),
   'src/programs/{{SLUG}}/handlers/index.ts': spec('program/handlers-index.ts.tmpl', []),
   'src/programs/{{SLUG}}/handlers/_resolver.ts': spec('program/handlers-resolver.ts.tmpl', []),
-  'src/programs/{{SLUG}}/tools.ts': foundrySpec('tools.ts'),
+  'src/programs/{{SLUG}}/tools.ts': spec('program/tools-skeleton.ts.tmpl', ['PASCAL_NAME']),
   'tests/spec-load.test.ts': spec('tests/spec-load.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/control-plane.test.ts': spec('tests/control-plane.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
   'tests/program-deterministic.test.ts': spec('tests/program-deterministic.test.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
@@ -156,7 +154,7 @@ function renderPlan(options: {
       throw new Error(`no template for artifact path: ${artifact.path}`);
     }
 
-    const source = templatePath.content ?? readFileSync(join(rootFor(templatePath), templatePath.file), 'utf8');
+    const source = templatePath.content ?? readFileSync(join(TEMPLATE_ROOT, templatePath.file), 'utf8');
     const rendered = templatePath.substitute === false
       ? renderDirectSource(source)
       : renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
@@ -274,10 +272,6 @@ function spec(file: string, tokens: readonly string[]): TemplateSpec {
   return { file, tokens };
 }
 
-function foundrySpec(file: string): TemplateSpec {
-  return { file, tokens: [], root: 'foundry', substitute: false };
-}
-
 function inlineTemplate(content: string): TemplateSpec {
   return { file: '', tokens: [], content, substitute: false };
 }
@@ -315,9 +309,6 @@ function templateForHandlerDirectoryArtifact(artifact: PlannedArtifact, slug: st
   return undefined;
 }
 
-function rootFor(template: TemplateSpec): string {
-  return template.root === 'foundry' ? FOUNDRY_PROGRAM_ROOT : TEMPLATE_ROOT;
-}
 
 function renderDirectSource(source: string): string {
   if (/\{\{[^}]+\}\}/.test(source)) {
