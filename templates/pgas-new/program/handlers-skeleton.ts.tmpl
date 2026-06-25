@@ -1,4 +1,4 @@
-import type { ToolHandler } from '@simodelne/pgas-server/plugin.js';
+import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { resolveDomainValue, type HandlerPayload } from './handlers/_resolver.js';
 
 // The synthesizer emits this template as a handler directory:
@@ -28,3 +28,7 @@ export const handlers: Record<string, ToolHandler> = {
     };
   },
 };
+
+// The generated scaffold has no foundry-driven reactions by default. Consumer
+// programs can add reactions by populating this map.
+export const reactionHandlers: Map<string, ReactionHandler> = new Map();

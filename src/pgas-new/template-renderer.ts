@@ -62,7 +62,7 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'src/repl/renderer.ts': spec('standalone/src/repl/renderer.ts.tmpl', []),
   'src/programs/{{SLUG}}/specs.yml': foundrySpec('specs.yml'),
   'src/programs/{{SLUG}}/registration.ts': foundrySpec('registration.ts'),
-  'src/programs/{{SLUG}}/handlers.ts': foundrySpec('handlers.ts'),
+  'src/programs/{{SLUG}}/handlers.ts': spec('program/handlers-skeleton.ts.tmpl', []),
   'src/programs/{{SLUG}}/handlers/index.ts': spec('program/handlers-index.ts.tmpl', []),
   'src/programs/{{SLUG}}/handlers/_resolver.ts': spec('program/handlers-resolver.ts.tmpl', []),
   'src/programs/{{SLUG}}/tools.ts': foundrySpec('tools.ts'),
