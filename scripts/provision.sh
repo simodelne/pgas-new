@@ -118,8 +118,16 @@ require_cmd curl
 
 NODE_VERSION="$(node -v | sed 's/^v//')"
 NODE_MAJOR="${NODE_VERSION%%.*}"
+NODE_MINOR="$(echo "$NODE_VERSION" | awk -F. '{print $2}')"
+NODE_MINOR="${NODE_MINOR:-0}"
+# vitest 4.x → rolldown 1.x requires Node ^20.19 || >=22.12. Older Node 22.x
+# (e.g. 22.11) fails to load the optional @rolldown/binding-* native binary.
 if [ "$NODE_MAJOR" -lt 20 ]; then
-  die "Node.js >= 20 required (found v$NODE_VERSION). Upgrade with your version manager."
+  die "Node.js >= 20.19 required (found v$NODE_VERSION). Upgrade with your version manager."
+elif [ "$NODE_MAJOR" -eq 20 ] && [ "$NODE_MINOR" -lt 19 ]; then
+  die "Node.js 20.x must be >= 20.19 (found v$NODE_VERSION) for vitest/rolldown native bindings. Upgrade your Node 20.x to 20.19+."
+elif [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 12 ]; then
+  die "Node.js 22.x must be >= 22.12 (found v$NODE_VERSION) for vitest/rolldown native bindings. Upgrade your Node 22.x to 22.12+."
 fi
 ok "node v$NODE_VERSION"
 ok "npm $(npm -v)"
