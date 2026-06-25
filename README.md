@@ -104,6 +104,12 @@ Runtime storage/auth:
 - `PGAS_JWT_ISSUER`: JWT issuer. Default: `pgas-new`.
 - `PGAS_JWT_EXPIRES_IN`: token lifetime passed to the engine. Default: `7d`.
 
+Author driver selection (`src/foundry-server.ts`):
+
+- `PGAS_AUTHOR_DRIVER=codex-cli` (or `PGAS_PROVIDER=codex-cli`): route prompts through the local `codex exec` ChatGPT-subscription CLI via engine v2.14's `createCodexCliUnifiedComplete`. Verify with `codex login status`. The foundry sets `PGAS_ENABLE_CODEX_DRIVER=1` automatically when this selector fires.
+- `PGAS_OPENAI_API_KEY`/`OPENAI_API_KEY` set (default path): OpenAI-compatible HTTP provider.
+- Codex-cli wins over OpenAI when both are configured.
+
 OpenAI-compatible provider:
 
 - `PGAS_OPENAI_BASE_URL`: upstream OpenAI-compatible `/v1` endpoint.

@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createPgasServer, type PgasServer, type PgasServerConfig } from '@simodelne/pgas-server/create-server.js';
-import type {
-  CompletionResponse,
-  ConversationMessage,
-  OpenAIToolDefinition,
-  UnifiedAuthorDriverOptions,
+import {
+  createCodexCliUnifiedComplete,
+  type CompletionResponse,
+  type ConversationMessage,
+  type OpenAIToolDefinition,
+  type UnifiedAuthorDriverOptions,
 } from '@simodelne/pgas-server/plugin.js';
 import { createPgasNewFoundryProgramEntry } from './foundry-program/registration.js';
 
@@ -50,7 +51,25 @@ export async function startFoundryServer(options: FoundryServerOptions = {}): Pr
       storage: { dbPath: resolvedConfig.dbPath },
       auth: resolvedConfig.auth,
     };
-    if (shouldUseUnifiedOpenAiDriver()) {
+    if (shouldUseCodexCliDriver()) {
+      // codex-cli unified driver (engine v2.14.0+). Selector precedence: codex-cli
+      // wins over OpenAI when both env vars are set, so users explicitly opting
+      // into PGAS_AUTHOR_DRIVER=codex-cli get codex-cli even if PGAS_OPENAI_API_KEY
+      // is also configured for other tooling.
+      //
+      // The engine's createCodexCliUnifiedComplete refuses to load unless
+      // PGAS_ENABLE_CODEX_DRIVER=1. Treat the user's explicit selector
+      // (PGAS_AUTHOR_DRIVER=codex-cli or PGAS_PROVIDER=codex-cli) as the
+      // opt-in signal and set the engine env var here — saves the user from
+      // setting two env vars to express one intent.
+      setDefaultEnv('PGAS_ENABLE_CODEX_DRIVER', '1');
+      serverConfig.drivers = {
+        authorMode: 'unified',
+        unified: {
+          complete: createCodexCliUnifiedComplete(),
+        },
+      };
+    } else if (shouldUseUnifiedOpenAiDriver()) {
       serverConfig.drivers = {
         authorMode: 'unified',
         unified: {
@@ -184,6 +203,13 @@ function shouldUseUnifiedOpenAiDriver(): boolean {
   if (provider !== undefined && provider.length > 0) return false;
   if ((process.env.GOOGLE_API_KEY ?? '').trim().length > 0) return false;
   return (process.env.PGAS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? '').trim().length > 0;
+}
+
+export function shouldUseCodexCliDriver(): boolean {
+  const author = process.env.PGAS_AUTHOR_DRIVER?.trim().toLowerCase();
+  if (author === 'codex-cli') return true;
+  const provider = process.env.PGAS_PROVIDER?.trim().toLowerCase();
+  return provider === 'codex-cli';
 }
 
 function createOpenAiUnifiedComplete(): UnifiedAuthorDriverOptions['complete'] {

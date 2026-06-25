@@ -107,6 +107,18 @@ The engine still does not export `SqliteStore` or `JwtAuthProvider` classes. Tha
 
 The v3.0 local tool-choice proxy has been removed. Engine v2.14.0 supports tool-choice resolution directly, so the CLI sets `PGAS_OPENAI_TOOL_CHOICE=required` by default before engine imports. Explicit env values still win.
 
+## Author driver selection
+
+The foundry's `serverConfig.drivers` is wired by `src/foundry-server.ts` based on env vars:
+
+| Env | Driver |
+|---|---|
+| `PGAS_AUTHOR_DRIVER=codex-cli` OR `PGAS_PROVIDER=codex-cli` | Codex CLI unified author (`createCodexCliUnifiedComplete` from `@simodelne/pgas-server/plugin.js`). Routes prompts through the local `codex exec` ChatGPT-subscription CLI. Foundry auto-sets `PGAS_ENABLE_CODEX_DRIVER=1` (the engine's opt-in guard) when the selector fires, so users only need one env var to express the intent. Verify with `codex login status`. |
+| `PGAS_PROVIDER=openai` OR `PGAS_OPENAI_API_KEY`/`OPENAI_API_KEY` set | OpenAI-compatible unified author (the v3.1 default — Qwen vLLM, OpenAI HTTP, etc.). |
+| Neither set (and no `GOOGLE_API_KEY`) | `serverConfig.drivers` is left unset; engine falls back to its default deterministic-only behavior. |
+
+Codex-cli wins over OpenAI when both env vars are set; this lets users keep `PGAS_OPENAI_API_KEY` configured for other tooling while explicitly opting into codex-cli for the foundry.
+
 ## Control Plane And CLI
 
 The generated program declares a PGAS `control_plane` with free text routed through `ask` and session lifecycle controls: `ask`, `abort`, `new`, `history`, `status`, `resume`, and `help`.
