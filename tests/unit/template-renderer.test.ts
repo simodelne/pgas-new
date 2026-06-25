@@ -153,6 +153,22 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders standalone handlers without foundry-internal relative imports', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-handler-imports-'));
+    try {
+      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
+
+      const handlers = readFileSync(join(outDir, 'src/programs/pgas-new/handlers.ts'), 'utf8');
+
+      expect(handlers).not.toContain('../pgas-new/');
+      expect(handlers).not.toContain('./synthesizer.js');
+      expect(handlers).not.toContain('./synthesizer-store.js');
+      expect(handlers).toContain("from '@simodelne/pgas-server/plugin.js'");
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders existing-repo registrations without Node ambient type dependencies', () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-registration-'));
     try {
