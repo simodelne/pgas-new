@@ -442,6 +442,94 @@ describe('startFoundryServer', () => {
     });
   });
 
+  describe('codex-cli unified author driver (v3.3 — engine 2.14.0 createCodexCliUnifiedComplete)', () => {
+    const originalAuthorDriver = process.env.PGAS_AUTHOR_DRIVER;
+    const originalProvider = process.env.PGAS_PROVIDER;
+    const originalOpenAiKey = process.env.PGAS_OPENAI_API_KEY;
+
+    afterEach(() => {
+      restoreEnv('PGAS_AUTHOR_DRIVER', originalAuthorDriver);
+      restoreEnv('PGAS_PROVIDER', originalProvider);
+      restoreEnv('PGAS_OPENAI_API_KEY', originalOpenAiKey);
+    });
+
+    it('wires drivers.authorMode=unified when PGAS_AUTHOR_DRIVER=codex-cli', async () => {
+      const engine = mockPgasServer({ boundPort: 4580 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_AUTHOR_DRIVER = 'codex-cli';
+      delete process.env.PGAS_PROVIDER;
+      delete process.env.PGAS_OPENAI_API_KEY;
+
+      await startFoundryServer({ port: 4580, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      expect(config.drivers).toEqual(expect.objectContaining({
+        authorMode: 'unified',
+        unified: expect.objectContaining({ complete: expect.any(Function) }),
+      }));
+    });
+
+    it('wires codex-cli when PGAS_PROVIDER=codex-cli (sibling env var)', async () => {
+      const engine = mockPgasServer({ boundPort: 4581 });
+      createPgasServerMock.mockResolvedValue(engine);
+      delete process.env.PGAS_AUTHOR_DRIVER;
+      process.env.PGAS_PROVIDER = 'codex-cli';
+      delete process.env.PGAS_OPENAI_API_KEY;
+
+      await startFoundryServer({ port: 4581, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      expect(config.drivers).toEqual(expect.objectContaining({
+        authorMode: 'unified',
+        unified: expect.objectContaining({ complete: expect.any(Function) }),
+      }));
+    });
+
+    it('codex-cli wins over openai when both are set (precedence test)', async () => {
+      const engine = mockPgasServer({ boundPort: 4582 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_AUTHOR_DRIVER = 'codex-cli';
+      process.env.PGAS_OPENAI_API_KEY = 'fake-openai-key';
+      delete process.env.PGAS_PROVIDER;
+
+      await startFoundryServer({ port: 4582, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      // Driver IS wired (codex-cli branch hit, not undefined).
+      expect(config.drivers).toBeDefined();
+      expect(config.drivers?.unified?.complete).toBeDefined();
+    });
+
+    it('case-insensitive on PGAS_AUTHOR_DRIVER value', async () => {
+      const engine = mockPgasServer({ boundPort: 4583 });
+      createPgasServerMock.mockResolvedValue(engine);
+      process.env.PGAS_AUTHOR_DRIVER = 'Codex-CLI';
+      delete process.env.PGAS_PROVIDER;
+      delete process.env.PGAS_OPENAI_API_KEY;
+
+      await startFoundryServer({ port: 4583, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      expect(config.drivers).toBeDefined();
+    });
+
+    it('does NOT wire codex-cli when env vars unset (falls through to OpenAI/undefined path)', async () => {
+      const engine = mockPgasServer({ boundPort: 4584 });
+      createPgasServerMock.mockResolvedValue(engine);
+      delete process.env.PGAS_AUTHOR_DRIVER;
+      delete process.env.PGAS_PROVIDER;
+      delete process.env.PGAS_OPENAI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.GOOGLE_API_KEY;
+
+      await startFoundryServer({ port: 4584, hostname: '127.0.0.1' });
+
+      const config = serverConfig();
+      // No codex-cli, no openai key → no drivers wired at all.
+      expect(config.drivers).toBeUndefined();
+    });
+  });
+
   function restoreEnv(name: string, original: string | undefined): void {
     if (original === undefined) {
       delete process.env[name];
