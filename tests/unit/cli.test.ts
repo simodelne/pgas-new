@@ -196,7 +196,10 @@ describe('pgas-new CLI', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('written');
       expect(result.stdout).toContain('programs/draft-policy/specs.yml');
-      expect(readFileSync(join(repo, 'programs/draft-policy/specs.yml'), 'utf8')).toContain('Program: PGAS New');
+      const renderedSpec = readFileSync(join(repo, 'programs/draft-policy/specs.yml'), 'utf8');
+      expect(renderedSpec).toContain('Program: Draft Policy. This is the generic pgas-new skeleton');
+      expect(renderedSpec).toContain('begin_work');
+      expect(renderedSpec).not.toContain('record_program_target');
       expect(readFileSync(join(repo, '.pgas/pgas-new/draft-policy/artifacts.json'), 'utf8')).toContain(
         'programs/draft-policy/specs.yml',
       );

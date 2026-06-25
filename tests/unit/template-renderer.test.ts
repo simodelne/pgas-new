@@ -125,7 +125,10 @@ describe('template renderer', () => {
       expect(registration).toContain('createProgramAdapters');
       expect(registration).toContain('createToolRegistry');
       expect(registration).toContain('loadSpecWithPatterns');
-      expect(registration).toContain('enableNotebook');
+      expect(registration).toContain('createPgasNewProgramEntry');
+      expect(registration).toContain('registerPgasNewTools');
+      expect(registration).not.toContain('enableNotebook');
+      expect(registration).not.toContain('reactionHandlers');
       expect(repl).toContain("from '@simodelne/pgas-server/client.js'");
       expect(repl).toContain('connectNotifications');
       expect(apiTest).toContain("from '@simodelne/pgas-server/client.js'");
@@ -188,426 +191,482 @@ describe('template renderer', () => {
     }
   });
 
-  it('declares control-plane session commands, modes, notebook pins, and verification gates', () => {
+  it('declares skeleton control-plane session commands, modes, notebook state, and live-test hooks', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-spec-'));
     try {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
       const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
-      const tests = [
-        'tests/spec-load.test.ts',
-        'tests/control-plane.test.ts',
-        'tests/program-deterministic.test.ts',
-        'tests/api-blackbox.test.ts',
-        'tests/live-provider.test.ts',
-      ].map((path) => readFileSync(join(outDir, path), 'utf8'));
+      const parsed = load(spec) as {
+        initial: string;
+        terminal: string[];
+      modes: Record<string, { vocabulary: string[]; channels?: string[] }>;
+      projection: Record<string, { include: string[] }>;
+      action_map: Record<string, { mutations: Array<{ op: string; path: string; value?: unknown; from_arg?: string }> }>;
+      proceed_to: Record<string, string>;
+      schema: Record<string, string>;
+      control_plane: { controls: Record<string, unknown> };
+    };
+    const tests = [
+      'tests/spec-load.test.ts',
+      'tests/control-plane.test.ts',
+      'tests/program-deterministic.test.ts',
+      'tests/api-blackbox.test.ts',
+      'tests/live-provider.test.ts',
+    ].map((path) => readFileSync(join(outDir, path), 'utf8'));
 
-      for (const mode of [
-        'intake_intelligence',
-        'repo_targeting',
-        'architecture_design',
-        'scaffold_plan',
-        'branch_write',
-        'static_verify',
-        'live_verify',
-        'rebase_verify',
-        'pr_graduation',
-        'curator_request',
-      ]) {
-        expect(spec).toContain(`${mode}:`);
-      }
-      for (const control of ['ask:', 'abort:', 'new:', 'history:', 'status:', 'resume:', 'help:']) {
-        expect(spec).toContain(control);
-      }
-      expect(spec).toContain('control_plane:');
-      expect(spec).toContain('notebook.entries');
-      expect(spec).toContain('notebook.pins');
-      expect(spec).toContain('pin_notebook_note');
-      expect(spec).toContain('confirm_research_scope');
-      expect(spec).toContain('record_user_requested_research');
-      expect(spec).toContain('session_abort_current');
-      expect(spec).toContain('authorize_existing_repo_target');
-      expect(spec).toContain('confirm_live_provider_intent');
-      expect(spec).toContain('run_rebase_static_verification');
-      expect(tests.join('\n')).toContain('real provider round trip through the external API');
-      expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
-      expect(tests.join('\n')).toContain('LIVE_PROVIDER_TIMEOUT_MS');
-      expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER_TIMEOUT_MS');
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
-    }
-  });
+    expect(parsed.initial).toBe('start');
+    expect(parsed.terminal).toEqual(['complete']);
+    expect(Object.keys(parsed.modes)).toEqual(['start', 'working', 'complete']);
+    expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
+    expect(parsed.modes.start.vocabulary).toEqual(
+      expect.arrayContaining([
+        'begin_work',
+        'record_user_note',
+        'session_new',
+        'session_abort_current',
+        'session_status',
+        'session_history',
+        'session_resume',
+        'session_help',
+      ]),
+    );
+    expect(parsed.modes.working.vocabulary).toEqual(
+      expect.arrayContaining([
+        'example_action',
+        'record_user_note',
+        'session_new',
+        'session_abort_current',
+        'session_status',
+        'session_history',
+        'session_resume',
+        'session_help',
+      ]),
+    );
+    expect(parsed.proceed_to).toEqual({
+      begin_work: 'working',
+      example_action: 'complete',
+    });
+    expect(spec).toContain('control_plane:');
+    expect(spec).toContain('notebook.entries');
+    expect(spec).toContain('notebook.pins');
+    expect(parsed.projection.start.include).toEqual(
+      expect.arrayContaining(['inputs.user_text', 'notebook.entries', 'notebook.pins', 'work.started']),
+    );
+    expect(parsed.projection.working.include).toEqual(
+      expect.arrayContaining([
+        'inputs.user_text',
+        'notebook.entries',
+        'notebook.pins',
+        'work.example_ready',
+        'work.example_result_json',
+        'work.example_items_json',
+      ]),
+    );
+    expect(parsed.schema).toMatchObject({
+      'inputs.user_text': 'string',
+      'notebook.entries': 'array',
+      'notebook.pins': 'array',
+      'work.started': 'boolean',
+      'work.example_ready': 'boolean',
+      'work.example_result_json': 'string',
+      'work.example_items_json': 'string',
+    });
+    expect(parsed.action_map.begin_work.mutations).toEqual([{ op: 'MSet', path: 'work.started', value: true }]);
+    expect(parsed.action_map.record_user_note.mutations).toEqual([
+      { op: 'MAppend', path: 'notebook.entries', from_arg: 'note' },
+    ]);
+    expect(parsed.action_map.example_action.mutations).toEqual(
+      expect.arrayContaining([
+        { op: 'MSet', path: 'work.example_ready', value: true },
+        { op: 'MSet', path: 'work.example_result_json', value: '{"status":"ready","source":"skeleton"}' },
+        { op: 'MSet', path: 'work.example_items_json', value: '["example"]' },
+      ]),
+    );
+    expect(spec).not.toContain('intake_intelligence:');
+    expect(spec).not.toContain('record_program_target');
+    expect(spec).not.toContain('pin_notebook_note');
+    expect(spec).not.toContain('authorize_existing_repo_target');
+    expect(tests.join('\n')).toContain('real provider round trip through the external API');
+    expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
+    expect(tests.join('\n')).toContain('LIVE_PROVIDER_TIMEOUT_MS');
+    expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER_TIMEOUT_MS');
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
+  }
+});
 
-  it('declares the foundry intake actions, JSON-string intake recording shape, and guidance', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-foundry-intake-'));
-    try {
-      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
+it('declares the foundry intake actions, JSON-string intake recording shape, and guidance', () => {
+  const specText = readFileSync('src/foundry-program/specs.yml', 'utf8');
+  const foundryRegistration = readFileSync('src/foundry-program/registration.ts', 'utf8');
+  const foundryTools = readFileSync('src/foundry-program/tools.ts', 'utf8');
+  const parsed = load(specText) as {
+      modes: Record<string, {
+        vocabulary: string[];
+        channels?: string[];
+        preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
+        transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
+      }>;
+      projection: Record<string, { include: string[] }>;
+      action_map: Record<string, {
+        description: string;
+        channel: string;
+        arg_descriptions?: Record<string, string>;
+        mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
+      }>;
+      proceed_to: Record<string, string>;
+      schema: Record<string, string>;
+      ingestion: Record<string, string[]>;
+      guidance: Record<string, string[]>;
+    };
+    const qActionNames = [
+      'record_q1_purpose',
+      'record_q2_entry_channel',
+      'record_q3_stages',
+      'record_q4_transitions',
+      'record_q5_delegation',
+      'record_q6_completion',
+    ] as const;
+    const qRecordedPaths = [
+      'intake.q1_recorded',
+      'intake.q2_recorded',
+      'intake.q3_recorded',
+      'intake.q4_recorded',
+      'intake.q5_recorded',
+      'intake.q6_recorded',
+    ] as const;
 
-      const specText = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
-      const parsed = load(specText) as {
-        modes: Record<string, {
-          vocabulary: string[];
-          channels?: string[];
-          preconditions?: Record<string, Array<{ kind: string; path?: string; value?: unknown; triggerSet?: string[] }>>;
-          transitions?: Array<{ target: string; guard?: { kind: string; path?: string; value?: unknown } }>;
-        }>;
-        projection: Record<string, { include: string[] }>;
-        action_map: Record<string, {
-          description: string;
-          channel: string;
-          arg_descriptions?: Record<string, string>;
-          mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
-        }>;
-        schema: Record<string, string>;
-        ingestion: Record<string, string[]>;
-        guidance: Record<string, string[]>;
-      };
-      const qActionNames = [
-        'record_q1_purpose',
-        'record_q2_entry_channel',
-        'record_q3_stages',
-        'record_q4_transitions',
-        'record_q5_delegation',
-        'record_q6_completion',
-      ] as const;
-      const qRecordedPaths = [
-        'intake.q1_recorded',
-        'intake.q2_recorded',
-        'intake.q3_recorded',
-        'intake.q4_recorded',
-        'intake.q5_recorded',
-        'intake.q6_recorded',
-      ] as const;
+    expect(foundryRegistration).toContain('createPgasNewFoundryProgramEntry');
+    expect(foundryRegistration).toContain('registerPgasNewTools');
+    expect(foundryRegistration).toContain('reactionHandlers');
+    expect(foundryTools).toContain("'record_q1_purpose'");
 
-      expect(parsed.modes.intake_intelligence.vocabulary).toEqual(
-        expect.arrayContaining([
-          'record_program_target',
-          'choose_design_path',
-          'apply_default_skeleton',
-          'ask_design_question',
-          ...qActionNames,
-          'record_program_intake_finalize',
-          'confirm_design',
-          'reject_design_and_revise_q1',
-          'reject_design_and_revise_q2',
-          'reject_design_and_revise_q3',
-          'reject_design_and_revise_q4',
-          'reject_design_and_revise_q5',
-          'reject_design_and_revise_q6',
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.vocabulary).not.toContain('record_program_intake');
-      expect(parsed.modes.architecture_design.vocabulary).toEqual(
-        expect.arrayContaining(['synthesize_program_spec']),
-      );
-      expect(parsed.modes.architecture_design.preconditions?.synthesize_program_spec).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'program.design_confirmed' }]),
-      );
-      expect(parsed.modes.architecture_design.transitions).toEqual([
-        { target: 'scaffold_plan', guard: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
-      ]);
-      expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
-      expect(parsed.modes.intake_intelligence.transitions).toEqual(
-        expect.arrayContaining([
-          { target: 'repo_targeting', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_program_target).toEqual(
-        expect.arrayContaining([{ kind: 'FieldFalsy', path: 'program.target_dir_confirmed' }]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.choose_design_path).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
-          { kind: 'FieldFalsy', path: 'program.design_path' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.apply_default_skeleton).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldEquals', path: 'program.design_path', value: 'default' },
-          { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_q1_purpose).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldEquals', path: 'program.design_path', value: 'design' },
-          { kind: 'FieldFalsy', path: 'intake.q1_recorded' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_q2_entry_channel).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.q1_recorded' },
-          { kind: 'FieldFalsy', path: 'intake.q2_recorded' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_q3_stages).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.q2_recorded' },
-          { kind: 'FieldFalsy', path: 'intake.q3_recorded' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_q4_transitions).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.q3_recorded' },
-          { kind: 'FieldFalsy', path: 'intake.q4_recorded' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_q5_delegation).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.q4_recorded' },
-          { kind: 'FieldFalsy', path: 'intake.q5_recorded' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_q6_completion).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.q5_recorded' },
-          { kind: 'FieldFalsy', path: 'intake.q6_recorded' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.record_program_intake_finalize).toEqual(
-        expect.arrayContaining([
-          ...qRecordedPaths.map((path) => ({ kind: 'FieldTruthy', path })),
-          { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.confirm_design).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
-          { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
-          { kind: 'FieldFalsy', path: 'program.design_confirmed' },
-          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
-          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
-        ]),
-      );
-      expect(parsed.modes.intake_intelligence.preconditions?.reject_design_and_revise_q3).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
-          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
-          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
-        ]),
-      );
+    expect(parsed.modes.intake_intelligence.vocabulary).toEqual(
+      expect.arrayContaining([
+        'record_program_target',
+        'choose_design_path',
+        'apply_default_skeleton',
+        'ask_design_question',
+        ...qActionNames,
+        'record_program_intake_finalize',
+        'confirm_design',
+        'reject_design_and_revise_q1',
+        'reject_design_and_revise_q2',
+        'reject_design_and_revise_q3',
+        'reject_design_and_revise_q4',
+        'reject_design_and_revise_q5',
+        'reject_design_and_revise_q6',
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.vocabulary).not.toContain('record_program_intake');
+    expect(parsed.modes.architecture_design.vocabulary).toEqual(
+      expect.arrayContaining(['synthesize_program_spec']),
+    );
+    expect(parsed.modes.architecture_design.preconditions?.synthesize_program_spec).toEqual(
+      expect.arrayContaining([{ kind: 'FieldTruthy', path: 'program.design_confirmed' }]),
+    );
+    expect(parsed.modes.architecture_design.transitions).toEqual([
+      { target: 'scaffold_plan', guard: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
+    ]);
+    expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
+    expect(parsed.modes.intake_intelligence.transitions).toEqual(
+      expect.arrayContaining([
+        { target: 'repo_targeting', guard: { kind: 'FieldTruthy', path: 'program.design_confirmed' } },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_program_target).toEqual(
+      expect.arrayContaining([{ kind: 'FieldFalsy', path: 'program.target_dir_confirmed' }]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.choose_design_path).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
+        { kind: 'FieldFalsy', path: 'program.design_path' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.apply_default_skeleton).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'program.design_path', value: 'default' },
+        { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_q1_purpose).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'program.design_path', value: 'design' },
+        { kind: 'FieldFalsy', path: 'intake.q1_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_q2_entry_channel).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.q1_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.q2_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_q3_stages).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.q2_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.q3_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_q4_transitions).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.q3_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.q4_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_q5_delegation).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.q4_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.q5_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_q6_completion).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.q5_recorded' },
+        { kind: 'FieldFalsy', path: 'intake.q6_recorded' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.record_program_intake_finalize).toEqual(
+      expect.arrayContaining([
+        ...qRecordedPaths.map((path) => ({ kind: 'FieldTruthy', path })),
+        { kind: 'FieldFalsy', path: 'intake.program_intake_finalized' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.confirm_design).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
+        { kind: 'FieldTruthy', path: 'program.target_dir_confirmed' },
+        { kind: 'FieldFalsy', path: 'program.design_confirmed' },
+        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+      ]),
+    );
+    expect(parsed.modes.intake_intelligence.preconditions?.reject_design_and_revise_q3).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'intake.program_intake_finalized' },
+        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
+      ]),
+    );
 
-      expect(parsed.action_map.record_program_target.mutations).toEqual([
-        { op: 'MSet', path: 'program.slug', from_arg: 'slug' },
-        { op: 'MSet', path: 'program.name', from_arg: 'name' },
-        { op: 'MSet', path: 'program.target_dir', from_arg: 'target_dir' },
-        { op: 'MSet', path: 'program.target_dir_confirmed', value: true },
-      ]);
-      expect(parsed.action_map.choose_design_path.mutations).toEqual([
-        { op: 'MSet', path: 'program.design_path', from_arg: 'choice' },
-      ]);
-      expect(parsed.action_map.apply_default_skeleton.mutations).toEqual([
-        { op: 'MSet', path: 'intake.purpose', value: '' },
-        { op: 'MSet', path: 'intake.q1_recorded', value: true },
-        { op: 'MSet', path: 'intake.entry_channel', value: 'user_text' },
-        { op: 'MSet', path: 'intake.q2_recorded', value: true },
-        {
-          op: 'MSet',
-          path: 'intake.stages_json',
-          value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]',
-        },
-        { op: 'MSet', path: 'intake.q3_recorded', value: true },
-        {
-          op: 'MSet',
-          path: 'intake.transitions_json',
-          value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]',
-        },
-        { op: 'MSet', path: 'intake.q4_recorded', value: true },
-        { op: 'MSet', path: 'intake.delegation_json', value: '{}' },
-        { op: 'MSet', path: 'intake.q5_recorded', value: true },
-        {
-          op: 'MSet',
-          path: 'intake.completion_json',
-          value: '{"final_stage":"complete","guard_field":"work.example_ready"}',
-        },
-        { op: 'MSet', path: 'intake.q6_recorded', value: true },
-        { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
-      ]);
-      expect(parsed.action_map.ask_design_question).toMatchObject({
-        description: 'Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round\'s inputs.user_text carries the answer.',
-        channel: 'widget_output',
-        arg_descriptions: {
-          question_number: 'Which Q is being asked (1-6).',
-          question_text: 'The question prompt to display to the user.',
-        },
-      });
-      expect(parsed.action_map.ask_design_question.mutations).toEqual([
-        { op: 'MSet', path: 'intake.last_question_asked', from_arg: 'question_number' },
-        { op: 'MSet', path: 'intake.last_question_text', from_arg: 'question_text' },
-      ]);
-      expect(parsed.action_map.record_q1_purpose).toMatchObject({
-        description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does.",
-        channel: 'widget_output',
-      });
-      expect(parsed.action_map.record_q1_purpose.mutations).toEqual([
-        { op: 'MSet', path: 'intake.purpose', from_arg: 'purpose' },
-        { op: 'MSet', path: 'intake.q1_recorded', value: true },
-      ]);
-      expect(parsed.action_map.record_q2_entry_channel.mutations).toEqual([
-        { op: 'MSet', path: 'intake.entry_channel', from_arg: 'entry_channel' },
-        { op: 'MSet', path: 'intake.q2_recorded', value: true },
-      ]);
-      expect(parsed.action_map.record_q3_stages.mutations).toEqual([
-        { op: 'MSet', path: 'intake.stages_json', from_arg: 'stages_json' },
-        { op: 'MSet', path: 'intake.q3_recorded', value: true },
-      ]);
-      expect(parsed.action_map.record_q4_transitions.mutations).toEqual([
-        { op: 'MSet', path: 'intake.transitions_json', from_arg: 'transitions_json' },
-        { op: 'MSet', path: 'intake.q4_recorded', value: true },
-      ]);
-      expect(parsed.action_map.record_q5_delegation.mutations).toEqual([
-        { op: 'MSet', path: 'intake.delegation_json', from_arg: 'delegation_json' },
-        { op: 'MSet', path: 'intake.q5_recorded', value: true },
-      ]);
-      expect(parsed.action_map.record_q6_completion.mutations).toEqual([
-        { op: 'MSet', path: 'intake.completion_json', from_arg: 'completion_json' },
-        { op: 'MSet', path: 'intake.q6_recorded', value: true },
-      ]);
-      expect(parsed.action_map.record_program_intake_finalize).toMatchObject({
-        description: 'Final commit of the design interview once all 6 Q-answers are recorded. Idempotent. The LLM should call this immediately after record_q6_completion fires.',
-        channel: 'widget_output',
-      });
-      expect(parsed.action_map.record_program_intake_finalize.mutations).toEqual([
-        { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
-      ]);
-      expect(parsed.action_map).not.toHaveProperty('record_program_intake');
-      expect(parsed.action_map.confirm_design.mutations).toEqual([
-        { op: 'MSet', path: 'program.design_confirmed', value: true },
-      ]);
-      expect(parsed.action_map.reject_design_and_revise_q3.mutations).toEqual([
-        { op: 'MSet', path: 'intake.q3_recorded', value: false },
-        { op: 'MSet', path: 'program.design_confirmed', value: false },
-      ]);
-      expect(parsed.action_map.synthesize_program_spec).toMatchObject({
-        description: 'Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete.',
-        channel: 'widget_output',
-      });
-      expect(parsed.action_map.synthesize_program_spec.mutations).toEqual([
-        { op: 'MSet', path: 'program.synthesis_complete', value: true },
-      ]);
-      expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'repo.write_authorized' },
-          { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
-          { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
-          { kind: 'FieldFalsy', path: 'artifact_plan.approved' },
-          { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
-          { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
-        ]),
-      );
-      expect(parsed.modes.scaffold_plan.preconditions?.plan_artifacts).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldTruthy', path: 'repo.write_authorized' },
-          { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
-          { kind: 'FieldFalsy', path: 'artifact_plan.status' },
-          { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
-        ]),
-      );
-      expect(parsed.ingestion.user_confirmation).toEqual([
+    expect(parsed.action_map.record_program_target.mutations).toEqual([
+      { op: 'MSet', path: 'program.slug', from_arg: 'slug' },
+      { op: 'MSet', path: 'program.name', from_arg: 'name' },
+      { op: 'MSet', path: 'program.target_dir', from_arg: 'target_dir' },
+      { op: 'MSet', path: 'program.target_dir_confirmed', value: true },
+    ]);
+    expect(parsed.action_map.choose_design_path.mutations).toEqual([
+      { op: 'MSet', path: 'program.design_path', from_arg: 'choice' },
+    ]);
+    expect(parsed.action_map.apply_default_skeleton.mutations).toEqual([
+      { op: 'MSet', path: 'intake.purpose', value: '' },
+      { op: 'MSet', path: 'intake.q1_recorded', value: true },
+      { op: 'MSet', path: 'intake.entry_channel', value: 'user_text' },
+      { op: 'MSet', path: 'intake.q2_recorded', value: true },
+      {
+        op: 'MSet',
+        path: 'intake.stages_json',
+        value: '[{"slug":"start","is_bootstrap":true},{"slug":"working"},{"slug":"complete","is_terminal":true}]',
+      },
+      { op: 'MSet', path: 'intake.q3_recorded', value: true },
+      {
+        op: 'MSet',
+        path: 'intake.transitions_json',
+        value: '[{"from":"start","to":"working","trigger":"auto"},{"from":"working","to":"complete","trigger":"auto","guard_field":"work.example_ready","guard_value":true}]',
+      },
+      { op: 'MSet', path: 'intake.q4_recorded', value: true },
+      { op: 'MSet', path: 'intake.delegation_json', value: '{}' },
+      { op: 'MSet', path: 'intake.q5_recorded', value: true },
+      {
+        op: 'MSet',
+        path: 'intake.completion_json',
+        value: '{"final_stage":"complete","guard_field":"work.example_ready"}',
+      },
+      { op: 'MSet', path: 'intake.q6_recorded', value: true },
+      { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
+    ]);
+    expect(parsed.action_map.ask_design_question).toMatchObject({
+      description: 'Ask the user a single design-interview question (Q1-Q6). Pauses the round; the next round\'s inputs.user_text carries the answer.',
+      channel: 'widget_output',
+      arg_descriptions: {
+        question_number: 'Which Q is being asked (1-6).',
+        question_text: 'The question prompt to display to the user.',
+      },
+    });
+    expect(parsed.action_map.ask_design_question.mutations).toEqual([
+      { op: 'MSet', path: 'intake.last_question_asked', from_arg: 'question_number' },
+      { op: 'MSet', path: 'intake.last_question_text', from_arg: 'question_text' },
+    ]);
+    expect(parsed.action_map.record_q1_purpose).toMatchObject({
+      description: "Capture the user's answer to Q1 (program purpose). One short paragraph describing what the program does.",
+      channel: 'widget_output',
+    });
+    expect(parsed.action_map.record_q1_purpose.mutations).toEqual([
+      { op: 'MSet', path: 'intake.purpose', from_arg: 'purpose' },
+      { op: 'MSet', path: 'intake.q1_recorded', value: true },
+    ]);
+    expect(parsed.action_map.record_q2_entry_channel.mutations).toEqual([
+      { op: 'MSet', path: 'intake.entry_channel', from_arg: 'entry_channel' },
+      { op: 'MSet', path: 'intake.q2_recorded', value: true },
+    ]);
+    expect(parsed.action_map.record_q3_stages.mutations).toEqual([
+      { op: 'MSet', path: 'intake.stages_json', from_arg: 'stages_json' },
+      { op: 'MSet', path: 'intake.q3_recorded', value: true },
+    ]);
+    expect(parsed.action_map.record_q4_transitions.mutations).toEqual([
+      { op: 'MSet', path: 'intake.transitions_json', from_arg: 'transitions_json' },
+      { op: 'MSet', path: 'intake.q4_recorded', value: true },
+    ]);
+    expect(parsed.action_map.record_q5_delegation.mutations).toEqual([
+      { op: 'MSet', path: 'intake.delegation_json', from_arg: 'delegation_json' },
+      { op: 'MSet', path: 'intake.q5_recorded', value: true },
+    ]);
+    expect(parsed.action_map.record_q6_completion.mutations).toEqual([
+      { op: 'MSet', path: 'intake.completion_json', from_arg: 'completion_json' },
+      { op: 'MSet', path: 'intake.q6_recorded', value: true },
+    ]);
+    expect(parsed.action_map.record_program_intake_finalize).toMatchObject({
+      description: 'Final commit of the design interview once all 6 Q-answers are recorded. Idempotent. The LLM should call this immediately after record_q6_completion fires.',
+      channel: 'widget_output',
+    });
+    expect(parsed.action_map.record_program_intake_finalize.mutations).toEqual([
+      { op: 'MSet', path: 'intake.program_intake_finalized', value: true },
+    ]);
+    expect(parsed.action_map).not.toHaveProperty('record_program_intake');
+    expect(parsed.action_map.confirm_design.mutations).toEqual([
+      { op: 'MSet', path: 'program.design_confirmed', value: true },
+    ]);
+    expect(parsed.action_map.reject_design_and_revise_q3.mutations).toEqual([
+      { op: 'MSet', path: 'intake.q3_recorded', value: false },
+      { op: 'MSet', path: 'program.design_confirmed', value: false },
+    ]);
+    expect(parsed.action_map.synthesize_program_spec).toMatchObject({
+      description: 'Run the mechanical synthesizer (no LLM call). Writes the spec to in-process transit; flips program.synthesis_complete.',
+      channel: 'widget_output',
+    });
+    expect(parsed.action_map.synthesize_program_spec.mutations).toEqual([
+      { op: 'MSet', path: 'program.synthesis_complete', value: true },
+    ]);
+    expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+        { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+        { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
+        { kind: 'FieldFalsy', path: 'artifact_plan.approved' },
+        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'approve' },
+      ]),
+    );
+    expect(parsed.modes.scaffold_plan.preconditions?.plan_artifacts).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+        { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+        { kind: 'FieldFalsy', path: 'artifact_plan.status' },
+        { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
+      ]),
+    );
+    expect(parsed.ingestion.user_confirmation).toEqual([
+      'inputs.user_decision',
+      'inputs.user_decision.decision',
+      'inputs.user_decision.instruction',
+      'inputs.user_decision.note_mode',
+      'inputs.user_decision.timestamp',
+    ]);
+    expect(parsed.projection.intake_intelligence.include).toEqual(
+      expect.arrayContaining([
+        'inputs.user_text',
         'inputs.user_decision',
         'inputs.user_decision.decision',
         'inputs.user_decision.instruction',
         'inputs.user_decision.note_mode',
         'inputs.user_decision.timestamp',
-      ]);
-      expect(parsed.projection.intake_intelligence.include).toEqual(
-        expect.arrayContaining([
-          'inputs.user_text',
-          'inputs.user_decision',
-          'inputs.user_decision.decision',
-          'inputs.user_decision.instruction',
-          'inputs.user_decision.note_mode',
-          'inputs.user_decision.timestamp',
-          'intake.purpose',
-          'intake.q1_recorded',
-          'intake.entry_channel',
-          'intake.q2_recorded',
-          'intake.stages_json',
-          'intake.q3_recorded',
-          'intake.transitions_json',
-          'intake.q4_recorded',
-          'intake.delegation_json',
-          'intake.q5_recorded',
-          'intake.completion_json',
-          'intake.q6_recorded',
-          'intake.program_intake_finalized',
-          'program.slug',
-          'program.name',
-          'program.target_dir',
-          'program.target_dir_confirmed',
-          'program.design_path',
-          'program.design_confirmed',
-          'program.skip_dimensions',
-        ]),
-      );
-      expect(parsed.projection.branch_write.include).toEqual(
-        expect.arrayContaining([
-          'program.slug',
-          'program.name',
-          'program.target_dir',
-          'repo.target_kind',
-          'program.synthesis_complete',
-        ]),
-      );
-      expect(parsed.schema).toMatchObject({
-        'inputs.user_text': 'string',
-        'inputs.user_decision': 'object',
-        'inputs.user_decision.decision': 'string',
-        'inputs.user_decision.instruction': 'string',
-        'inputs.user_decision.note_mode': 'string',
-        'inputs.user_decision.timestamp': 'string',
-        'program.design_path': 'string',
-        'program.design_confirmed': 'boolean',
-        'program.synthesis_complete': 'boolean',
-        'program.target_dir': 'string',
-        'program.target_dir_confirmed': 'boolean',
-        'program.skip_dimensions': 'array',
-        'program.skip_dimensions.*': 'string',
-        'intake.last_question_asked': 'number',
-        'intake.last_question_text': 'string',
-        'intake.purpose': 'string',
-        'intake.q1_recorded': 'boolean',
-        'intake.entry_channel': 'string',
-        'intake.q2_recorded': 'boolean',
-        'intake.stages_json': 'string',
-        'intake.q3_recorded': 'boolean',
-        'intake.transitions_json': 'string',
-        'intake.q4_recorded': 'boolean',
-        'intake.delegation_json': 'string',
-        'intake.q5_recorded': 'boolean',
-        'intake.completion_json': 'string',
-        'intake.q6_recorded': 'boolean',
-        'intake.program_intake_finalized': 'boolean',
-      });
-      expect(parsed.schema).not.toHaveProperty('intake.program_intake_recorded');
-      expect(parsed.schema).not.toHaveProperty('program.synthesized_spec');
-      expect(parsed.guidance.architecture_design).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining('call synthesize_program_spec'),
-          expect.stringContaining('in-process transit'),
-        ]),
-      );
-      expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
-      expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
-      expect(parsed.guidance.repo_targeting.join('\n')).toContain('mandatory between confirm_design and architecture_design');
-      expect(parsed.guidance.repo_targeting.join('\n')).toContain('call authorize_standalone_target');
-      expect(parsed.guidance.intake_intelligence).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining('program.target_dir_confirmed is not true'),
-          expect.stringContaining('call choose_design_path'),
-          expect.stringContaining('call apply_default_skeleton'),
-          expect.stringContaining('Design interview enforcement (Q1-Q6)'),
-          expect.stringContaining('ask_design_question with question_number'),
-          expect.stringContaining('record_qN_<topic>'),
-          expect.stringContaining('record_program_intake_finalize'),
-          expect.stringContaining('Do NOT attempt to batch multiple answers into one action'),
-          expect.stringContaining("intent='confirm_design'"),
-          expect.stringContaining('reject_design_and_revise_qN'),
-          expect.stringContaining("Don't re-ask anything you already extracted"),
-        ]),
-      );
-      expect(parsed.guidance.intake_intelligence.join('\n')).not.toContain('record_program_intake with');
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
-    }
+        'intake.purpose',
+        'intake.q1_recorded',
+        'intake.entry_channel',
+        'intake.q2_recorded',
+        'intake.stages_json',
+        'intake.q3_recorded',
+        'intake.transitions_json',
+        'intake.q4_recorded',
+        'intake.delegation_json',
+        'intake.q5_recorded',
+        'intake.completion_json',
+        'intake.q6_recorded',
+        'intake.program_intake_finalized',
+        'program.slug',
+        'program.name',
+        'program.target_dir',
+        'program.target_dir_confirmed',
+        'program.design_path',
+        'program.design_confirmed',
+        'program.skip_dimensions',
+      ]),
+    );
+    expect(parsed.projection.branch_write.include).toEqual(
+      expect.arrayContaining([
+        'program.slug',
+        'program.name',
+        'program.target_dir',
+        'repo.target_kind',
+        'program.synthesis_complete',
+      ]),
+    );
+    expect(parsed.schema).toMatchObject({
+      'inputs.user_text': 'string',
+      'inputs.user_decision': 'object',
+      'inputs.user_decision.decision': 'string',
+      'inputs.user_decision.instruction': 'string',
+      'inputs.user_decision.note_mode': 'string',
+      'inputs.user_decision.timestamp': 'string',
+      'program.design_path': 'string',
+      'program.design_confirmed': 'boolean',
+      'program.synthesis_complete': 'boolean',
+      'program.target_dir': 'string',
+      'program.target_dir_confirmed': 'boolean',
+      'program.skip_dimensions': 'array',
+      'program.skip_dimensions.*': 'string',
+      'intake.last_question_asked': 'number',
+      'intake.last_question_text': 'string',
+      'intake.purpose': 'string',
+      'intake.q1_recorded': 'boolean',
+      'intake.entry_channel': 'string',
+      'intake.q2_recorded': 'boolean',
+      'intake.stages_json': 'string',
+      'intake.q3_recorded': 'boolean',
+      'intake.transitions_json': 'string',
+      'intake.q4_recorded': 'boolean',
+      'intake.delegation_json': 'string',
+      'intake.q5_recorded': 'boolean',
+      'intake.completion_json': 'string',
+      'intake.q6_recorded': 'boolean',
+      'intake.program_intake_finalized': 'boolean',
+    });
+    expect(parsed.schema).not.toHaveProperty('intake.program_intake_recorded');
+    expect(parsed.schema).not.toHaveProperty('program.synthesized_spec');
+    expect(parsed.guidance.architecture_design).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('call synthesize_program_spec'),
+        expect.stringContaining('in-process transit'),
+      ]),
+    );
+    expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
+    expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
+    expect(parsed.guidance.repo_targeting.join('\n')).toContain('mandatory between confirm_design and architecture_design');
+    expect(parsed.guidance.repo_targeting.join('\n')).toContain('call authorize_standalone_target');
+    expect(parsed.guidance.intake_intelligence).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('program.target_dir_confirmed is not true'),
+        expect.stringContaining('call choose_design_path'),
+        expect.stringContaining('call apply_default_skeleton'),
+        expect.stringContaining('Design interview enforcement (Q1-Q6)'),
+        expect.stringContaining('ask_design_question with question_number'),
+        expect.stringContaining('record_qN_<topic>'),
+        expect.stringContaining('record_program_intake_finalize'),
+        expect.stringContaining('Do NOT attempt to batch multiple answers into one action'),
+        expect.stringContaining("intent='confirm_design'"),
+        expect.stringContaining('reject_design_and_revise_qN'),
+        expect.stringContaining("Don't re-ask anything you already extracted"),
+      ]),
+    );
+    expect(parsed.guidance.intake_intelligence.join('\n')).not.toContain('record_program_intake with');
   });
 
   it('renders streaming REPL client with SSE + WS rendering', () => {
@@ -780,117 +839,111 @@ describe('template renderer', () => {
     }
   });
 
-  it('renders generated write-safety gates for existing repo attachments', () => {
-    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-gates-'));
-    try {
-      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
-      const spec = readFileSync(join(outDir, 'src/programs/pgas-new/specs.yml'), 'utf8');
-      const parsed = load(spec) as {
-        modes: Record<string, {
-          preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggerSet?: string[] }>>;
-          transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
-        }>;
-        action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
-        proceed_to: Record<string, string>;
-        schema: Record<string, string>;
-        control_plane: { controls: Record<string, unknown> };
-      };
+  it('declares foundry write-safety gates for existing repo attachments', () => {
+    const spec = readFileSync('src/foundry-program/specs.yml', 'utf8');
+    const parsed = load(spec) as {
+      modes: Record<string, {
+        preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggerSet?: string[] }>>;
+        transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
+      }>;
+      action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+      proceed_to: Record<string, string>;
+      schema: Record<string, string>;
+      control_plane: { controls: Record<string, unknown> };
+    };
 
-      expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
-      expect(parsed.schema['repo.write_authorized']).toBe('boolean');
-      expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
-      expect(parsed.schema['repo.wiring_manifest.repo_root']).toBe('string');
-      expect(parsed.schema['repo.wiring_manifest_json']).toBe('string');
-      expect(parsed.schema['repo.allowed_imports']).toBe('array');
-      expect(parsed.schema['intake.research_allowed']).toBe('boolean');
-      expect(parsed.schema['intake.user_research_authorized']).toBe('boolean');
-      expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
-      expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
-      expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
-      expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
-      expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
-      expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
-      expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
-      expect(parsed.proceed_to.run_static_verification).toBeUndefined();
-      expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
-      expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
-      expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
-      );
-      expect(parsed.modes.architecture_design.preconditions?.web_research).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
-      );
-      expect(parsed.modes.repo_targeting.preconditions?.authorize_existing_repo_target).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldEquals', path: 'repo.wiring_manifest.status', value: 'valid' },
-          { kind: 'FieldEquals', path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' },
-        ]),
-      );
-      expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'repo.write_authorized' }]),
-      );
-      expect(parsed.modes.branch_write.preconditions?.write_scaffold_artifacts).toEqual(
-        expect.arrayContaining([
-          { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' },
-          { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' },
-        ]),
-      );
-      expect(parsed.modes.scaffold_plan.transitions).toEqual(
-        expect.arrayContaining([
-          { target: 'branch_write', guard: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
-        ]),
-      );
-      expect(parsed.modes.static_verify.transitions).toEqual(
-        expect.arrayContaining([
-          {
-            target: 'live_verify',
-            guard: { kind: 'FieldTruthy', path: 'graduation.ready_for_live' },
-          },
-        ]),
-      );
-      expect(parsed.modes.static_verify.preconditions?.confirm_live_provider_intent).toEqual(
-        expect.arrayContaining([{ kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' }]),
-      );
-      expect(parsed.modes.live_verify.preconditions?.run_live_provider_verification).toEqual(
-        expect.arrayContaining([{ kind: 'FieldTruthy', path: 'graduation.live_provider_intent' }]),
-      );
-      expect(parsed.action_map.select_repo_target.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'repo.target_kind', from_arg: 'target_kind' }),
-          expect.objectContaining({ path: 'repo.write_authorized', value: false }),
-          expect.objectContaining({ path: 'repo.blocked', value: false }),
-        ]),
-      );
-      expect(parsed.action_map.authorize_standalone_target.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'repo.target_kind', value: 'standalone_repo' }),
-          expect.objectContaining({ path: 'repo.write_authorized', value: true }),
-          expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'not_required' }),
-        ]),
-      );
-      expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'repo.target_kind', value: 'existing_repo' }),
-          expect.objectContaining({ path: 'repo.wiring_manifest.repo_root', from_arg: 'repo_root' }),
-          expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'valid' }),
-          expect.objectContaining({ path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' }),
-          expect.objectContaining({ path: 'repo.write_authorized', value: true }),
-        ]),
-      );
-      expect(parsed.action_map.run_static_verification.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'graduation.static_verification', from_arg: 'status' }),
-          expect.objectContaining({ path: 'graduation.static_evidence_id', from_arg: 'evidence_id' }),
-        ]),
-      );
-      expect(parsed.action_map.confirm_live_provider_intent.mutations).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: 'graduation.live_provider_intent', value: true }),
-          expect.objectContaining({ path: 'graduation.ready_for_live', value: true }),
-        ]),
-      );
-    } finally {
-      rmSync(outDir, { recursive: true, force: true });
-    }
+    expect(Object.keys(parsed.control_plane.controls)).toEqual(expect.arrayContaining([...PGAS_NEW_CONTROL_PLANE_CONTROLS]));
+    expect(parsed.schema['repo.write_authorized']).toBe('boolean');
+    expect(parsed.schema['repo.wiring_manifest.path']).toBe('string');
+    expect(parsed.schema['repo.wiring_manifest.repo_root']).toBe('string');
+    expect(parsed.schema['repo.wiring_manifest_json']).toBe('string');
+    expect(parsed.schema['repo.allowed_imports']).toBe('array');
+    expect(parsed.schema['intake.research_allowed']).toBe('boolean');
+    expect(parsed.schema['intake.user_research_authorized']).toBe('boolean');
+    expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
+    expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
+    expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
+    expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
+    expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
+    expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
+    expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
+    expect(parsed.proceed_to.run_static_verification).toBeUndefined();
+    expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
+    expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
+    expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
+      expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
+    );
+    expect(parsed.modes.architecture_design.preconditions?.web_research).toEqual(
+      expect.arrayContaining([{ kind: 'FieldTruthy', path: 'intake.user_research_authorized' }]),
+    );
+    expect(parsed.modes.repo_targeting.preconditions?.authorize_existing_repo_target).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'repo.wiring_manifest.status', value: 'valid' },
+        { kind: 'FieldEquals', path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' },
+      ]),
+    );
+    expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
+      expect.arrayContaining([{ kind: 'FieldTruthy', path: 'repo.write_authorized' }]),
+    );
+    expect(parsed.modes.branch_write.preconditions?.write_scaffold_artifacts).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' },
+        { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' },
+      ]),
+    );
+    expect(parsed.modes.scaffold_plan.transitions).toEqual(
+      expect.arrayContaining([
+        { target: 'branch_write', guard: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
+      ]),
+    );
+    expect(parsed.modes.static_verify.transitions).toEqual(
+      expect.arrayContaining([
+        {
+          target: 'live_verify',
+          guard: { kind: 'FieldTruthy', path: 'graduation.ready_for_live' },
+        },
+      ]),
+    );
+    expect(parsed.modes.static_verify.preconditions?.confirm_live_provider_intent).toEqual(
+      expect.arrayContaining([{ kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' }]),
+    );
+    expect(parsed.modes.live_verify.preconditions?.run_live_provider_verification).toEqual(
+      expect.arrayContaining([{ kind: 'FieldTruthy', path: 'graduation.live_provider_intent' }]),
+    );
+    expect(parsed.action_map.select_repo_target.mutations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'repo.target_kind', from_arg: 'target_kind' }),
+        expect.objectContaining({ path: 'repo.write_authorized', value: false }),
+        expect.objectContaining({ path: 'repo.blocked', value: false }),
+      ]),
+    );
+    expect(parsed.action_map.authorize_standalone_target.mutations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'repo.target_kind', value: 'standalone_repo' }),
+        expect.objectContaining({ path: 'repo.write_authorized', value: true }),
+        expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'not_required' }),
+      ]),
+    );
+    expect(parsed.action_map.load_wiring_manifest.mutations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'repo.target_kind', value: 'existing_repo' }),
+        expect.objectContaining({ path: 'repo.wiring_manifest.repo_root', from_arg: 'repo_root' }),
+        expect.objectContaining({ path: 'repo.wiring_manifest.status', value: 'valid' }),
+        expect.objectContaining({ path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' }),
+        expect.objectContaining({ path: 'repo.write_authorized', value: true }),
+      ]),
+    );
+    expect(parsed.action_map.run_static_verification.mutations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'graduation.static_verification', from_arg: 'status' }),
+        expect.objectContaining({ path: 'graduation.static_evidence_id', from_arg: 'evidence_id' }),
+      ]),
+    );
+    expect(parsed.action_map.confirm_live_provider_intent.mutations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'graduation.live_provider_intent', value: true }),
+        expect.objectContaining({ path: 'graduation.ready_for_live', value: true }),
+      ]),
+    );
   });
 });
