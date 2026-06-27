@@ -104,6 +104,58 @@ describe('foundry end-to-end acceptance gate', () => {
     }
   }, 600_000);
 
+  it('writes one composite envelope to the world when the opt-in parallel checks are packed in static_verify', async () => {
+    const tempRoot = trackedTempRoot('pgas-new-foundry-composite-');
+    const targetDir = join(tempRoot, 'incident-triage');
+    const harness = await createHarness(successWithCompositeChecks(targetDir));
+
+    try {
+      const seenModes = [await harness.getMode()];
+
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Create an incident triage PGAS program.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the design path.' });
+      for (let i = 0; i < 7; i += 1) {
+        await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      }
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'scaffold_plan' && snapshot.domain['artifact_plan.status'] === 'draft',
+        'draft artifact plan before approval',
+      );
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      // The opt-in packed action fires in static_verify on the auto-continue
+      // chain after write_scaffold_artifacts and writes its combined envelope to
+      // the world. It does not force-continue the ladder (single-call
+      // run_static_verification remains the action that advances graduation), so
+      // wait on the envelope landing rather than on terminal graduation.
+      const snapshot = await waitForSnapshot(
+        harness,
+        (snap) => snap.mode === 'static_verify' && snap.domain['graduation.composite_checks'] !== undefined,
+        'composite envelope written to world in static_verify',
+      );
+
+      // The opt-in packed action fired through the real engine path.
+      expect(terminalActionNames(snapshot.rounds)).toContain('run_parallel_static_checks');
+
+      // ER coupling: ONE combined envelope reached result_path graduation.composite_checks
+      // in the world projection — read from the world, not re-derived.
+      const envelope = snapshot.domain['graduation.composite_checks'] as
+        | { status?: string; children?: { id: string; status: string }[] }
+        | undefined;
+      expect(envelope, 'composite envelope written to world').toBeTruthy();
+      expect(envelope?.status).toBe('succeeded');
+      expect(envelope?.children?.map((child) => child.id).sort()).toEqual([
+        'evidence_shape',
+        'import_boundary',
+        'spec_modes',
+      ]);
+      expect(envelope?.children?.every((child) => child.status === 'succeeded')).toBe(true);
+    } finally {
+      await harness.close();
+    }
+  }, 600_000);
+
   it('reaches curator_request on the refusal path without binding a port', async () => {
     const tempRoot = trackedTempRoot('pgas-new-foundry-refusal-');
     const targetDir = join(tempRoot, 'existing-repo');
@@ -169,6 +221,42 @@ function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] 
     markRebasePassed(),
     effect('run_rebase_static_verification', { status: 'passed', evidence_id: 'rebase-static-e2e' }),
   ];
+}
+
+function successWithCompositeChecks(targetDir: string): TestHarnessAuthorResponse[] {
+  const sequence = successAuthorResponses(targetDir);
+  // Splice the opt-in packed action into static_verify, right after
+  // write_scaffold_artifacts (which transitions branch_write -> static_verify)
+  // and before the default single-call run_static_verification. Both are legal
+  // in static_verify; the composite action auto-continues, so it rides the same
+  // continuation chain without an extra trigger.
+  const writeIndex = sequence.findIndex(
+    (response) => firstActionName(response) === 'write_scaffold_artifacts',
+  );
+  sequence.splice(writeIndex + 1, 0, compositeChecksEffect());
+  return sequence;
+}
+
+function firstActionName(response: TestHarnessAuthorResponse): string | undefined {
+  const actions = (response as { actions?: { name?: string }[] }).actions;
+  return actions?.[0]?.name;
+}
+
+function compositeChecksEffect(): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      {
+        kind: 'EffectAction',
+        name: 'run_parallel_static_checks',
+        channel: 'composite_checks_output',
+        payload: {
+          imports: ['@simodelne/pgas-server/plugin.js', '@simodelne/pgas-server/create-server.js'],
+          modes: ['intake', 'triage', 'complete'],
+          evidence: { status: 'passed', evidence_id: 'composite-e2e' },
+        },
+      },
+    ],
+  };
 }
 
 function refusalAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] {
