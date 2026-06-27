@@ -23,6 +23,7 @@ channels:
   system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
   artifact_plan_output: { direction: Out, sync: Sync }
+  composite_checks_output: { direction: Out, sync: Sync }
 
 modes:
   intake_intelligence:
@@ -160,8 +161,8 @@ modes:
       - target: static_verify
         guard: { kind: FieldTruthy, path: artifacts.written }
   static_verify:
-    vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification, confirm_live_provider_intent, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [npm_install, npm_typecheck, npm_test, run_static_verification, run_parallel_static_checks, confirm_live_provider_intent, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [system_mode_entry, widget_output, composite_checks_output]
     preconditions:
       confirm_live_provider_intent:
         - { kind: FieldEquals, path: graduation.static_verification, value: passed }
@@ -259,7 +260,7 @@ projection:
     include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
     exclude: []
   static_verify:
-    include: [program.target_dir, graduation.static_verification, graduation.static_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
+    include: [program.target_dir, graduation.static_verification, graduation.static_evidence_id, graduation.composite_checks, graduation.live_provider_intent, graduation.ready_for_live]
     exclude: []
   live_verify:
     include: [program.target_dir, graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id]
@@ -704,6 +705,21 @@ action_map:
       - { op: MSet, path: graduation.static_verification, from_arg: status }
       - { op: MSet, path: graduation.static_evidence_id, from_arg: evidence_id }
     channel: widget_output
+  run_parallel_static_checks:
+    description: |
+      OPTIONAL parallel fan-out. Packs independent static checks (import
+      boundary, declared-mode terminal reachability, evidence shape) into ONE
+      action whose children run CONCURRENTLY and aggregate into a single
+      combined envelope at graduation.composite_checks. The single-call
+      npm_typecheck / npm_test / run_static_verification actions remain the
+      DEFAULT — only pack here when you deliberately want the parallel combined
+      result. Provide the inputs to check under the action payload
+      (imports[], modes[], evidence{status,evidence_id}); the envelope's
+      `status` is succeeded when every child passes and partial when any child
+      fails, with per-child results under `children`.
+    result_path: graduation.composite_checks
+    mutations: []
+    channel: composite_checks_output
   confirm_live_provider_intent:
     description: "Confirm user-selected live-provider graduation after static verification."
     mutations:
@@ -830,6 +846,7 @@ schema:
   graduation.rebase_evidence_id: string
   graduation.rebase_verification: string
   graduation.rebase_static_evidence_id: string
+  graduation.composite_checks: object
   debug.approve_artifact_plan_preconditions_checked: boolean
   governance.round_counter: number
 

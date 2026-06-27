@@ -62,13 +62,22 @@ The state dictionary is the source of truth. Conversation history is not state.
 | `architecture_design` | Synthesize the PGAS program spec from approved intake and service attachment points. | `synthesize_program_spec`, `design_architecture`, `web_research`, `record_user_note` | Deterministic synthesized spec is available in in-process transit. |
 | `scaffold_plan` | Produce first-class artifact plan from the synthesized spec before writes. | `plan_artifacts`, `approve_artifact_plan`, `create_curator_request` | Artifact plan approved through `user_confirmation`. |
 | `branch_write` | Write only planned artifacts. | `write_scaffold_artifacts`, `git_status` | Artifacts written. |
-| `static_verify` | Install/typecheck/test deterministically and confirm live graduation intent. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification`, `confirm_live_provider_intent` | Static verification passed and live-provider intent confirmed. |
+| `static_verify` | Install/typecheck/test deterministically and confirm live graduation intent. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification`, `run_parallel_static_checks` (opt-in), `confirm_live_provider_intent` | Static verification passed and live-provider intent confirmed. |
 | `live_verify` | Verify through the external API with a real provider. | `run_api_blackbox_verification`, `run_live_provider_verification` | Live verification passed. |
 | `rebase_verify` | Rebase on latest target repo state and rerun static verification. | `git_status`, `git_rebase_latest`, `run_rebase_static_verification` | Post-rebase verification passed. |
 | `pr_graduation` | Open the PR. | `open_pull_request` | Terminal graduation mode. |
 | `curator_request` | Produce a repo-curator request when wiring is absent or invalid. | `create_curator_request`, `record_user_note` | Curator request lodged, then return to targeting. |
 
 Every mode includes session controls: `session_new`, `session_abort_current`, `session_status`, `session_history`, `session_resume`, and `session_help`. `session_abort_current` requires an active running session.
+
+## Opt-in Parallel Effects (Composite-Effect Adapter)
+
+`static_verify` exposes one **opt-in** packed action, `run_parallel_static_checks`, in addition to the default single-call verification actions. It lets a single PGAS `EffectAction` wrap multiple independent checks that run **concurrently** and aggregate into one combined result, without weakening the Alloy core's exactly-one-`EffectAction`-per-round invariant (I-1 Terminal Singularity):
+
+- The action emits to the synchronous `composite_checks_output` channel; its handler delegates to `createCompositeEffectAdapter` (public `@simodelne/pgas-server/plugin.js` barrel — no engine internals). Children run via `Promise.all`.
+- The children aggregate into one `CompositeEffectEnvelope` (`{ status, children: [{ status, output, error }] }`) written to the action's `result_path` (`graduation.composite_checks`). One action → one Value → one synchronous result path, so ER coupling (ER-1/2/3) holds. The world view reads the envelope from the `static_verify` projection; engine-owned state is never re-derived.
+- Multiplicity rides on the action payload (`imports[]`, `modes[]`, `evidence{}`) — the author "packs" the checks into the single action's args, not via native multi-tool-calls. The formal core is untouched.
+- **Opt-in and never forced.** The single-call `npm_typecheck` / `npm_test` / `run_static_verification` actions remain the default; the author decides per case whether to pack. Partial failure of any child surfaces as envelope `status: "partial"` with per-child `error`, handled consumer-side rather than thrown.
 
 ## Existing Repo Attachment
 

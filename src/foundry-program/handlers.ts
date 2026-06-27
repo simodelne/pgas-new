@@ -10,6 +10,7 @@ import {
   loadWiringManifest as readWiringManifest,
   type WiringManifest,
 } from '../pgas-new/wiring-manifest.js';
+import { runCompositeStaticChecks } from './composite-checks.js';
 import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain } from './synthesizer.js';
 import { putSynthesizedArtifact, requireSynthesizedArtifact } from './synthesizer-store.js';
 
@@ -517,6 +518,15 @@ function staleTransitionRefreshMutation(snapshot: ReadonlyMap<string, unknown>) 
 }
 
 export const handlers: Record<string, ToolHandler> = {
+  // Opt-in parallel-effect feature (v3.3). Delegates to the published
+  // composite-effect adapter, which fans the static checks out concurrently and
+  // returns one combined envelope. The engine writes that envelope to the
+  // action's result_path (graduation.composite_checks). Single-call verify
+  // actions remain the default; this only runs when the author packs.
+  async run_parallel_static_checks(payload) {
+    return runCompositeStaticChecks(payload);
+  },
+
   async synthesize_program_spec(payload) {
     const sessionId = sessionIdFromPayload(payload);
     const synthesized = synthesizeProgramSpecFromDomain(domainFromPayload(payload));

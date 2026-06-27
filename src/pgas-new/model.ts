@@ -56,6 +56,7 @@ export const PGAS_NEW_ACTIONS = [
   'npm_typecheck',
   'npm_test',
   'run_static_verification',
+  'run_parallel_static_checks',
   'confirm_live_provider_intent',
   'run_api_blackbox_verification',
   'run_live_provider_verification',
