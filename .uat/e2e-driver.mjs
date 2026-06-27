@@ -160,6 +160,16 @@ async function startScenarioSession(ctx, invocation) {
     ...(process.env.PGAS_OPENAI_TEMPERATURE
       ? [`PGAS_OPENAI_TEMPERATURE=${shellQuote(process.env.PGAS_OPENAI_TEMPERATURE)}`]
       : []),
+    // Lane (b): codex-cli driver. PGAS_AUTHOR_DRIVER takes precedence over the
+    // openai provider above. The scenario env overrides HOME, so point
+    // CODEX_HOME at the real codex auth/config dir or codex exec can't find the
+    // ChatGPT session. Enable with E2E_DRIVER=codex-cli.
+    ...(process.env.E2E_DRIVER === 'codex-cli'
+      ? [
+          'PGAS_AUTHOR_DRIVER=codex-cli',
+          `CODEX_HOME=${shellQuote(process.env.CODEX_HOME ?? '/home/simone/.codex')}`,
+        ]
+      : []),
     'bash --noprofile --norc -i',
   ].join(' ');
   runSync('tmux', ['new-session', '-d', '-s', ctx.session, '-c', REPO, envCommand]);
@@ -683,7 +693,7 @@ const scenarioFns = { a: runA, b: runB, c: runC, d: runD, e: runE, f: runF, g: r
 // failures in scenarios E (invalid-manifest), F (collision), and G
 // (skip/reject/edit). The same prompt produces different LLM picks across
 // runs; reduce false-RED noise by retrying ONLY these scenarios up to
-// MAX_FLAKY_ATTEMPTS times. A, B, C, D, H run deterministically once.
+// MAX_FLAKY_ATTEMPTS times. Only H runs deterministically once.
 //
 // Honesty guard: a PASS verdict is recorded ONLY when an attempt's scenario
 // function returned without throwing (sendExpect assertions all passed).
@@ -693,9 +703,14 @@ const scenarioFns = { a: runA, b: runB, c: runC, d: runD, e: runE, f: runF, g: r
 // Live-Qwen tool-selection variance at temperature=0.7 affects any scenario
 // that traverses scaffold_plan's user_confirmation gate, the existing-repo
 // attach path's load_wiring_manifest → authorize_existing_repo_target chain,
-// or the post-Q3-revise re-walk. B (default skeleton) and H (/abort) skip
-// those LLM-driven gates and run deterministically with one attempt.
-const FLAKY_SCENARIOS = new Set(['a', 'c', 'd', 'e', 'f', 'g']);
+// or the post-Q3-revise re-walk. B (default skeleton) skips the Q1-Q6 design
+// interview but STILL traverses scaffold_plan's /approve user_confirmation gate
+// (plan_artifacts -> approve_artifact_plan), so it is subject to the same
+// Qwen tool-selection variance as A/C/D and must retry. Only H (/abort) truly
+// skips the LLM-driven gates and runs deterministically with one attempt.
+// Evidence: v3.3 UAT 2026-06-27 — B failed once with __fallback__ on /approve
+// in scaffold_plan, then PASSED on isolated re-run (variance, not regression).
+const FLAKY_SCENARIOS = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
 const MAX_FLAKY_ATTEMPTS = Number.parseInt(process.env.E2E_MAX_FLAKY_ATTEMPTS ?? '3', 10);
 
 async function runScenarioWithRetry(letter, fn) {
