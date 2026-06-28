@@ -1,0 +1,85 @@
+import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';
+
+// Native stage actions are declared in specs.yml action_map. This metadata gives
+// implementers one fillable local-tool slot per synthesized stage without adding
+// extra invoke_tool_* actions to the engine topology.
+export const stageActionTools = {
+  complete_scope_analysis: {
+    mode: 'scope_analysis',
+    target: 'rate_card_lookup',
+    guard_paths: ['scope.analyzed'],
+    result_path: 'scope_analysis.result_json',
+    items_path: 'scope_analysis.items_json',
+    description: 'TODO: implement local tool/adapter logic for scope_analysis before using complete_scope_analysis in production.',
+  },
+  complete_rate_card_lookup: {
+    mode: 'rate_card_lookup',
+    target: 'effort_estimation',
+    guard_paths: ['rates.loaded'],
+    result_path: 'rate_card_lookup.result_json',
+    items_path: 'rate_card_lookup.items_json',
+    description: 'TODO: implement local tool/adapter logic for rate_card_lookup before using complete_rate_card_lookup in production.',
+  },
+  complete_effort_estimation: {
+    mode: 'effort_estimation',
+    target: 'fee_modeling',
+    guard_paths: ['effort.estimated'],
+    result_path: 'effort_estimation.result_json',
+    items_path: 'effort_estimation.items_json',
+    description: 'TODO: implement local tool/adapter logic for effort_estimation before using complete_effort_estimation in production.',
+  },
+  complete_fee_modeling: {
+    mode: 'fee_modeling',
+    target: 'risk_adjustment',
+    guard_paths: ['fee.modeled'],
+    result_path: 'fee_modeling.result_json',
+    items_path: 'fee_modeling.items_json',
+    description: 'TODO: implement local tool/adapter logic for fee_modeling before using complete_fee_modeling in production.',
+  },
+  complete_risk_adjustment: {
+    mode: 'risk_adjustment',
+    target: 'draft_assembly',
+    guard_paths: ['risk.adjusted'],
+    result_path: 'risk_adjustment.result_json',
+    items_path: 'risk_adjustment.items_json',
+    description: 'TODO: implement local tool/adapter logic for risk_adjustment before using complete_risk_adjustment in production.',
+  },
+  complete_draft_assembly: {
+    mode: 'draft_assembly',
+    target: 'partner_review',
+    guard_paths: ['draft.assembled'],
+    result_path: 'draft_assembly.result_json',
+    items_path: 'draft_assembly.items_json',
+    description: 'TODO: implement local tool/adapter logic for draft_assembly before using complete_draft_assembly in production.',
+  },
+  advance_partner_review_to_revision: {
+    mode: 'partner_review',
+    target: 'revision',
+    guard_paths: ['review.changes_requested'],
+    result_path: 'partner_review.result_json',
+    items_path: 'partner_review.items_json',
+    description: 'TODO: implement local tool/adapter logic for partner_review before using advance_partner_review_to_revision in production.',
+  },
+  advance_partner_review_to_client_delivery: {
+    mode: 'partner_review',
+    target: 'client_delivery',
+    guard_paths: ['delivery.sent'],
+    result_path: 'partner_review.result_json',
+    items_path: 'partner_review.items_json',
+    description: 'TODO: implement local tool/adapter logic for partner_review before using advance_partner_review_to_client_delivery in production.',
+  },
+  complete_revision: {
+    mode: 'revision',
+    target: 'partner_review',
+    guard_paths: ['revision.completed'],
+    result_path: 'revision.result_json',
+    items_path: 'revision.items_json',
+    description: 'TODO: implement local tool/adapter logic for revision before using complete_revision in production.',
+  },
+} as const;
+
+export function registerFeeProposalDrafterTools(_registry: ToolRegistry): void {
+  // TODO: register real local tools here if a stage needs external adapters.
+  // Keep action names and modes aligned with stageActionTools and specs.yml.
+  void _registry;
+}

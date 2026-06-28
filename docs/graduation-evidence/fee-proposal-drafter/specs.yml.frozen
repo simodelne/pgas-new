@@ -1,0 +1,686 @@
+name: fee-proposal-drafter
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
+preamble: |-
+  Program: Fee Proposal Drafter. Draft elaborate client fee proposals for simoneos: capture the engagement request, analyze scope, load the applicable rate card, estimate effort, build a fee model, apply risk adjustments, assemble the proposal document, route it through partner review with a revision loop, and deliver a client-ready proposal.
+
+  This spec was synthesized mechanically by pgas-new.
+initial: request_intake
+terminal:
+  - client_delivery
+features:
+  - base
+  - runtime_control
+channels:
+  user_text:
+    direction: In
+    sync: Async
+  system_mode_entry:
+    direction: In
+    sync: Async
+  widget_output:
+    direction: Out
+    sync: Async
+modes:
+  request_intake:
+    vocabulary:
+      - begin_work
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - system_mode_entry
+      - widget_output
+    transitions:
+      - target: scope_analysis
+        guard:
+          kind: FieldTruthy
+          path: request.captured
+  scope_analysis:
+    vocabulary:
+      - complete_scope_analysis
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: rate_card_lookup
+        guard:
+          kind: FieldTruthy
+          path: scope.analyzed
+  rate_card_lookup:
+    vocabulary:
+      - complete_rate_card_lookup
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: effort_estimation
+        guard:
+          kind: FieldTruthy
+          path: rates.loaded
+  effort_estimation:
+    vocabulary:
+      - complete_effort_estimation
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: fee_modeling
+        guard:
+          kind: FieldTruthy
+          path: effort.estimated
+  fee_modeling:
+    vocabulary:
+      - complete_fee_modeling
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: risk_adjustment
+        guard:
+          kind: FieldTruthy
+          path: fee.modeled
+  risk_adjustment:
+    vocabulary:
+      - complete_risk_adjustment
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: draft_assembly
+        guard:
+          kind: FieldTruthy
+          path: risk.adjusted
+  draft_assembly:
+    vocabulary:
+      - complete_draft_assembly
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: partner_review
+        guard:
+          kind: FieldTruthy
+          path: draft.assembled
+  partner_review:
+    vocabulary:
+      - advance_partner_review_to_revision
+      - advance_partner_review_to_client_delivery
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: revision
+        guard:
+          kind: FieldTruthy
+          path: review.changes_requested
+      - target: client_delivery
+        guard:
+          kind: FieldTruthy
+          path: delivery.sent
+  revision:
+    vocabulary:
+      - complete_revision
+      - record_user_note
+      - session_new
+      - session_abort_current
+      - session_status
+      - session_history
+      - session_resume
+      - session_help
+    channels:
+      - user_text
+      - widget_output
+    transitions:
+      - target: partner_review
+        guard:
+          kind: FieldTruthy
+          path: revision.completed
+  client_delivery:
+    vocabulary:
+      - session_status
+      - session_history
+      - session_help
+    channels:
+      - widget_output
+    transitions: []
+proceed_to:
+  begin_work: scope_analysis
+  complete_scope_analysis: rate_card_lookup
+  complete_rate_card_lookup: effort_estimation
+  complete_effort_estimation: fee_modeling
+  complete_fee_modeling: risk_adjustment
+  complete_risk_adjustment: draft_assembly
+  complete_draft_assembly: partner_review
+  advance_partner_review_to_revision: revision
+  advance_partner_review_to_client_delivery: client_delivery
+  complete_revision: partner_review
+projection:
+  request_intake:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - request_intake.started
+      - request.captured
+    exclude: []
+  client_delivery:
+    include:
+      - scope.analyzed
+      - rates.loaded
+      - effort.estimated
+      - fee.modeled
+      - risk.adjusted
+      - draft.assembled
+      - review.changes_requested
+      - delivery.sent
+      - revision.completed
+      - scope_analysis.result_json
+      - scope_analysis.items_json
+      - rate_card_lookup.result_json
+      - rate_card_lookup.items_json
+      - effort_estimation.result_json
+      - effort_estimation.items_json
+      - fee_modeling.result_json
+      - fee_modeling.items_json
+      - risk_adjustment.result_json
+      - risk_adjustment.items_json
+      - draft_assembly.result_json
+      - draft_assembly.items_json
+      - partner_review.result_json
+      - partner_review.items_json
+      - revision.result_json
+      - revision.items_json
+    exclude: []
+  scope_analysis:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - scope.analyzed
+      - scope_analysis.result_json
+      - scope_analysis.items_json
+    exclude: []
+  rate_card_lookup:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - rates.loaded
+      - rate_card_lookup.result_json
+      - rate_card_lookup.items_json
+    exclude: []
+  effort_estimation:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - effort.estimated
+      - effort_estimation.result_json
+      - effort_estimation.items_json
+    exclude: []
+  fee_modeling:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - fee.modeled
+      - fee_modeling.result_json
+      - fee_modeling.items_json
+    exclude: []
+  risk_adjustment:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - risk.adjusted
+      - risk_adjustment.result_json
+      - risk_adjustment.items_json
+    exclude: []
+  draft_assembly:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - draft.assembled
+      - draft_assembly.result_json
+      - draft_assembly.items_json
+    exclude: []
+  partner_review:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - review.changes_requested
+      - delivery.sent
+      - partner_review.result_json
+      - partner_review.items_json
+    exclude: []
+  revision:
+    include:
+      - inputs.user_text
+      - notebook.entries
+      - notebook.pins
+      - revision.completed
+      - revision.result_json
+      - revision.items_json
+    exclude: []
+prompts:
+  request_intake: Capture the initial request for Fee Proposal Drafter and start the work.
+  client_delivery: Terminal mode after Fee Proposal Drafter completion is confirmed.
+  scope_analysis: Perform the scope_analysis stage for Fee Proposal Drafter.
+  rate_card_lookup: Perform the rate_card_lookup stage for Fee Proposal Drafter.
+  effort_estimation: Perform the effort_estimation stage for Fee Proposal Drafter.
+  fee_modeling: Perform the fee_modeling stage for Fee Proposal Drafter.
+  risk_adjustment: Perform the risk_adjustment stage for Fee Proposal Drafter.
+  draft_assembly: Perform the draft_assembly stage for Fee Proposal Drafter.
+  partner_review: Perform the partner_review stage for Fee Proposal Drafter.
+  revision: Perform the revision stage for Fee Proposal Drafter.
+ingestion:
+  user_text:
+    - inputs.user_text
+  system_mode_entry:
+    - inputs.mode_entry
+action_map:
+  begin_work:
+    description: Start request_intake and advance exactly one hop to scope_analysis.
+    mutations:
+      - op: MSet
+        path: request.captured
+        value: true
+    channel: widget_output
+  record_user_note:
+    description: Record a notebook note.
+    mutations:
+      - op: MAppend
+        path: notebook.entries
+        from_arg: note
+    channel: widget_output
+  session_new:
+    description: Control-plane new session command.
+    mutations: []
+    channel: widget_output
+  session_abort_current:
+    description: Control-plane abort current session command.
+    mutations: []
+    channel: widget_output
+  session_status:
+    description: Control-plane status command.
+    mutations: []
+    channel: widget_output
+  session_history:
+    description: Control-plane history command.
+    mutations: []
+    channel: widget_output
+  session_resume:
+    description: Control-plane resume command.
+    mutations: []
+    channel: widget_output
+  session_help:
+    description: Control-plane help command.
+    mutations: []
+    channel: widget_output
+  complete_scope_analysis:
+    description: TODO stub for completing scope_analysis and advancing exactly one hop to rate_card_lookup. Writes only scope_analysis's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the scope_analysis stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the scope_analysis stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: scope.analyzed
+        value: true
+      - op: MSet
+        path: scope_analysis.result_json
+        from_arg: result_json
+      - op: MSet
+        path: scope_analysis.items_json
+        from_arg: items_json
+    channel: widget_output
+  complete_rate_card_lookup:
+    description: TODO stub for completing rate_card_lookup and advancing exactly one hop to effort_estimation. Writes only rate_card_lookup's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the rate_card_lookup stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the rate_card_lookup stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: rates.loaded
+        value: true
+      - op: MSet
+        path: rate_card_lookup.result_json
+        from_arg: result_json
+      - op: MSet
+        path: rate_card_lookup.items_json
+        from_arg: items_json
+    channel: widget_output
+  complete_effort_estimation:
+    description: TODO stub for completing effort_estimation and advancing exactly one hop to fee_modeling. Writes only effort_estimation's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the effort_estimation stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the effort_estimation stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: effort.estimated
+        value: true
+      - op: MSet
+        path: effort_estimation.result_json
+        from_arg: result_json
+      - op: MSet
+        path: effort_estimation.items_json
+        from_arg: items_json
+    channel: widget_output
+  complete_fee_modeling:
+    description: TODO stub for completing fee_modeling and advancing exactly one hop to risk_adjustment. Writes only fee_modeling's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the fee_modeling stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the fee_modeling stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: fee.modeled
+        value: true
+      - op: MSet
+        path: fee_modeling.result_json
+        from_arg: result_json
+      - op: MSet
+        path: fee_modeling.items_json
+        from_arg: items_json
+    channel: widget_output
+  complete_risk_adjustment:
+    description: TODO stub for completing risk_adjustment and advancing exactly one hop to draft_assembly. Writes only risk_adjustment's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the risk_adjustment stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the risk_adjustment stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: risk.adjusted
+        value: true
+      - op: MSet
+        path: risk_adjustment.result_json
+        from_arg: result_json
+      - op: MSet
+        path: risk_adjustment.items_json
+        from_arg: items_json
+    channel: widget_output
+  complete_draft_assembly:
+    description: TODO stub for completing draft_assembly and advancing exactly one hop to partner_review. Writes only draft_assembly's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the draft_assembly stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the draft_assembly stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: draft.assembled
+        value: true
+      - op: MSet
+        path: draft_assembly.result_json
+        from_arg: result_json
+      - op: MSet
+        path: draft_assembly.items_json
+        from_arg: items_json
+    channel: widget_output
+  advance_partner_review_to_revision:
+    description: TODO stub for completing partner_review and advancing exactly one hop to revision. Writes only partner_review's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the partner_review stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the partner_review stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: review.changes_requested
+        value: true
+      - op: MSet
+        path: partner_review.result_json
+        from_arg: result_json
+      - op: MSet
+        path: partner_review.items_json
+        from_arg: items_json
+    channel: widget_output
+  advance_partner_review_to_client_delivery:
+    description: TODO stub for completing partner_review and advancing exactly one hop to client_delivery. Writes only partner_review's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the partner_review stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the partner_review stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: delivery.sent
+        value: true
+      - op: MSet
+        path: partner_review.result_json
+        from_arg: result_json
+      - op: MSet
+        path: partner_review.items_json
+        from_arg: items_json
+    channel: widget_output
+  complete_revision:
+    description: TODO stub for completing revision and advancing exactly one hop to partner_review. Writes only revision's own guard/result fields.
+    arg_descriptions:
+      result_json: 'JSON string result for the revision stage. TODO: replace the generated stub with real domain output.'
+      items_json: 'JSON string array of item ids or summaries produced by the revision stage. TODO: replace the generated stub with real domain output.'
+    mutations:
+      - op: MSet
+        path: revision.completed
+        value: true
+      - op: MSet
+        path: revision.result_json
+        from_arg: result_json
+      - op: MSet
+        path: revision.items_json
+        from_arg: items_json
+    channel: widget_output
+schema:
+  inputs.user_text: string
+  inputs.query_result.kind: string
+  inputs.query_result.value_json: object
+  inputs.query_meta.source_path: string
+  inputs.query_meta.source_channel: string
+  inputs.query_meta.continuation_round: number
+  inputs.query_meta.scope_redirect: string
+  inputs.query_meta.message: string
+  inputs.mode_entry: object
+  inputs.mode_entry.mode: string
+  inputs.mode_entry.from_mode: string
+  inputs.mode_entry.entry_round: number
+  governance.round_counter: number
+  notebook.entries: array
+  notebook.pins: array
+  request_intake.started: boolean
+  request.captured: boolean
+  scope.analyzed: boolean
+  rates.loaded: boolean
+  effort.estimated: boolean
+  fee.modeled: boolean
+  risk.adjusted: boolean
+  draft.assembled: boolean
+  review.changes_requested: boolean
+  delivery.sent: boolean
+  revision.completed: boolean
+  scope_analysis.result_json: string
+  scope_analysis.items_json: string
+  rate_card_lookup.result_json: string
+  rate_card_lookup.items_json: string
+  effort_estimation.result_json: string
+  effort_estimation.items_json: string
+  fee_modeling.result_json: string
+  fee_modeling.items_json: string
+  risk_adjustment.result_json: string
+  risk_adjustment.items_json: string
+  draft_assembly.result_json: string
+  draft_assembly.items_json: string
+  partner_review.result_json: string
+  partner_review.items_json: string
+  revision.result_json: string
+  revision.items_json: string
+repair_bound: 2
+fallback:
+  channel: widget_output
+  payload:
+    ok: false
+guidance:
+  scope_analysis:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  rate_card_lookup:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  effort_estimation:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  fee_modeling:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  risk_adjustment:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  draft_assembly:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  partner_review:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+  revision:
+    - Use the synthesized JSON-string scalar fields for structured handler results.
+control_plane:
+  version: 1
+  session:
+    program: fee-proposal-drafter
+    binding: identity_channel_program
+    concurrency:
+      policy: single_active
+      on_busy: reject_with_status
+  free_text:
+    control: ask
+    bind:
+      query: $text
+  controls:
+    ask:
+      title: Ask
+      aliases:
+        - /ask
+      args:
+        query:
+          type: string
+          required: true
+          capture: rest
+      dispatch:
+        - op: create_session
+          as: session
+          program: fee-proposal-drafter
+          domain_context:
+            query: $args.query
+        - op: trigger
+          session: $session.id
+          channel: user_text
+          payload: $args.query
+          mode: async
+    abort:
+      title: Abort run
+      aliases:
+        - /abort
+        - /stop
+      availability:
+        when: active_session.running
+      dispatch:
+        - op: abort_session
+          session: $active_session.id
+      presentation:
+        priority: destructive
+        confirm: true
+    new:
+      title: New session
+      aliases:
+        - /new
+        - /reset
+        - /restart
+      dispatch:
+        - op: create_session
+          as: session
+          program: fee-proposal-drafter
+      presentation:
+        priority: secondary
+    history:
+      title: Recent sessions
+      aliases:
+        - /history
+        - /recent
+      dispatch:
+        - op: list_sessions
+          as: sessions
+      presentation:
+        priority: secondary
+    status:
+      title: Status
+      aliases:
+        - /status
+      availability:
+        when: active_session
+      dispatch:
+        - op: render_session
+          session: $active_session.id
+          view: status
+      presentation:
+        priority: contextual
+    resume:
+      title: Resume
+      aliases:
+        - /resume
+      availability:
+        when: active_session
+      dispatch:
+        - op: send_runtime_control
+          session: $active_session.id
+          control: resume
+      presentation:
+        priority: contextual
+    help:
+      title: Help
+      aliases:
+        - /help
+      dispatch:
+        - op: render_help
+      presentation:
+        priority: secondary
