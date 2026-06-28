@@ -17,6 +17,17 @@ const transitions = [
   { from: 'triage', to: 'resolved', trigger: 'summary_ready', guard_field: 'triage.summary_ready' },
 ];
 
+const synthesizedTriageBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  return {
+    result_json: JSON.stringify({ stage: input.stage, status: 'triaged', at: runtime.now() }),
+    items_json: JSON.stringify(['triaged']),
+    digest: '',
+  };
+}
+`;
+
 const tempRoots: string[] = [];
 
 afterEach(() => {
@@ -59,7 +70,17 @@ describe('foundry artifact-plan approval flow', () => {
       expect(terminalActionNames(planned.rounds)).not.toContain('write_scaffold_artifacts');
 
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const domainReady = await waitForSnapshot(
+        harness,
+        (snapshot) =>
+          snapshot.mode === 'branch_write' &&
+          snapshot.domain['program.domain_synthesis_complete'] === true,
+        'artifact plan approval to domain synthesis completion',
+      );
+      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic']));
+      expect(domainReady.domain['artifacts.written']).not.toBe(true);
 
+      await harness.trigger({ channel: 'system_mode_entry', payload: {} });
       const approved = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.domain['artifacts.written'] === true,
@@ -67,7 +88,7 @@ describe('foundry artifact-plan approval flow', () => {
       );
       const terminals = terminalActionNames(approved.rounds);
 
-      expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'write_scaffold_artifacts']));
+      expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic', 'write_scaffold_artifacts']));
       expect(approved.domain['artifact_plan.status']).toBe('approved');
       expect(approved.domain['artifact_plan.approved']).toBe(true);
       expect(approved.domain['artifact_plan.write_authorized']).toBe(true);
@@ -84,6 +105,10 @@ describe('foundry artifact-plan approval flow', () => {
       ...intakeThroughDraftResponses(targetDir),
       effect('plan_artifacts'),
       effect('approve_artifact_plan'),
+      effect('synthesize_domain_logic', {
+        cache_dir: join(targetDir, '.domain-synthesis-cache'),
+        __domain_synthesis_body: synthesizedTriageBody,
+      }),
       effect('write_scaffold_artifacts', { cwd: targetDir }),
     ]);
 
@@ -91,6 +116,16 @@ describe('foundry artifact-plan approval flow', () => {
       await driveToDraftArtifactPlan(harness);
 
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const domainReady = await waitForSnapshot(
+        harness,
+        (snapshot) =>
+          snapshot.mode === 'branch_write' &&
+          snapshot.domain['program.domain_synthesis_complete'] === true,
+        'repair from repeated plan_artifacts to domain synthesis completion',
+      );
+      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic']));
+
+      await harness.trigger({ channel: 'system_mode_entry', payload: {} });
       const approved = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.domain['artifacts.written'] === true,
@@ -98,7 +133,7 @@ describe('foundry artifact-plan approval flow', () => {
       );
       const terminals = terminalActionNames(approved.rounds);
 
-      expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'write_scaffold_artifacts']));
+      expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic', 'write_scaffold_artifacts']));
       expect(approved.domain['artifact_plan.status']).toBe('approved');
       expect(approved.domain['artifact_plan.approved']).toBe(true);
       expect(approved.domain['artifacts.written']).toBe(true);
@@ -112,6 +147,10 @@ async function createHarness(targetDir: string): Promise<TestHarness> {
   return createHarnessWithResponses([
     ...intakeThroughDraftResponses(targetDir),
     effect('approve_artifact_plan'),
+    effect('synthesize_domain_logic', {
+      cache_dir: join(targetDir, '.domain-synthesis-cache'),
+      __domain_synthesis_body: synthesizedTriageBody,
+    }),
     effect('write_scaffold_artifacts', { cwd: targetDir }),
   ]);
 }
@@ -181,7 +220,11 @@ function effect(name: string, payload: Record<string, unknown> = {}): TestHarnes
       {
         kind: 'EffectAction',
         name,
-        channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
+        channel: name === 'plan_artifacts'
+          ? 'artifact_plan_output'
+        : name === 'synthesize_domain_logic'
+          ? 'domain_synthesis_output'
+          : 'widget_output',
         payload,
       },
     ],

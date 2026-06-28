@@ -107,6 +107,37 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders synthesized contracts, stage bodies, and smoke test artifacts', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-synthesized-'));
+    try {
+      const result = renderStandaloneScaffold({
+        outDir,
+        slug: 'incident-triage',
+        name: 'Incident Triage',
+        synthesizedSpecYaml: 'name: incident-triage\n',
+        synthesizedContractsTs: 'export const contractSentinel = true;\n',
+        synthesizedHandlersTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedHandlersIndexTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedStageSources: {
+          triage: 'export async function runStage() { return { result_json: "{}", items_json: "[]" }; }\n',
+        },
+        synthesizedToolsTs: 'export const stageActionTools = {};\n',
+        synthesizedSmokeTestTs: 'import { describe } from "vitest";\ndescribe("generated program smoke", () => {});\n',
+      });
+
+      expect(result.written).toEqual(expect.arrayContaining([
+        'src/programs/incident-triage/contracts.ts',
+        'src/programs/incident-triage/stages/triage.ts',
+        'tests/generated-program-smoke.test.ts',
+      ]));
+      expect(readFileSync(join(outDir, 'src/programs/incident-triage/contracts.ts'), 'utf8')).toContain('contractSentinel');
+      expect(readFileSync(join(outDir, 'src/programs/incident-triage/stages/triage.ts'), 'utf8')).toContain('runStage');
+      expect(readFileSync(join(outDir, 'tests/generated-program-smoke.test.ts'), 'utf8')).toContain('generated program smoke');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders required public PGAS v2 imports and no banned imports', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-imports-'));
     try {
@@ -563,6 +594,13 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
       ]),
     );
+    expect(parsed.modes.domain_synthesis.preconditions?.synthesize_domain_logic).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' },
+        { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' },
+        { kind: 'FieldFalsy', path: 'program.domain_synthesis_complete' },
+      ]),
+    );
     expect(parsed.ingestion.user_confirmation).toEqual([
       'inputs.user_decision',
       'inputs.user_decision.decision',
@@ -607,6 +645,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         'program.target_dir',
         'repo.target_kind',
         'program.synthesis_complete',
+        'program.domain_synthesis_complete',
       ]),
     );
     expect(parsed.schema).toMatchObject({
@@ -619,6 +658,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       'program.design_path': 'string',
       'program.design_confirmed': 'boolean',
       'program.synthesis_complete': 'boolean',
+      'program.domain_synthesis_complete': 'boolean',
       'program.target_dir': 'string',
       'program.target_dir_confirmed': 'boolean',
       'program.skip_dimensions': 'array',
@@ -649,6 +689,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     );
     expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
     expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
+    expect(parsed.guidance.domain_synthesis.join('\n')).toContain('synthesize_domain_logic');
     expect(parsed.guidance.repo_targeting.join('\n')).toContain('mandatory between confirm_design and architecture_design');
     expect(parsed.guidance.repo_targeting.join('\n')).toContain('call authorize_standalone_target');
     expect(parsed.guidance.intake_intelligence).toEqual(
@@ -861,13 +902,19 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(parsed.schema['intake.research_allowed']).toBe('boolean');
     expect(parsed.schema['intake.user_research_authorized']).toBe('boolean');
     expect(parsed.schema['graduation.static_evidence_id']).toBe('string');
+    expect(parsed.schema['graduation.smoke_verification']).toBe('string');
+    expect(parsed.schema['graduation.smoke_evidence_id']).toBe('string');
     expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
     expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
+    expect(parsed.schema['program.domain_synthesis_complete']).toBe('boolean');
+    expect(parsed.schema['domain_synthesis.audit']).toBe('object');
     expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
     expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
     expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
     expect(parsed.proceed_to.authorize_existing_repo_target).toBe('architecture_design');
-    expect(parsed.proceed_to.run_static_verification).toBeUndefined();
+    expect(parsed.proceed_to.run_static_verification).toBe('smoke_verify');
+    expect(parsed.proceed_to.approve_artifact_plan).toBe('domain_synthesis');
+    expect(parsed.proceed_to.synthesize_domain_logic).toBe('branch_write');
     expect(parsed.proceed_to.confirm_live_provider_intent).toBe('live_verify');
     expect(parsed.proceed_to.run_rebase_static_verification).toBe('pr_graduation');
     expect(parsed.modes.intake_intelligence.preconditions?.web_research).toEqual(
@@ -889,14 +936,28 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect.arrayContaining([
         { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' },
         { kind: 'FieldTruthy', path: 'artifact_plan.write_authorized' },
+        { kind: 'FieldTruthy', path: 'program.domain_synthesis_complete' },
       ]),
     );
     expect(parsed.modes.scaffold_plan.transitions).toEqual(
       expect.arrayContaining([
-        { target: 'branch_write', guard: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
+        { target: 'domain_synthesis', guard: { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' } },
+      ]),
+    );
+    expect(parsed.modes.domain_synthesis.transitions).toEqual(
+      expect.arrayContaining([
+        { target: 'branch_write', guard: { kind: 'FieldTruthy', path: 'program.domain_synthesis_complete' } },
       ]),
     );
     expect(parsed.modes.static_verify.transitions).toEqual(
+      expect.arrayContaining([
+        {
+          target: 'smoke_verify',
+          guard: { kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' },
+        },
+      ]),
+    );
+    expect(parsed.modes.smoke_verify.transitions).toEqual(
       expect.arrayContaining([
         {
           target: 'live_verify',
@@ -904,7 +965,10 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         },
       ]),
     );
-    expect(parsed.modes.static_verify.preconditions?.confirm_live_provider_intent).toEqual(
+    expect(parsed.modes.smoke_verify.preconditions?.confirm_live_provider_intent).toEqual(
+      expect.arrayContaining([{ kind: 'FieldEquals', path: 'graduation.smoke_verification', value: 'passed' }]),
+    );
+    expect(parsed.modes.smoke_verify.preconditions?.run_smoke_verification).toEqual(
       expect.arrayContaining([{ kind: 'FieldEquals', path: 'graduation.static_verification', value: 'passed' }]),
     );
     expect(parsed.modes.live_verify.preconditions?.run_live_provider_verification).toEqual(
@@ -937,6 +1001,19 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect.arrayContaining([
         expect.objectContaining({ path: 'graduation.static_verification', from_arg: 'status' }),
         expect.objectContaining({ path: 'graduation.static_evidence_id', from_arg: 'evidence_id' }),
+      ]),
+    );
+    expect(parsed.action_map.synthesize_domain_logic).toMatchObject({
+      result_path: 'domain_synthesis.audit',
+      channel: 'domain_synthesis_output',
+    });
+    expect(parsed.action_map.synthesize_domain_logic.mutations).toEqual([
+      expect.objectContaining({ path: 'program.domain_synthesis_complete', value: true }),
+    ]);
+    expect(parsed.action_map.run_smoke_verification.mutations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'graduation.smoke_verification', from_arg: 'status' }),
+        expect.objectContaining({ path: 'graduation.smoke_evidence_id', from_arg: 'evidence_id' }),
       ]),
     );
     expect(parsed.action_map.confirm_live_provider_intent.mutations).toEqual(

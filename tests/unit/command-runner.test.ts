@@ -68,6 +68,28 @@ describe('node command runner', () => {
     ]);
   });
 
+  it('runs the generated smoke test with a fixed npm argv', async () => {
+    const { calls, spawn } = fakeSpawn([{ code: 0, stdout: 'smoke ok' }]);
+    const runner = createNodeCommandRunner(spawn);
+
+    const result = await runner.runGeneratedSmokeTest({ cwd: '/tmp/repo' });
+
+    expect(result).toMatchObject({
+      command_id: 'runGeneratedSmokeTest',
+      cwd: '/tmp/repo',
+      exit_code: 0,
+      stdout_excerpt: 'smoke ok',
+    });
+    expect(calls).toEqual([
+      {
+        command: 'npm',
+        args: ['test', '--', 'tests/generated-program-smoke.test.ts'],
+        cwd: '/tmp/repo',
+        shell: false,
+      },
+    ]);
+  });
+
   it('rebases by fetching the declared branch and then rebasing against origin branch', async () => {
     const { calls, spawn } = fakeSpawn([{ code: 0, stdout: 'fetch' }, { code: 0, stdout: 'rebase' }]);
     const runner = createNodeCommandRunner(spawn);

@@ -68,6 +68,8 @@ describe('foundry deterministic artifact planning', () => {
       const plannedArtifacts = createStandaloneArtifactPlan({
         slug: 'incident-triage',
         name: 'Incident Triage',
+      }, {
+        stageSlugs: ['triage'],
       }).artifacts;
 
       expect(snapshot.domain['artifact_plan.status']).toBe('draft');

@@ -5,6 +5,7 @@ export const GOVERNED_STATE_KEYS = [
   'research',
   'repo',
   'program',
+  'domain_synthesis',
   'artifact_plan',
   'artifacts',
   'graduation',
@@ -18,8 +19,10 @@ export const PGAS_NEW_MODES = [
   'repo_targeting',
   'architecture_design',
   'scaffold_plan',
+  'domain_synthesis',
   'branch_write',
   'static_verify',
+  'smoke_verify',
   'live_verify',
   'rebase_verify',
   'pr_graduation',
@@ -51,12 +54,14 @@ export const PGAS_NEW_ACTIONS = [
   'design_architecture',
   'plan_artifacts',
   'approve_artifact_plan',
+  'synthesize_domain_logic',
   'write_scaffold_artifacts',
   'npm_install',
   'npm_typecheck',
   'npm_test',
   'run_static_verification',
   'run_parallel_static_checks',
+  'run_smoke_verification',
   'confirm_live_provider_intent',
   'run_api_blackbox_verification',
   'run_live_provider_verification',
@@ -112,6 +117,10 @@ export interface PgasNewState {
     slug?: string;
     name?: string;
     architecture_ready: boolean;
+    domain_synthesis_complete: boolean;
+  };
+  domain_synthesis: {
+    audit: Record<string, unknown>;
   };
   artifact_plan: {
     status: PlanningStatus;
@@ -125,6 +134,7 @@ export interface PgasNewState {
   };
   graduation: {
     static_verification: VerificationStatus;
+    smoke_verification: VerificationStatus;
     live_verification: VerificationStatus;
     rebase_status: VerificationStatus;
     rebase_verification: VerificationStatus;
@@ -173,6 +183,10 @@ export function createInitialState(): PgasNewState {
     program: {
       runtime: 'typescript-node',
       architecture_ready: false,
+      domain_synthesis_complete: false,
+    },
+    domain_synthesis: {
+      audit: {},
     },
     artifact_plan: {
       status: 'none',
@@ -186,6 +200,7 @@ export function createInitialState(): PgasNewState {
     },
     graduation: {
       static_verification: 'pending',
+      smoke_verification: 'pending',
       live_verification: 'pending',
       rebase_status: 'pending',
       rebase_verification: 'pending',

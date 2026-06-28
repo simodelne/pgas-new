@@ -28,6 +28,7 @@ function existingRepoState(): PgasNewState {
       slug: 'legal-rag',
       name: 'Legal RAG',
       architecture_ready: true,
+      domain_synthesis_complete: false,
     },
     artifact_plan: {
       status: 'approved',
@@ -45,10 +46,15 @@ describe('pgas-new gates', () => {
     expect(canTransition(state, 'intake_intelligence', 'repo_targeting')).toMatchObject({ allowed: true });
     expect(canTransition(withMode(state, 'repo_targeting'), 'repo_targeting', 'architecture_design')).toMatchObject({ allowed: true });
     expect(canTransition(withMode(state, 'architecture_design'), 'architecture_design', 'scaffold_plan')).toMatchObject({ allowed: true });
-    expect(canTransition(withMode(state, 'scaffold_plan'), 'scaffold_plan', 'branch_write')).toMatchObject({ allowed: true });
+    expect(canTransition(withMode(state, 'scaffold_plan'), 'scaffold_plan', 'domain_synthesis')).toMatchObject({ allowed: true });
+    const domainReady = {
+      ...state,
+      program: { ...state.program, domain_synthesis_complete: true },
+    } satisfies PgasNewState;
+    expect(canTransition(withMode(domainReady, 'domain_synthesis'), 'domain_synthesis', 'branch_write')).toMatchObject({ allowed: true });
 
     const written = {
-      ...withMode(state, 'branch_write'),
+      ...withMode(domainReady, 'branch_write'),
       artifacts: { written: true, generated_paths: ['programs/legal-rag/specs.yml'] },
     } satisfies PgasNewState;
     expect(canTransition(written, 'branch_write', 'static_verify')).toMatchObject({ allowed: true });
@@ -62,11 +68,22 @@ describe('pgas-new gates', () => {
         ready_for_live: true,
       },
     } satisfies PgasNewState;
-    expect(canTransition(withMode(staticPassed, 'static_verify'), 'static_verify', 'live_verify')).toMatchObject({ allowed: true });
+    expect(canTransition(withMode(staticPassed, 'static_verify'), 'static_verify', 'smoke_verify')).toMatchObject({ allowed: true });
+
+    const smokePassed = {
+      ...staticPassed,
+      graduation: {
+        ...staticPassed.graduation,
+        smoke_verification: 'passed',
+        live_provider_intent: true,
+        ready_for_live: true,
+      },
+    } satisfies PgasNewState;
+    expect(canTransition(withMode(smokePassed, 'smoke_verify'), 'smoke_verify', 'live_verify')).toMatchObject({ allowed: true });
 
     const livePassed = {
-      ...withMode(staticPassed, 'live_verify'),
-      graduation: { ...staticPassed.graduation, live_verification: 'passed' },
+      ...withMode(smokePassed, 'live_verify'),
+      graduation: { ...smokePassed.graduation, live_verification: 'passed' },
     } satisfies PgasNewState;
     expect(canTransition(livePassed, 'live_verify', 'rebase_verify')).toMatchObject({ allowed: true });
 
@@ -102,7 +119,7 @@ describe('pgas-new gates', () => {
       },
     } satisfies PgasNewState;
 
-    expect(canTransition(state, 'scaffold_plan', 'branch_write')).toEqual({
+    expect(canTransition(state, 'scaffold_plan', 'domain_synthesis')).toEqual({
       allowed: false,
       reason: 'existing_repo_requires_valid_wiring_manifest',
     });
@@ -121,7 +138,7 @@ describe('pgas-new gates', () => {
       },
     } satisfies PgasNewState;
 
-    expect(canTransition(state, 'scaffold_plan', 'branch_write')).toEqual({
+    expect(canTransition(state, 'scaffold_plan', 'domain_synthesis')).toEqual({
       allowed: false,
       reason: 'existing_repo_requires_fixed_path_wiring_manifest',
     });
@@ -213,13 +230,17 @@ describe('pgas-new gates', () => {
       artifact_plan: { status: 'approved', approved: true, write_authorized: false, artifacts: [] },
     } satisfies PgasNewState;
 
-    expect(canTransition(draft, 'scaffold_plan', 'branch_write')).toEqual({
+    expect(canTransition(draft, 'scaffold_plan', 'domain_synthesis')).toEqual({
       allowed: false,
-      reason: 'branch_write_requires_approved_artifact_plan',
+      reason: 'domain_synthesis_requires_approved_artifact_plan',
     });
-    expect(canTransition(approvedButNotWriteAuthorized, 'scaffold_plan', 'branch_write')).toEqual({
+    expect(canTransition(approvedButNotWriteAuthorized, 'scaffold_plan', 'domain_synthesis')).toEqual({
       allowed: false,
-      reason: 'branch_write_requires_artifact_write_authorization',
+      reason: 'domain_synthesis_requires_artifact_write_authorization',
+    });
+    expect(canTransition({ ...draft, session: { ...draft.session, current_mode: 'domain_synthesis' } }, 'domain_synthesis', 'branch_write')).toEqual({
+      allowed: false,
+      reason: 'branch_write_requires_domain_synthesis_complete',
     });
   });
 
@@ -295,42 +316,51 @@ describe('pgas-new gates', () => {
     expect(() => assertActionAllowed(running, 'intake_intelligence', 'session_abort_current')).not.toThrow();
   });
 
-  it('requires static success and live-provider intent before live verification', () => {
+  it('requires static success, smoke success, and live-provider intent before live verification', () => {
     const state = {
       ...withMode(existingRepoState(), 'static_verify'),
       artifacts: { written: true, generated_paths: ['programs/legal-rag/specs.yml'] },
     } satisfies PgasNewState;
 
-    expect(canTransition(state, 'static_verify', 'live_verify')).toEqual({
+    expect(canTransition(state, 'static_verify', 'smoke_verify')).toEqual({
       allowed: false,
-      reason: 'live_verify_requires_static_passed',
+      reason: 'smoke_verify_requires_static_passed',
     });
 
     const staticPassed = {
       ...state,
       graduation: { ...state.graduation, static_verification: 'passed', live_provider_intent: false },
     } satisfies PgasNewState;
-    expect(canTransition(staticPassed, 'static_verify', 'live_verify')).toEqual({
+    expect(canTransition(staticPassed, 'static_verify', 'smoke_verify')).toEqual({ allowed: true });
+    expect(canTransition(withMode(staticPassed, 'smoke_verify'), 'smoke_verify', 'live_verify')).toEqual({
+      allowed: false,
+      reason: 'live_verify_requires_smoke_passed',
+    });
+    const smokePassed = {
+      ...withMode(staticPassed, 'smoke_verify'),
+      graduation: { ...staticPassed.graduation, smoke_verification: 'passed', live_provider_intent: false },
+    } satisfies PgasNewState;
+    expect(canTransition(smokePassed, 'smoke_verify', 'live_verify')).toEqual({
       allowed: false,
       reason: 'live_verify_requires_live_provider_intent',
     });
     const intentWithoutReady = {
-      ...staticPassed,
-      graduation: { ...staticPassed.graduation, live_provider_intent: true, ready_for_live: false },
+      ...smokePassed,
+      graduation: { ...smokePassed.graduation, live_provider_intent: true, ready_for_live: false },
     } satisfies PgasNewState;
-    expect(canTransition(intentWithoutReady, 'static_verify', 'live_verify')).toEqual({
+    expect(canTransition(intentWithoutReady, 'smoke_verify', 'live_verify')).toEqual({
       allowed: false,
       reason: 'live_verify_requires_ready_for_live',
     });
     const ready = {
-      ...staticPassed,
-      graduation: { ...staticPassed.graduation, live_provider_intent: true, ready_for_live: true },
+      ...smokePassed,
+      graduation: { ...smokePassed.graduation, live_provider_intent: true, ready_for_live: true },
     } satisfies PgasNewState;
-    expect(canTransition(ready, 'static_verify', 'live_verify')).toEqual({ allowed: true });
+    expect(canTransition(ready, 'smoke_verify', 'live_verify')).toEqual({ allowed: true });
     const staticPassedInLiveMode = withMode(staticPassed, 'live_verify');
     expect(legalActionsForMode(staticPassedInLiveMode, 'live_verify')).not.toContain('run_api_blackbox_verification');
     expect(() => assertActionAllowed(staticPassedInLiveMode, 'live_verify', 'run_api_blackbox_verification')).toThrow(
-      /live_verify_requires_live_provider_intent/,
+      /live_verify_requires_smoke_passed/,
     );
   });
 

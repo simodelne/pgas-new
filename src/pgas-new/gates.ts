@@ -41,6 +41,7 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
   ],
   architecture_design: [...SESSION_CONTROL_ACTIONS, 'design_architecture', 'web_research', 'record_user_note'],
   scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'approve_artifact_plan', 'create_curator_request'],
+  domain_synthesis: [...SESSION_CONTROL_ACTIONS, 'synthesize_domain_logic', 'record_user_note'],
   branch_write: [...SESSION_CONTROL_ACTIONS, 'write_scaffold_artifacts', 'git_status'],
   static_verify: [
     ...SESSION_CONTROL_ACTIONS,
@@ -49,8 +50,8 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
     'npm_test',
     'run_static_verification',
     'run_parallel_static_checks',
-    'confirm_live_provider_intent',
   ],
+  smoke_verify: [...SESSION_CONTROL_ACTIONS, 'run_smoke_verification', 'confirm_live_provider_intent'],
   live_verify: [...SESSION_CONTROL_ACTIONS, 'run_api_blackbox_verification', 'run_live_provider_verification'],
   rebase_verify: [...SESSION_CONTROL_ACTIONS, 'git_status', 'git_rebase_latest', 'run_rebase_static_verification'],
   pr_graduation: [...SESSION_CONTROL_ACTIONS, 'open_pull_request'],
@@ -107,11 +108,19 @@ export function canTransition(
     case 'repo_targeting->curator_request':
     case 'scaffold_plan->curator_request':
       return shouldRouteToCurator(state) ? allow() : deny('curator_request_requires_repo_blocker');
-    case 'scaffold_plan->branch_write':
-      return canEnterBranchWrite(state);
+    case 'scaffold_plan->domain_synthesis':
+      return canEnterDomainSynthesis(state);
+    case 'domain_synthesis->branch_write':
+      return state.program.domain_synthesis_complete
+        ? canEnterBranchWrite(state)
+        : deny('branch_write_requires_domain_synthesis_complete');
     case 'branch_write->static_verify':
       return state.artifacts.written ? allow() : deny('static_verify_requires_written_artifacts');
-    case 'static_verify->live_verify':
+    case 'static_verify->smoke_verify':
+      return state.graduation.static_verification === 'passed'
+        ? allow()
+        : deny('smoke_verify_requires_static_passed');
+    case 'smoke_verify->live_verify':
       return canEnterLiveVerify(state);
     case 'live_verify->rebase_verify':
       return state.graduation.live_verification === 'passed'
@@ -149,6 +158,10 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
     return canEnterBranchWrite(state);
   }
 
+  if (action === 'synthesize_domain_logic') {
+    return canEnterDomainSynthesis(state);
+  }
+
   if (action === 'authorize_standalone_target' && state.repo.target_kind !== 'standalone_repo') {
     return deny('standalone_authorization_requires_standalone_target');
   }
@@ -168,8 +181,12 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
     return canEnterLiveVerify(state);
   }
 
-  if (action === 'confirm_live_provider_intent' && state.graduation.static_verification !== 'passed') {
-    return deny('live_provider_intent_requires_static_passed');
+  if (action === 'run_smoke_verification' && state.graduation.static_verification !== 'passed') {
+    return deny('smoke_verify_requires_static_passed');
+  }
+
+  if (action === 'confirm_live_provider_intent' && state.graduation.smoke_verification !== 'passed') {
+    return deny('live_provider_intent_requires_smoke_passed');
   }
 
   if (action === 'run_rebase_static_verification' && state.graduation.rebase_status !== 'passed') {
@@ -220,8 +237,24 @@ function canAuthorizeExistingRepo(state: PgasNewState): GateResult {
 }
 
 function canEnterBranchWrite(state: PgasNewState): GateResult {
+  if (!state.program.domain_synthesis_complete) {
+    return deny('branch_write_requires_domain_synthesis_complete');
+  }
+
+  return canEnterDomainSynthesisBase(state, 'branch_write');
+}
+
+function canEnterDomainSynthesis(state: PgasNewState): GateResult {
+  if (state.program.domain_synthesis_complete) {
+    return deny('domain_synthesis_already_complete');
+  }
+
+  return canEnterDomainSynthesisBase(state, 'domain_synthesis');
+}
+
+function canEnterDomainSynthesisBase(state: PgasNewState, target: 'domain_synthesis' | 'branch_write'): GateResult {
   if (!state.repo.write_authorized) {
-    return deny('branch_write_requires_write_authorization');
+    return deny(`${target}_requires_write_authorization`);
   }
 
   if (state.repo.target_kind === 'existing_repo') {
@@ -232,11 +265,11 @@ function canEnterBranchWrite(state: PgasNewState): GateResult {
   }
 
   if (state.artifact_plan.status !== 'approved' || !state.artifact_plan.approved) {
-    return deny('branch_write_requires_approved_artifact_plan');
+    return deny(`${target}_requires_approved_artifact_plan`);
   }
 
   if (!state.artifact_plan.write_authorized) {
-    return deny('branch_write_requires_artifact_write_authorization');
+    return deny(`${target}_requires_artifact_write_authorization`);
   }
 
   return allow();
@@ -245,6 +278,10 @@ function canEnterBranchWrite(state: PgasNewState): GateResult {
 function canEnterLiveVerify(state: PgasNewState): GateResult {
   if (state.graduation.static_verification !== 'passed') {
     return deny('live_verify_requires_static_passed');
+  }
+
+  if (state.graduation.smoke_verification !== 'passed') {
+    return deny('live_verify_requires_smoke_passed');
   }
 
   if (!state.graduation.live_provider_intent) {

@@ -11,8 +11,9 @@ import {
   type WiringManifest,
 } from '../pgas-new/wiring-manifest.js';
 import { runCompositeStaticChecks } from './composite-checks.js';
+import { synthesizeDomainLogic, type StageBodyGenerator } from './domain-synthesis.js';
 import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain } from './synthesizer.js';
-import { putSynthesizedArtifact, requireSynthesizedArtifact } from './synthesizer-store.js';
+import { putSynthesizedArtifact, requireSynthesizedArtifact, type SynthesizedArtifact } from './synthesizer-store.js';
 
 const defaultStages = [
   { slug: 'start', is_bootstrap: true },
@@ -534,9 +535,13 @@ export const handlers: Record<string, ToolHandler> = {
       spec_yaml: synthesized.spec_yaml,
       mode_names: synthesized.mode_names,
       sha256: synthesized.sha256,
+      contracts_ts: synthesized.contracts_ts,
       handlers_ts: synthesized.handlers_ts,
       handlers_index_ts: synthesized.handlers_index_ts,
       tools_ts: synthesized.tools_ts,
+      smoke_test_ts: synthesized.smoke_test_ts,
+      stage_classification: synthesized.stage_classification,
+      body_stage_slugs: synthesized.body_stage_slugs,
       created_at: new Date().toISOString(),
     });
     return {
@@ -696,15 +701,19 @@ export const handlers: Record<string, ToolHandler> = {
   async plan_artifacts(payload) {
     const sessionId = sessionIdFromPayload(payload);
     const domain = domainFromPayload(payload);
-    requireSynthesizedArtifact(sessionId);
+    const synthesized = requireSynthesizedArtifact(sessionId);
     const program = {
       slug: stringDomainField(domain, 'program.slug'),
       name: stringDomainField(domain, 'program.name'),
     };
     const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
     const plan = targetKind === 'existing_repo'
-      ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain))
-      : createStandaloneArtifactPlan(program);
+      ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain), {
+          stageSlugs: synthesized.body_stage_slugs,
+        })
+      : createStandaloneArtifactPlan(program, {
+          stageSlugs: synthesized.body_stage_slugs,
+        });
 
     return plan.artifacts;
   },
@@ -734,6 +743,24 @@ export const handlers: Record<string, ToolHandler> = {
     return {
       kind: 'note_recorded',
       payload,
+    };
+  },
+
+  async synthesize_domain_logic(payload) {
+    const sessionId = sessionIdFromPayload(payload);
+    const synthesized = requireSynthesizedArtifact(sessionId);
+    const result = await synthesizeDomainLogic(synthesized, {
+      cacheDir: optionalStringPayloadField(payload, 'cache_dir'),
+      providerUrl: optionalStringPayloadField(payload, 'provider_url'),
+      model: optionalStringPayloadField(payload, 'model'),
+      generator: optionalStageBodyGenerator(payload),
+    });
+    putSynthesizedArtifact(sessionId, result);
+    return {
+      kind: 'domain_synthesis',
+      status: 'passed',
+      stage_count: result.domain_synthesis_audit?.length ?? 0,
+      audit: result.domain_synthesis_audit ?? [],
     };
   },
 
@@ -770,23 +797,30 @@ export const handlers: Record<string, ToolHandler> = {
     };
     const targetDir = stringDomainField(domain, 'program.target_dir');
     const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
+    const stageSources = requireAcceptedStageSources(synthesized);
     const result = targetKind === 'existing_repo'
       ? renderExistingRepoAttachment({
           ...program,
           repoRoot: targetDir,
           manifest: parseWiringManifestDomainField(domain),
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
           synthesizedHandlersIndexTs: synthesized.handlers_index_ts,
+          synthesizedStageSources: stageSources,
           synthesizedToolsTs: synthesized.tools_ts,
+          synthesizedSmokeTestTs: synthesized.smoke_test_ts,
         })
       : renderStandaloneScaffold({
           ...program,
           outDir: targetDir,
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
           synthesizedHandlersIndexTs: synthesized.handlers_index_ts,
+          synthesizedStageSources: stageSources,
           synthesizedToolsTs: synthesized.tools_ts,
+          synthesizedSmokeTestTs: synthesized.smoke_test_ts,
         });
 
     return {
@@ -931,6 +965,12 @@ export const handlers: Record<string, ToolHandler> = {
     const cwd = safeCwd(payload);
     const result = await runCommand('npm', ['test', '--', 'tests/api-blackbox.test.ts'], cwd, 180_000);
     return commandResult('npm test -- tests/api-blackbox.test.ts', result, 'static');
+  },
+
+  async run_smoke_verification(payload) {
+    const cwd = safeCwd(payload);
+    const result = await runCommand('npm', ['test', '--', 'tests/generated-program-smoke.test.ts'], cwd, 180_000);
+    return { ...commandResult('npm test -- tests/generated-program-smoke.test.ts', result, 'smoke'), kind: 'smoke_verification' };
   },
 
   /**
@@ -1118,6 +1158,24 @@ function stringPayloadField(payload: Record<string, unknown>, key: string): stri
 function optionalStringPayloadField(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function optionalStageBodyGenerator(payload: Record<string, unknown>): StageBodyGenerator | undefined {
+  const body = payload.__domain_synthesis_body;
+  if (typeof body === 'string') {
+    return async () => body;
+  }
+  const generator = payload.__domain_synthesis_generator;
+  return typeof generator === 'function' ? generator as StageBodyGenerator : undefined;
+}
+
+function requireAcceptedStageSources(artifact: SynthesizedArtifact): Record<string, string> {
+  const stageSources = artifact.stage_sources ?? {};
+  const missing = artifact.body_stage_slugs.filter((stage) => typeof stageSources[stage] !== 'string');
+  if (missing.length > 0) {
+    throw new Error(`domain synthesis incomplete; missing accepted stage bodies: ${missing.join(', ')}`);
+  }
+  return stageSources;
 }
 
 function safeCwd(payload: Record<string, unknown>): string {

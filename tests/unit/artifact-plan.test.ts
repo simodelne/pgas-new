@@ -36,7 +36,9 @@ const MANIFEST: WiringManifest = {
 
 describe('artifact planner', () => {
   it('plans the complete standalone scaffold before writes', () => {
-    const plan = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' });
+    const plan = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' }, {
+      stageSlugs: ['triage'],
+    });
 
     expect(plan.target).toBe('standalone_repo');
     expect(plan.program.slug).toBe('pgas-new');
@@ -51,6 +53,8 @@ describe('artifact planner', () => {
       'src/repl/renderer.ts',
       'src/programs/pgas-new/specs.yml',
       'src/programs/pgas-new/registration.ts',
+      'src/programs/pgas-new/contracts.ts',
+      'src/programs/pgas-new/stages/triage.ts',
       'src/programs/pgas-new/handlers.ts',
       'src/programs/pgas-new/handlers/index.ts',
       'src/programs/pgas-new/handlers/_resolver.ts',
@@ -58,6 +62,7 @@ describe('artifact planner', () => {
       'tests/spec-load.test.ts',
       'tests/control-plane.test.ts',
       'tests/program-deterministic.test.ts',
+      'tests/generated-program-smoke.test.ts',
       'tests/api-blackbox.test.ts',
       'tests/live-provider.test.ts',
       'audit/PGAS-NEW-GRADUATION.md',
@@ -121,12 +126,14 @@ describe('artifact planner', () => {
   });
 
   it('marks every artifact with ownership, mode, purpose, and verification metadata', () => {
-    const plan = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' });
+    const plan = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' }, {
+      stageSlugs: ['triage'],
+    });
 
     for (const artifact of plan.artifacts) {
-      expect(artifact.kind).toMatch(/^(manifest|dossier|metadata|package|config|server|repl|spec|registration|handler|tool|test|audit)$/);
+      expect(artifact.kind).toMatch(/^(manifest|dossier|metadata|package|config|server|repl|spec|registration|contract|handler|stage|tool|test|audit)$/);
       expect(artifact.owner).toBe('pgas-new');
-      expect(artifact.mode_introduced).toMatch(/^(repo_targeting|scaffold_plan|branch_write|static_verify|live_verify|pr_graduation)$/);
+      expect(artifact.mode_introduced).toMatch(/^(repo_targeting|scaffold_plan|domain_synthesis|branch_write|static_verify|smoke_verify|live_verify|pr_graduation)$/);
       expect(artifact.purpose.length).toBeGreaterThan(0);
       expect(artifact.verification.length).toBeGreaterThan(0);
     }

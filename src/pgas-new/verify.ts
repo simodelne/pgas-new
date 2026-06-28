@@ -3,7 +3,7 @@ import type { CommandRequest, CommandResult, CommandRunner, SemanticCommandId } 
 export type VerificationStatus = 'pass' | 'fail' | 'skip';
 
 export interface VerificationEvidence {
-  command_id: SemanticCommandId | 'liveProviderRoundTrip';
+  command_id: SemanticCommandId | 'antiStubScan' | 'liveProviderRoundTrip';
   cwd: string;
   exit_code: number | null;
   duration_ms: number;
@@ -16,6 +16,12 @@ export interface VerificationEvidence {
 export interface VerificationOptions {
   cwd: string;
   runner: CommandRunner;
+}
+
+export interface AntiStubFinding {
+  path: string;
+  marker: string;
+  reason: string;
 }
 
 export interface LiveProviderVerifier {
@@ -33,6 +39,39 @@ export async function runStaticVerification(options: VerificationOptions): Promi
     await options.runner.npmTest(request),
     await options.runner.runGeneratedStaticTests(request),
   ]);
+}
+
+export async function runSmokeVerification(
+  options: VerificationOptions & { executedOutputs?: unknown[] },
+): Promise<VerificationEvidence[]> {
+  const findings = (options.executedOutputs ?? []).flatMap((output, index) =>
+    findExecutedPathStubMarkers(output).map((finding) => ({
+      ...finding,
+      path: `executedOutputs[${index}]${finding.path}`,
+    })),
+  );
+  const antiStubEvidence = antiStubEvidenceFor(options.cwd, findings);
+  if (findings.length > 0) {
+    return [antiStubEvidence];
+  }
+
+  return [
+    antiStubEvidence,
+    ...evidenceFor([await options.runner.runGeneratedSmokeTest(commandRequest(options))]),
+  ];
+}
+
+export function assertNoExecutedPathStubs(value: unknown): void {
+  const findings = findExecutedPathStubMarkers(value);
+  if (findings.length > 0) {
+    throw new Error(`executed output contains stub markers: ${formatAntiStubFindings(findings)}`);
+  }
+}
+
+export function findExecutedPathStubMarkers(value: unknown): AntiStubFinding[] {
+  const findings: AntiStubFinding[] = [];
+  scanExecutedValue(value, '', findings);
+  return findings;
 }
 
 export async function runPostRebaseVerification(
@@ -105,10 +144,92 @@ export function createMockCommandRunner(): CommandRunner & { calls: SemanticComm
     npmTypecheck: (request) => run('npmTypecheck', request),
     npmTest: (request) => run('npmTest', request),
     runGeneratedStaticTests: (request) => run('runGeneratedStaticTests', request),
+    runGeneratedSmokeTest: (request) => run('runGeneratedSmokeTest', request),
     gitStatus: (request) => run('gitStatus', request),
     gitRebaseLatest: (request) => run('gitRebaseLatest', request),
     ghCreatePr: (request) => run('ghCreatePr', request),
   };
+}
+
+function scanExecutedValue(value: unknown, path: string, findings: AntiStubFinding[]): void {
+  if (typeof value === 'string') {
+    scanExecutedString(value, path, findings);
+    return;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      findings.push({ path, marker: 'empty_array', reason: 'default [] fallback output' });
+    }
+    value.forEach((item, index) => scanExecutedValue(item, `${path}[${index}]`, findings));
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const entries = Object.entries(record);
+  if (entries.length === 0) {
+    findings.push({ path, marker: 'empty_object', reason: 'default {} fallback output' });
+    return;
+  }
+
+  if (record.kind === 'stage_action_stub') {
+    findings.push({ path: appendPath(path, 'kind'), marker: 'stage_action_stub', reason: 'stub action kind reached executed path' });
+  }
+
+  for (const [key, child] of entries) {
+    const childPath = appendPath(path, key);
+    if (key.toLowerCase() === 'todo') {
+      findings.push({ path: childPath, marker: 'todo', reason: 'todo field reached executed path' });
+    }
+    scanExecutedValue(child, childPath, findings);
+  }
+}
+
+function scanExecutedString(value: string, path: string, findings: AntiStubFinding[]): void {
+  const trimmed = value.trim();
+  if (trimmed === '{}') {
+    findings.push({ path, marker: 'empty_object', reason: 'default {} fallback output encoded as JSON string' });
+  }
+  if (trimmed === '[]') {
+    findings.push({ path, marker: 'empty_array', reason: 'default [] fallback output encoded as JSON string' });
+  }
+
+  const markers = [
+    { marker: 'stage_action_stub', pattern: /stage_action_stub/u, reason: 'stub action marker reached executed path' },
+    { marker: 'TODO', pattern: /\bTODO\b(?!\(real-service-swap\))/u, reason: 'unsafe TODO marker reached executed path' },
+    { marker: 'not_implemented', pattern: /not implemented|not_implemented/u, reason: 'not-implemented marker reached executed path' },
+    { marker: 'placeholder', pattern: /\bplaceholder\b/u, reason: 'placeholder marker reached executed path' },
+  ];
+  for (const candidate of markers) {
+    if (candidate.pattern.test(value)) {
+      findings.push({ path, marker: candidate.marker, reason: candidate.reason });
+    }
+  }
+}
+
+function appendPath(path: string, key: string): string {
+  return path ? `${path}.${key}` : `.${key}`;
+}
+
+function antiStubEvidenceFor(cwd: string, findings: AntiStubFinding[]): VerificationEvidence {
+  return {
+    command_id: 'antiStubScan',
+    cwd,
+    duration_ms: 0,
+    exit_code: findings.length === 0 ? 0 : 1,
+    status: findings.length === 0 ? 'pass' : 'fail',
+    ...(findings.length === 0
+      ? { stdout_excerpt: 'anti-stub scan passed' }
+      : { stderr_excerpt: formatAntiStubFindings(findings) }),
+  };
+}
+
+function formatAntiStubFindings(findings: AntiStubFinding[]): string {
+  return findings.map((finding) => `${finding.path || '.'}: ${finding.marker} (${finding.reason})`).join('\n');
 }
 
 function evidenceFor(results: CommandResult[]): VerificationEvidence[] {

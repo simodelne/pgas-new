@@ -70,7 +70,11 @@ describe('synthesize_program_spec handler', () => {
       terminal: string[];
       modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
       schema: Record<string, string>;
-      action_map: Record<string, { mutations: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+      action_map: Record<string, {
+        channel?: string;
+        result_path?: string;
+        mutations: Array<{ path: string; value?: unknown; from_arg?: string }>;
+      }>;
       proceed_to: Record<string, string>;
       guidance: Record<string, string[]>;
     };
@@ -89,24 +93,27 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.schema).toMatchObject({
       'intake.started': 'boolean',
       'triage.summary_ready': 'boolean',
-      'triage.result_json': 'string',
-      'triage.items_json': 'string',
+      'triage.output': 'object',
+      'triage.output.result_json': 'string',
+      'triage.output.items_json': 'string',
     });
     expect(parsed.modes.triage.vocabulary).toEqual(expect.arrayContaining(['complete_triage']));
     expect(parsed.modes.triage.vocabulary).not.toContain('example_action');
     expect(parsed.proceed_to.complete_triage).toBe('resolved');
     expect(parsed.action_map).not.toHaveProperty('example_action');
+    expect(parsed.action_map.complete_triage.channel).toBe('stage_output');
+    expect(parsed.action_map.complete_triage.result_path).toBe('triage.output');
     expect(parsed.action_map.complete_triage.mutations).toEqual([
       { op: 'MSet', path: 'triage.summary_ready', value: true },
-      { op: 'MSet', path: 'triage.result_json', from_arg: 'result_json' },
-      { op: 'MSet', path: 'triage.items_json', from_arg: 'items_json' },
     ]);
     expect(parsed.action_map.complete_triage.mutations.map((mutation) => mutation.path)).toEqual([
       'triage.summary_ready',
-      'triage.result_json',
-      'triage.items_json',
     ]);
     expect(parsed.guidance.triage.join('\n')).toContain('delegation');
+    expect(artifact?.contracts_ts).toContain('triage');
+    expect(artifact?.handlers_ts).toContain('runTriage');
+    expect(artifact?.handlers_ts).not.toContain('stage_action_stub');
+    expect(artifact?.smoke_test_ts).toContain('generated program smoke');
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
@@ -190,7 +197,7 @@ describe('synthesize_program_spec handler', () => {
     const parsed = load(artifact?.spec_yaml ?? '') as {
       modes: Record<string, { vocabulary?: string[] }>;
       schema: Record<string, string>;
-      action_map: Record<string, { mutations: Array<{ path: string }> }>;
+      action_map: Record<string, { result_path?: string; mutations: Array<{ path: string }> }>;
       proceed_to: Record<string, string>;
     };
 
@@ -212,21 +219,21 @@ describe('synthesize_program_spec handler', () => {
     ]);
     expect(parsed.action_map.complete_investigate.mutations.map((mutation) => mutation.path)).toEqual([
       'investigate.ready',
-      'investigate.result_json',
-      'investigate.items_json',
     ]);
+    expect(parsed.action_map.complete_investigate.result_path).toBe('investigate.output');
     expect(parsed.action_map.complete_resolve.mutations.map((mutation) => mutation.path)).toEqual([
       'resolve.ready',
-      'resolve.result_json',
-      'resolve.items_json',
     ]);
+    expect(parsed.action_map.complete_resolve.result_path).toBe('resolve.output');
     expect(parsed.schema).toMatchObject({
       'classify.result_json': 'string',
       'classify.items_json': 'string',
-      'investigate.result_json': 'string',
-      'investigate.items_json': 'string',
-      'resolve.result_json': 'string',
-      'resolve.items_json': 'string',
+      'investigate.output': 'object',
+      'investigate.output.result_json': 'string',
+      'investigate.output.items_json': 'string',
+      'resolve.output': 'object',
+      'resolve.output.result_json': 'string',
+      'resolve.output.items_json': 'string',
     });
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
@@ -262,7 +269,7 @@ describe('synthesize_program_spec handler', () => {
     const artifact = getSynthesizedArtifact(sessionId);
     const parsed = load(artifact?.spec_yaml ?? '') as {
       modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
-      action_map: Record<string, { mutations: Array<{ path: string }> }>;
+      action_map: Record<string, { result_path?: string; mutations: Array<{ path: string }> }>;
       proceed_to: Record<string, string>;
     };
 
@@ -293,9 +300,8 @@ describe('synthesize_program_spec handler', () => {
     ]);
     expect(parsed.action_map.complete_revision.mutations.map((mutation) => mutation.path)).toEqual([
       'revision.ready',
-      'revision.result_json',
-      'revision.items_json',
     ]);
+    expect(parsed.action_map.complete_revision.result_path).toBe('revision.output');
     expect(parsed.action_map.advance_review_to_revision.mutations.map((mutation) => mutation.path)).not.toContain('review.done');
     expect(parsed.action_map.advance_review_to_complete.mutations.map((mutation) => mutation.path)).not.toContain('review.needs_revision');
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
@@ -404,10 +410,10 @@ describe('synthesize_program_spec handler', () => {
     expect(result).toMatchObject({ mode_names: stageNames });
     expect(Object.keys(parsed.modes)).toEqual(stageNames);
     expect(parsed.schema).toMatchObject({
-      'intelligence.result_json': 'string',
+      'intelligence.output.result_json': 'string',
       'web_analysis.items_json': 'string',
-      'asset_verification.result_json': 'string',
-      'reporting.items_json': 'string',
+      'asset_verification.output.result_json': 'string',
+      'reporting.output.items_json': 'string',
     });
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });

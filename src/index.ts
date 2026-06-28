@@ -84,10 +84,14 @@ export type {
 } from "./repl/types.js";
 
 export {
+  assertNoExecutedPathStubs,
+  findExecutedPathStubMarkers,
   runLiveProviderVerification,
   runPostRebaseVerification,
+  runSmokeVerification,
   runStaticVerification,
   createMockCommandRunner,
+  type AntiStubFinding,
   type VerificationEvidence,
   type VerificationStatus,
 } from "./pgas-new/verify.js";
