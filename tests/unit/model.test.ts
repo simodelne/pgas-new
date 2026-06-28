@@ -15,6 +15,7 @@ describe('pgas-new governed model', () => {
       'research',
       'repo',
       'program',
+      'domain_synthesis',
       'artifact_plan',
       'artifacts',
       'graduation',
@@ -28,8 +29,10 @@ describe('pgas-new governed model', () => {
       'repo_targeting',
       'architecture_design',
       'scaffold_plan',
+      'domain_synthesis',
       'branch_write',
       'static_verify',
+      'smoke_verify',
       'live_verify',
       'rebase_verify',
       'pr_graduation',
@@ -46,12 +49,15 @@ describe('pgas-new governed model', () => {
     expect(state.intake.research_allowed).toBe(false);
     expect(state.program.runtime).toBe('typescript-node');
     expect(state.program.architecture_ready).toBe(false);
+    expect(state.program.domain_synthesis_complete).toBe(false);
+    expect(state.domain_synthesis.audit).toEqual({});
     expect(state.repo.target_kind).toBe('unknown');
     expect(state.repo.blocked).toBe(false);
     expect(state.repo.write_authorized).toBe(false);
     expect(state.repo.wiring_manifest.status).toBe('unknown');
     expect(state.artifact_plan.status).toBe('none');
     expect(state.graduation.static_verification).toBe('pending');
+    expect(state.graduation.smoke_verification).toBe('pending');
     expect(state.graduation.live_verification).toBe('pending');
     expect(state.graduation.rebase_status).toBe('pending');
     expect(state.graduation.rebase_verification).toBe('pending');
@@ -66,6 +72,8 @@ describe('pgas-new governed model', () => {
     expect(PGAS_NEW_ACTIONS).toContain('authorize_standalone_target');
     expect(PGAS_NEW_ACTIONS).toContain('authorize_existing_repo_target');
     expect(PGAS_NEW_ACTIONS).toContain('git_rebase_latest');
+    expect(PGAS_NEW_ACTIONS).toContain('synthesize_domain_logic');
+    expect(PGAS_NEW_ACTIONS).toContain('run_smoke_verification');
     expect(PGAS_NEW_ACTIONS).toContain('confirm_live_provider_intent');
     expect(PGAS_NEW_ACTIONS).toContain('run_rebase_static_verification');
     expect(PGAS_NEW_ACTIONS).toContain('open_pull_request');

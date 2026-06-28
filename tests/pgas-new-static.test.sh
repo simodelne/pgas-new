@@ -46,12 +46,13 @@ else
     cd "$WORK"
     cat > .npmrc <<'NPMRC'
 @simodelne:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NPM_TOKEN}
+    //npm.pkg.github.com/:_authToken=${NPM_TOKEN}
 always-auth=true
 NPMRC
-    NPM_TOKEN="$NPM_TOKEN" npm install --no-audit --no-fund >/tmp/pgas-new-generated-install.log 2>&1
-    npm run typecheck >/tmp/pgas-new-generated-typecheck.log 2>&1
-    npm test >/tmp/pgas-new-generated-test.log 2>&1
+    mkdir -p "$WORK/.npm-cache"
+    NPM_TOKEN="$NPM_TOKEN" npm_config_cache="$WORK/.npm-cache" npm install --no-audit --no-fund >/tmp/pgas-new-generated-install.log 2>&1
+    npm_config_cache="$WORK/.npm-cache" npm run typecheck >/tmp/pgas-new-generated-typecheck.log 2>&1
+    npm_config_cache="$WORK/.npm-cache" npm test >/tmp/pgas-new-generated-test.log 2>&1
   ) && pass "generated scaffold install/typecheck/test passed" || fail "generated scaffold install/typecheck/test failed"
 fi
 

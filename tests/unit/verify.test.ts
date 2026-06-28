@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertNoExecutedPathStubs,
   createMockCommandRunner,
+  findExecutedPathStubMarkers,
   runLiveProviderVerification,
   runPostRebaseVerification,
+  runSmokeVerification,
   runStaticVerification,
 } from '../../src/pgas-new/verify.js';
 
@@ -125,5 +128,57 @@ describe('verification runner', () => {
       'runGeneratedStaticTests',
     ]);
     expect(evidence.map((item) => item.command_id)).toEqual(runner.calls);
+  });
+
+  it('runs anti-stub scanning before the generated smoke test', async () => {
+    const runner = createMockCommandRunner();
+    const evidence = await runSmokeVerification({
+      cwd: '/repo',
+      runner,
+      executedOutputs: [
+        {
+          result_json: JSON.stringify({ status: 'triaged' }),
+          items_json: JSON.stringify(['triaged']),
+        },
+      ],
+    });
+
+    expect(runner.calls).toEqual(['runGeneratedSmokeTest']);
+    expect(evidence.map((item) => item.command_id)).toEqual(['antiStubScan', 'runGeneratedSmokeTest']);
+    expect(evidence.every((item) => item.status === 'pass')).toBe(true);
+  });
+
+  it('fails smoke verification before command execution when executed outputs contain stubs', async () => {
+    const runner = createMockCommandRunner();
+    const evidence = await runSmokeVerification({
+      cwd: '/repo',
+      runner,
+      executedOutputs: [
+        { kind: 'stage_action_stub', todo: 'fill me in' },
+      ],
+    });
+
+    expect(runner.calls).toEqual([]);
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      command_id: 'antiStubScan',
+      status: 'fail',
+      exit_code: 1,
+    });
+    expect(evidence[0].stderr_excerpt).toMatch(/stage_action_stub/);
+    expect(evidence[0].stderr_excerpt).toMatch(/todo field/);
+  });
+
+  it('detects executed-path default fallback shapes and unsafe TODO markers', () => {
+    const findings = findExecutedPathStubMarkers({
+      result_json: {},
+      items_json: [],
+      message: 'TODO: implement later',
+    });
+
+    expect(findings.map((finding) => finding.marker)).toEqual(
+      expect.arrayContaining(['empty_object', 'empty_array', 'TODO']),
+    );
+    expect(() => assertNoExecutedPathStubs({ result_json: '{}' })).toThrow(/stub markers/);
   });
 });

@@ -42,8 +42,10 @@ const RESERVED_FOUNDRY_MODE_NAMES = [
   'repo_targeting',
   'architecture_design',
   'scaffold_plan',
+  'domain_synthesis',
   'branch_write',
   'static_verify',
+  'smoke_verify',
   'live_verify',
   'rebase_verify',
   'pr_graduation',
@@ -80,13 +82,14 @@ interface Completion {
 }
 
 interface SynthesizedSpec {
+  channels?: Record<string, unknown>;
   modes: Record<string, {
     channels?: string[];
     transitions?: Array<{ target: string; guard?: { path?: string } }>;
     vocabulary?: string[];
   }>;
   schema: Record<string, string>;
-  action_map: Record<string, { channel?: string; mutations?: Array<{ path?: string }> }>;
+  action_map: Record<string, { channel?: string; result_path?: string; mutations?: Array<{ path?: string }> }>;
   proceed_to: Record<string, string>;
   features?: string[];
   control_plane?: unknown;
@@ -300,7 +303,14 @@ function assertFmClosure(spec: SynthesizedSpec): void {
   }
 
   for (const [action, mapping] of Object.entries(spec.action_map)) {
-    expect(mapping.channel, `FM4 ${action} should declare widget_output channel`).toBe('widget_output');
+    expect(mapping.channel, `FM4 ${action} should declare an output channel`).toBeDefined();
+    expect(spec.channels?.[mapping.channel as string], `FM4 ${action} channel ${mapping.channel} should be top-level declared`).toBeDefined();
+    if (mapping.result_path) {
+      expect(isSchemaDeclared(mapping.result_path, schemaPaths), `FM1 ${action} result_path ${mapping.result_path} should be schema-declared`).toBe(true);
+      expect(mapping.channel, `FM4 ${action} result_path actions should use stage_output`).toBe('stage_output');
+    } else {
+      expect(mapping.channel, `FM4 ${action} non-result_path actions should use widget_output`).toBe('widget_output');
+    }
     for (const mutation of mapping.mutations ?? []) {
       if (!mutation.path) continue;
       expect(isSchemaDeclared(mutation.path, schemaPaths), `FM1 ${action} mutation path ${mutation.path} should be schema-declared`).toBe(true);
@@ -341,21 +351,31 @@ function assertPerStageActionTopology(spec: SynthesizedSpec): void {
     for (const action of stageActions) {
       const target = spec.proceed_to[action];
       const transition = transitions.find((candidate) => candidate.target === target);
-      const mutationPaths = (spec.action_map[action]?.mutations ?? [])
+      const mapping = spec.action_map[action];
+      const mutationPaths = (mapping?.mutations ?? [])
         .map((mutation) => mutation.path)
         .filter((path): path is string => Boolean(path));
-      const allowedPaths = new Set([
-        `${modeName}.result_json`,
-        `${modeName}.items_json`,
-        ...(transition?.guard?.path ? [transition.guard.path] : []),
-      ]);
+      const isResultPathAction = mapping?.result_path !== undefined;
+      const stageOutputPaths = isResultPathAction
+        ? [mapping.result_path as string]
+        : [`${modeName}.result_json`, `${modeName}.items_json`];
+      const declaredWritePaths = isResultPathAction ? [...mutationPaths, ...stageOutputPaths] : mutationPaths;
+      const allowedPaths = new Set([...stageOutputPaths, ...(transition?.guard?.path ? [transition.guard.path] : [])]);
 
-      expect(new Set(mutationPaths), `${action} should write only ${modeName}'s own paths`).toEqual(allowedPaths);
-      expect(mutationPaths, `${action} should not write duplicate paths`).toHaveLength(allowedPaths.size);
+      expect(new Set(declaredWritePaths), `${action} should write only ${modeName}'s own paths`).toEqual(allowedPaths);
+      expect(declaredWritePaths, `${action} should not write duplicate paths`).toHaveLength(allowedPaths.size);
+      if (isResultPathAction) {
+        expect(mapping?.channel, `${action} result_path action should use stage_output`).toBe('stage_output');
+        expect(mapping?.result_path, `${action} should land handler output in ${modeName}.output`).toBe(`${modeName}.output`);
+        expect(mutationPaths, `${action} result_path action should not also mutate JSON output paths`).not.toContain(`${modeName}.result_json`);
+        expect(mutationPaths, `${action} result_path action should not also mutate item output paths`).not.toContain(`${modeName}.items_json`);
+      } else {
+        expect(mapping?.channel, `${action} from_arg action should use widget_output`).toBe('widget_output');
+      }
 
       for (const guardPath of guardPaths) {
         if (guardPath === transition?.guard?.path) continue;
-        expect(mutationPaths, `${action} must not satisfy sibling branch guard ${guardPath}`).not.toContain(guardPath);
+        expect(declaredWritePaths, `${action} must not satisfy sibling branch guard ${guardPath}`).not.toContain(guardPath);
       }
     }
   }

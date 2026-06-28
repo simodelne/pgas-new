@@ -23,9 +23,12 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
+  synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
   synthesizedHandlersIndexTs?: string;
+  synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
+  synthesizedSmokeTestTs?: string;
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -34,9 +37,12 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
+  synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
   synthesizedHandlersIndexTs?: string;
+  synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
+  synthesizedSmokeTestTs?: string;
 }
 
 export interface RenderResult {
@@ -53,9 +59,12 @@ interface TemplateSpec {
 
 interface SynthesizedSources {
   specYaml?: string;
+  contractsTs?: string;
   handlersTs?: string;
   handlersIndexTs?: string;
+  stageSources?: Record<string, string>;
   toolsTs?: string;
+  smokeTestTs?: string;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -86,7 +95,11 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
 };
 
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
-  const plan = createStandaloneArtifactPlan({ slug: options.slug, name: options.name });
+  const synthesizedSources = synthesizedSourcesFor(options);
+  const plan = createStandaloneArtifactPlan(
+    { slug: options.slug, name: options.name },
+    { stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}) },
+  );
   assertSupportedTemplate(options.template);
 
   assertNoExistingArtifacts(options.outDir, plan);
@@ -94,13 +107,18 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
   return renderPlan({
     plan,
     rootDir: options.outDir,
-    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, synthesizedSourcesFor(options)),
+    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, synthesizedSources),
     tokens: tokensFor(options, plan),
   });
 }
 
 export function renderExistingRepoAttachment(options: RenderExistingRepoOptions): RenderResult {
-  const plan = createExistingRepoArtifactPlan({ slug: options.slug, name: options.name }, options.manifest);
+  const synthesizedSources = synthesizedSourcesFor(options);
+  const plan = createExistingRepoArtifactPlan(
+    { slug: options.slug, name: options.name },
+    options.manifest,
+    { stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}) },
+  );
   assertSupportedTemplate(options.template);
 
   assertNoExistingArtifacts(options.repoRoot, plan);
@@ -108,7 +126,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
   return renderPlan({
     plan,
     rootDir: options.repoRoot,
-    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, synthesizedSourcesFor(options)),
+    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, synthesizedSources),
     tokens: tokensFor(options, plan),
   });
 }
@@ -303,14 +321,24 @@ function templateForSynthesizedArtifact(
   if (artifact.path.endsWith(`/${slug}/registration.ts`)) {
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
+  if (artifact.path.endsWith(`/${slug}/contracts.ts`) && synthesizedSources.contractsTs) {
+    return inlineTemplate(synthesizedSources.contractsTs);
+  }
   if (artifact.path.endsWith(`/${slug}/handlers.ts`) && synthesizedSources.handlersTs) {
     return inlineTemplate(synthesizedSources.handlersTs);
   }
   if (artifact.path.endsWith(`/${slug}/handlers/index.ts`) && synthesizedSources.handlersIndexTs) {
     return inlineTemplate(synthesizedSources.handlersIndexTs);
   }
+  const stageMatch = artifact.path.match(new RegExp(`/${slug}/stages/([^/]+)\\.ts$`, 'u'));
+  if (stageMatch?.[1] && synthesizedSources.stageSources?.[stageMatch[1]]) {
+    return inlineTemplate(synthesizedSources.stageSources[stageMatch[1]]);
+  }
   if (artifact.path.endsWith(`/${slug}/tools.ts`) && synthesizedSources.toolsTs) {
     return inlineTemplate(synthesizedSources.toolsTs);
+  }
+  if (artifact.path === 'tests/generated-program-smoke.test.ts' && synthesizedSources.smokeTestTs) {
+    return inlineTemplate(synthesizedSources.smokeTestTs);
   }
   return undefined;
 }
@@ -348,15 +376,21 @@ function selectTokens(tokens: Record<string, string>, names: readonly string[]):
 
 function synthesizedSourcesFor(options: {
   synthesizedSpecYaml?: string;
+  synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
   synthesizedHandlersIndexTs?: string;
+  synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
+  synthesizedSmokeTestTs?: string;
 }): SynthesizedSources {
   return {
     specYaml: options.synthesizedSpecYaml,
+    contractsTs: options.synthesizedContractsTs,
     handlersTs: options.synthesizedHandlersTs,
     handlersIndexTs: options.synthesizedHandlersIndexTs,
+    stageSources: options.synthesizedStageSources,
     toolsTs: options.synthesizedToolsTs,
+    smokeTestTs: options.synthesizedSmokeTestTs,
   };
 }
 

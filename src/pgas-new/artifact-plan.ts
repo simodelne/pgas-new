@@ -11,7 +11,9 @@ export type ArtifactKind =
   | 'repl'
   | 'spec'
   | 'registration'
+  | 'contract'
   | 'handler'
+  | 'stage'
   | 'tool'
   | 'test'
   | 'audit';
@@ -54,9 +56,17 @@ export interface ArtifactPlan {
   };
 }
 
-export function createStandaloneArtifactPlan(program: ProgramIdentity): ArtifactPlan {
+export interface GeneratedArtifactPlanOptions {
+  stageSlugs?: string[];
+}
+
+export function createStandaloneArtifactPlan(
+  program: ProgramIdentity,
+  options: GeneratedArtifactPlanOptions = {},
+): ArtifactPlan {
   const safeProgram = validateProgramIdentity(program);
   const slug = safeProgram.slug;
+  const stageSlugs = safeStageSlugs(options.stageSlugs ?? []);
   return {
     target: 'standalone_repo',
     program: safeProgram,
@@ -94,6 +104,7 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
         'typecheck',
         'program-deterministic',
       ]),
+      ...generatedDomainArtifacts(`src/programs/${slug}`, stageSlugs),
       artifact('handler', `src/programs/${slug}/handlers.ts`, 'Implement stubbed action handlers and attachment points.', 'branch_write', [
         'program-deterministic',
       ]),
@@ -115,6 +126,12 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
       artifact('test', 'tests/program-deterministic.test.ts', 'Verify deterministic program behavior without live provider calls.', 'static_verify', [
         'npm-test',
       ]),
+      ...(stageSlugs.length > 0
+        ? [artifact('test', 'tests/generated-program-smoke.test.ts', 'Verify synthesized stage bodies run through the deterministic smoke path without stub output.', 'smoke_verify', [
+            'smoke_verify',
+            'npm-test',
+          ])]
+        : []),
       artifact('test', 'tests/api-blackbox.test.ts', 'Verify the external API contract through pgas-server client transports.', 'static_verify', [
         'npm-test',
       ]),
@@ -128,12 +145,17 @@ export function createStandaloneArtifactPlan(program: ProgramIdentity): Artifact
   };
 }
 
-export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifest: WiringManifest): ArtifactPlan {
+export function createExistingRepoArtifactPlan(
+  program: ProgramIdentity,
+  manifest: WiringManifest,
+  options: GeneratedArtifactPlanOptions = {},
+): ArtifactPlan {
   const safeProgram = validateProgramIdentity(program);
   if (manifest.repo.kind !== 'existing_repo') {
     throw new Error('repo.kind must be existing_repo for attach planning');
   }
   const slug = safeProgram.slug;
+  const stageSlugs = safeStageSlugs(options.stageSlugs ?? []);
   assertSafeManifestDir('paths.programs_dir', manifest.paths.programs_dir);
   assertSafeManifestDir('paths.pgas_new_dir', manifest.paths.pgas_new_dir);
   assertSafeManifestDir('paths.audit_dir', manifest.paths.audit_dir);
@@ -155,6 +177,7 @@ export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifes
       artifact('registration', `${programsDir}/${slug}/registration.ts`, 'Register the attached PGAS program through public plugin.js helpers.', 'branch_write', [
         'typecheck',
       ]),
+      ...generatedDomainArtifacts(`${programsDir}/${slug}`, stageSlugs),
       artifact('handler', `${programsDir}/${slug}/handlers.ts`, 'Implement stubbed program handlers for repo-owned integration.', 'branch_write', [
         'program-deterministic',
       ]),
@@ -180,6 +203,26 @@ export function createExistingRepoArtifactPlan(program: ProgramIdentity, manifes
   };
 }
 
+function generatedDomainArtifacts(programPath: string, stageSlugs: string[]): PlannedArtifact[] {
+  if (stageSlugs.length === 0) {
+    return [];
+  }
+
+  return [
+    artifact('contract', `${programPath}/contracts.ts`, 'Declare frozen StageInput, StageRuntime, StageOutput, classification, and action contracts for synthesized domain bodies.', 'domain_synthesis', [
+      'typecheck',
+      'smoke_verify',
+    ]),
+    ...stageSlugs.map((stageSlug) =>
+      artifact('stage', `${programPath}/stages/${stageSlug}.ts`, `Implement accepted synthesized domain logic for the ${stageSlug} stage.`, 'domain_synthesis', [
+        'stage-verify',
+        'typecheck',
+        'smoke_verify',
+      ]),
+    ),
+  ];
+}
+
 function artifact(
   kind: ArtifactKind,
   path: string,
@@ -199,6 +242,21 @@ function artifact(
 
 function trimSlashes(path: string): string {
   return path.replace(/^\/+|\/+$/g, '');
+}
+
+function safeStageSlugs(stageSlugs: string[]): string[] {
+  const safeStageSlug = /^[a-z0-9_]+$/;
+  const seen = new Set<string>();
+  return stageSlugs.map((stageSlug) => {
+    if (!safeStageSlug.test(stageSlug)) {
+      throw new Error(`invalid synthesized stage slug: ${stageSlug}`);
+    }
+    if (seen.has(stageSlug)) {
+      throw new Error(`duplicate synthesized stage slug: ${stageSlug}`);
+    }
+    seen.add(stageSlug);
+    return stageSlug;
+  });
 }
 
 function assertSafeManifestDir(label: string, path: string): void {

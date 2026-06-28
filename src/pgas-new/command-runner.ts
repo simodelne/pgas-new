@@ -6,6 +6,7 @@ export type SemanticCommandId =
   | 'npmTypecheck'
   | 'npmTest'
   | 'runGeneratedStaticTests'
+  | 'runGeneratedSmokeTest'
   | 'gitStatus'
   | 'gitRebaseLatest'
   | 'ghCreatePr';
@@ -31,6 +32,7 @@ export interface CommandRunner {
   npmTypecheck(request: CommandRequest): Promise<CommandResult>;
   npmTest(request: CommandRequest): Promise<CommandResult>;
   runGeneratedStaticTests(request: CommandRequest): Promise<CommandResult>;
+  runGeneratedSmokeTest(request: CommandRequest): Promise<CommandResult>;
   gitStatus(request: CommandRequest): Promise<CommandResult>;
   gitRebaseLatest(request: CommandRequest): Promise<CommandResult>;
   ghCreatePr(request: CommandRequest): Promise<CommandResult>;
@@ -62,6 +64,8 @@ export function createNodeCommandRunner(spawnImpl: SpawnImpl = spawn as unknown 
     npmTest: (request) => runSemanticCommand('npmTest', request, { command: 'npm', args: ['test'] }, spawnImpl),
     runGeneratedStaticTests: (request) =>
       runSemanticCommand('runGeneratedStaticTests', request, { command: 'npm', args: ['run', 'test:static'] }, spawnImpl),
+    runGeneratedSmokeTest: (request) =>
+      runSemanticCommand('runGeneratedSmokeTest', request, { command: 'npm', args: ['test', '--', 'tests/generated-program-smoke.test.ts'] }, spawnImpl),
     gitStatus: (request) => runSemanticCommand('gitStatus', request, { command: 'git', args: ['status', '--short'] }, spawnImpl),
     gitRebaseLatest: (request) => {
       const branch = request.branch ?? 'main';

@@ -87,9 +87,10 @@ export async function synthesizeDomainLogic(
     }
 
     let lastError = '';
-    const seenFailures = new Set<string>();
     let accepted: CacheRecord | undefined;
+    let attemptsUsed = 0;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      attemptsUsed = attempt;
       const body = await generator({
         stage,
         archetype: classification.archetype,
@@ -97,7 +98,7 @@ export async function synthesizeDomainLogic(
         prompt,
         ...(lastError ? { repair: { attempt, lastError } } : {}),
       });
-      const verification = verifyStageBody(body);
+      const verification = verifyStageBody(body, classification.archetype);
       if (verification.ok) {
         accepted = {
           body,
@@ -106,11 +107,6 @@ export async function synthesizeDomainLogic(
         break;
       }
       lastError = verification.error;
-      const signature = sha256(lastError);
-      if (seenFailures.has(signature)) {
-        break;
-      }
-      seenFailures.add(signature);
     }
 
     if (!accepted) {
@@ -123,7 +119,7 @@ export async function synthesizeDomainLogic(
       stage,
       archetype: classification.archetype,
       adapter_kind: classification.adapter_kind,
-      attempts: seenFailures.size + 1,
+      attempts: attemptsUsed,
       cache_hit: false,
       body_hash: accepted.body_hash,
     });
@@ -136,7 +132,12 @@ export async function synthesizeDomainLogic(
   };
 }
 
-function verifyStageBody(body: string): { ok: true } | { ok: false; error: string } {
+function verifyStageBody(body: string, archetype: 'pure-compute' | 'external-adapter'): { ok: true } | { ok: false; error: string } {
+  const stubError = scanBodyStubMarkers(body, archetype);
+  if (stubError) {
+    return { ok: false, error: stubError };
+  }
+
   const source = ts.createSourceFile('stage.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const safetyError = scanSafety(source);
   if (safetyError) {
@@ -164,6 +165,31 @@ function verifyStageBody(body: string): { ok: true } | { ok: false; error: strin
   }
 
   return { ok: true };
+}
+
+function scanBodyStubMarkers(body: string, archetype: 'pure-compute' | 'external-adapter'): string | undefined {
+  const todoMatches = [...body.matchAll(/\bTODO(?:\(([^)]+)\))?/gu)];
+  for (const match of todoMatches) {
+    const marker = match[0];
+    const qualifier = match[1];
+    if (archetype === 'external-adapter' && marker === 'TODO(real-service-swap)' && qualifier === 'real-service-swap') {
+      continue;
+    }
+    return `stub marker in generated stage body: ${marker}`;
+  }
+
+  const markerPatterns = [
+    { marker: 'stage_action_stub', pattern: /stage_action_stub/u },
+    { marker: 'not implemented', pattern: /not implemented|not_implemented/u },
+    { marker: 'placeholder', pattern: /\bplaceholder\b/u },
+  ];
+  for (const candidate of markerPatterns) {
+    if (candidate.pattern.test(body)) {
+      return `stub marker in generated stage body: ${candidate.marker}`;
+    }
+  }
+
+  return undefined;
 }
 
 function scanSafety(source: ts.SourceFile): string | undefined {
@@ -230,7 +256,15 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
         model: config.model,
         temperature: 0,
         messages: [
-          { role: 'system', content: 'Return only TypeScript source code. Do not use markdown fences.' },
+          {
+            role: 'system',
+            content: [
+              'Return only TypeScript source code. Do not use markdown fences.',
+              'Do not include comments.',
+              'Do not include the literal words TODO, placeholder, stage_action_stub, or not implemented.',
+              "The only allowed import is: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
+            ].join(' '),
+          },
           {
             role: 'user',
             content: request.repair
@@ -259,9 +293,16 @@ function promptForStage(stage: string, classification: StageClassification, arti
     classification.archetype === 'external-adapter'
       ? 'Use an in-memory mock only and include adapter_kind in the returned output. The only permitted TODO marker is TODO(real-service-swap).'
       : 'Implement deterministic local pure-compute logic.',
+    'Do not include comments or any stub marker words: TODO, placeholder, stage_action_stub, not implemented.',
+    "Use exactly one import line: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
+    'Do not import handlers, resolver helpers, Node built-ins, runtime packages, or any other module.',
     'Export exactly: async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput>.',
     'Return JSON strings result_json and items_json; do not compute digest yourself.',
+    'For pure-compute stages, build a complete deterministic object from input.stage, runtime.now(), and simple facts from input.domain. If no domain fact is relevant, still return a meaningful non-empty object with status, summary, severity, owner_queue, next_action, and summary_ready fields.',
+    'For items_json, return a non-empty JSON array of concise strings derived from the result object.',
     'Do not use eval, dynamic import, child_process, shell, fetch/raw network, process.env, or secret reads.',
+    'Untrusted generated spec context:',
+    artifact.spec_yaml,
     'Frozen contract:',
     artifact.contracts_ts,
   ].join('\n');

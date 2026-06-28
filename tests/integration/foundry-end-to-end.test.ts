@@ -19,6 +19,17 @@ const transitions = [
   { from: 'triage', to: 'resolved', trigger: 'summary_ready', guard_field: 'triage.summary_ready' },
 ];
 
+const synthesizedTriageBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  return {
+    result_json: JSON.stringify({ stage: input.stage, status: 'triaged', at: runtime.now() }),
+    items_json: JSON.stringify(['triaged']),
+    digest: '',
+  };
+}
+`;
+
 interface CommandCheck {
   command: string;
   status: 'passed' | 'skipped';
@@ -60,6 +71,16 @@ describe('foundry end-to-end acceptance gate', () => {
         'draft artifact plan before approval',
       );
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const domainReady = await waitForSnapshot(
+        harness,
+        (snapshot) =>
+          snapshot.mode === 'branch_write' &&
+          snapshot.domain['program.domain_synthesis_complete'] === true,
+        'domain synthesis completion before branch write',
+      );
+      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['synthesize_domain_logic']));
+
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
       const finalSnapshot = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.mode === 'pr_graduation' && snapshot.terminal === true,
@@ -87,6 +108,7 @@ describe('foundry end-to-end acceptance gate', () => {
           'synthesize_program_spec',
           'plan_artifacts',
           'approve_artifact_plan',
+          'synthesize_domain_logic',
           'write_scaffold_artifacts',
           'run_static_verification',
           'confirm_live_provider_intent',
@@ -124,6 +146,16 @@ describe('foundry end-to-end acceptance gate', () => {
         'draft artifact plan before approval',
       );
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      const domainReady = await waitForSnapshot(
+        harness,
+        (snapshot) =>
+          snapshot.mode === 'branch_write' &&
+          snapshot.domain['program.domain_synthesis_complete'] === true,
+        'domain synthesis completion before composite static checks',
+      );
+      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['synthesize_domain_logic']));
+
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
       // The opt-in packed action fires in static_verify on the auto-continue
       // chain after write_scaffold_artifacts and writes its combined envelope to
       // the world. It does not force-continue the ladder (single-call
@@ -214,8 +246,13 @@ function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] 
     effect('synthesize_program_spec'),
     effect('plan_artifacts'),
     effect('approve_artifact_plan'),
+    effect('synthesize_domain_logic', {
+      cache_dir: join(targetDir, '.domain-synthesis-cache'),
+      __domain_synthesis_body: synthesizedTriageBody,
+    }),
     effect('write_scaffold_artifacts', { cwd: targetDir }),
     effect('run_static_verification', { status: 'passed', evidence_id: 'static-e2e' }),
+    markSmokeVerificationPassed(),
     effect('confirm_live_provider_intent'),
     markLiveVerificationPassed(),
     markRebasePassed(),
@@ -311,6 +348,16 @@ function markLiveVerificationPassed(): TestHarnessAuthorResponse {
   };
 }
 
+function markSmokeVerificationPassed(): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      mutation('run_smoke_verification', 'graduation.smoke_verification', 'passed'),
+      mutation('run_smoke_verification', 'graduation.smoke_evidence_id', 'smoke-e2e'),
+      terminal('session_status', continuationNotice()),
+    ],
+  };
+}
+
 function markRebasePassed(): TestHarnessAuthorResponse {
   return {
     actions: [
@@ -333,7 +380,11 @@ function terminal(name: string, payload: Record<string, unknown> = {}): Record<s
   return {
     kind: 'EffectAction',
     name,
-    channel: name === 'plan_artifacts' ? 'artifact_plan_output' : 'widget_output',
+    channel: name === 'plan_artifacts'
+      ? 'artifact_plan_output'
+      : name === 'synthesize_domain_logic'
+        ? 'domain_synthesis_output'
+        : 'widget_output',
     payload,
   };
 }
@@ -373,7 +424,12 @@ function runGeneratedChecks(targetDir: string): CommandCheck[] {
 
 function runGeneratedCommand(targetDir: string, args: string[], command: string, timeout: number): CommandCheck {
   try {
-    execFileSync('npm', args, { cwd: targetDir, stdio: 'pipe', timeout });
+    execFileSync('npm', args, {
+      cwd: targetDir,
+      env: { ...process.env, npm_config_cache: join(targetDir, '.npm-cache') },
+      stdio: 'pipe',
+      timeout,
+    });
     return { command, status: 'passed' };
   } catch (error) {
     const output = commandFailureOutput(error);

@@ -71,15 +71,20 @@ describe('domain logic synthesis', () => {
 
   it('hard-fails after capped repair attempts without a stub fallback', async () => {
     await withCache(async (cacheDir) => {
+      let attempts = 0;
       await expect(
         synthesizeDomainLogic(artifact(), {
           cacheDir,
           maxAttempts: 2,
           providerUrl: 'http://provider.local/v1',
           model: 'qwen36-27b',
-          generator: async () => 'export const nope = 1;',
+          generator: async () => {
+            attempts += 1;
+            return 'export const nope = 1;';
+          },
         }),
       ).rejects.toThrow(/domain synthesis failed for stage calculate after 2 attempts/u);
+      expect(attempts).toBe(2);
     });
   });
 
@@ -94,6 +99,63 @@ describe('domain logic synthesis', () => {
           generator: async () => `export async function runStage() { return eval('1'); }`,
         }),
       ).rejects.toThrow(/banned capability.*eval/u);
+    });
+  });
+
+  it('rejects pure-compute bodies that still contain stub markers', async () => {
+    await withCache(async (cacheDir) => {
+      await expect(
+        synthesizeDomainLogic(artifact(), {
+          cacheDir,
+          maxAttempts: 1,
+          providerUrl: 'http://provider.local/v1',
+          model: 'qwen36-27b',
+          generator: async () => `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void input;
+  void runtime;
+  // TODO: fill this in later
+  return { result_json: '{}', items_json: '[]', digest: '' };
+}
+`,
+        }),
+      ).rejects.toThrow(/stub marker.*TODO/u);
+    });
+  });
+
+  it('allows the real-service-swap TODO only for external-adapter mock bodies', async () => {
+    const externalArtifact = {
+      ...artifact(),
+      stage_classification: [
+        { slug: 'calculate', archetype: 'external-adapter', adapter_kind: 'in_memory_mock', rationale: 'adapter' },
+      ],
+    } satisfies SynthesizedArtifact;
+
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(externalArtifact, {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+// TODO(real-service-swap): replace the in-memory mock with the real adapter in a future integration.
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, adapter_kind: 'in_memory_mock' }),
+    items_json: JSON.stringify(['mocked']),
+    digest: '',
+  };
+}
+`,
+      });
+
+      expect(result.stage_sources?.calculate).toContain('TODO(real-service-swap)');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        archetype: 'external-adapter',
+        adapter_kind: 'in_memory_mock',
+      }));
     });
   });
 
