@@ -775,6 +775,10 @@ function renderSmokeTestSource(
     }
     return `        effect(${tsString(action.name)}, { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),`;
   }).join('\n');
+  const externalAdapterAssertions = pathActions
+    .filter((action) => action.archetype === 'external-adapter')
+    .map((action) => `      expect(serialized).toContain(${tsString('in_memory_mock')});`)
+    .join('\n');
 
   return `import { describe, expect, it } from 'vitest';
 import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
@@ -798,7 +802,7 @@ ${pathActions.slice(1).map(() => "      await harness.trigger('continue generate
       const serialized = JSON.stringify(snapshot.domain).toLowerCase();
       expect(serialized).not.toContain('stage_action_stub');
       expect(serialized).not.toContain('"todo"');
-    } finally {
+${externalAdapterAssertions ? `${externalAdapterAssertions}\n` : ''}    } finally {
       await harness.close();
     }
   });
