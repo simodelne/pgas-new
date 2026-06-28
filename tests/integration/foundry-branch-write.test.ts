@@ -78,6 +78,20 @@ describe('foundry branch_write', () => {
       expect(readFileSync(join(targetDir, 'src/programs/incident-triage/specs.yml'), 'utf8')).toContain(
         'Program: Incident Triage.',
       );
+      const handlersRoot = readFileSync(join(targetDir, 'src/programs/incident-triage/handlers.ts'), 'utf8');
+      const handlersIndex = readFileSync(join(targetDir, 'src/programs/incident-triage/handlers/index.ts'), 'utf8');
+      const tools = readFileSync(join(targetDir, 'src/programs/incident-triage/tools.ts'), 'utf8');
+
+      expect(handlersRoot).toContain('async complete_triage(payload)');
+      expect(handlersRoot).toContain('TODO: implement the triage stage');
+      expect(handlersRoot).not.toContain('example_action');
+      expect(handlersIndex).toContain('async complete_triage(payload)');
+      expect(handlersIndex).not.toContain('example_action');
+      expect(tools).toContain('stageActionTools');
+      expect(tools).toContain('complete_triage');
+      expect(tools).toContain("mode: 'triage'");
+      expect(tools).toContain("target: 'resolved'");
+      expect(tools).toContain("'triage.summary_ready'");
 
       if (process.env.NPM_TOKEN) {
         execFileSync('npm', ['install', '--no-audit', '--no-fund'], { cwd: targetDir, stdio: 'pipe' });

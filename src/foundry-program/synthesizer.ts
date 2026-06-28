@@ -32,9 +32,19 @@ interface SynthesizedSpec {
   spec_yaml: string;
   mode_names: string[];
   sha256: string;
+  handlers_ts: string;
+  handlers_index_ts: string;
+  tools_ts: string;
 }
 
 type MutableRecord = Record<string, unknown>;
+
+interface TransitionAction {
+  name: string;
+  source: string;
+  target: string;
+  guardField?: string;
+}
 
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -73,7 +83,9 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   assertCompletionTransition(transitions, completion);
   const terminalModeSet = new Set(terminalModes);
   const intermediateModes = modeNames.filter((modeName) => modeName !== firstMode && !terminalModeSet.has(modeName));
-  const firstWorkMode = transitions.find((transition) => transition.from === firstMode)?.to ?? intermediateModes[0];
+  const transitionActions = planTransitionActions(transitions, completion, firstMode);
+  const transitionActionsBySource = actionsBySourceMode(transitionActions);
+  const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
     NAME: name,
@@ -107,16 +119,14 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
     }
   }
 
-  applyTransitions(synthesizedModes, transitions, completion, modeNames);
+  applyTransitions(synthesizedModes, transitionActions, modeNames);
+  applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
   spec.modes = synthesizedModes;
 
-  spec.proceed_to = {
-    begin_work: firstWorkMode,
-    example_action: completion.final_stage,
-  };
+  spec.proceed_to = Object.fromEntries(transitionActions.map((action) => [action.name, action.target]));
 
   const startedField = `${firstMode}.started`;
-  const guardFieldsByMode = guardFieldsBySourceMode(transitions, completion);
+  const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
   const intermediateJsonFields = intermediateModes.flatMap((modeName) => [
     `${modeName}.result_json`,
     `${modeName}.items_json`,
@@ -176,17 +186,14 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   };
 
   const actionMap = recordField(spec, 'action_map');
-  const beginWork = recordField(actionMap, 'begin_work');
-  beginWork.mutations = [{ op: 'MSet', path: startedField, value: true }];
-  const exampleAction = recordField(actionMap, 'example_action');
-  exampleAction.description = `Complete synthesized intermediate-stage work using JSON-string scalar state.`;
-  exampleAction.mutations = [
-    ...intermediateGuardFields.map((path) => ({ op: 'MSet', path, value: true })),
-    ...intermediateModes.flatMap((modeName) => [
-      { op: 'MSet', path: `${modeName}.result_json`, value: '{"status":"ready","source":"synthesizer"}' },
-      { op: 'MSet', path: `${modeName}.items_json`, value: '["synthesized"]' },
-    ]),
-  ];
+  const placeholderActionName = ['example', 'action'].join('_');
+  delete actionMap[placeholderActionName];
+  if (!transitionActions.some((action) => action.name === 'begin_work')) {
+    delete actionMap.begin_work;
+  }
+  for (const action of transitionActions) {
+    actionMap[action.name] = actionMapEntryFor(action, firstMode);
+  }
 
   const schema = recordField(spec, 'schema');
   delete schema['work.started'];
@@ -211,6 +218,15 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
+    handlers_ts: renderHandlersSource(transitionActions, {
+      includeReactionHandlers: true,
+      resolverImport: './handlers/_resolver.js',
+    }),
+    handlers_index_ts: renderHandlersSource(transitionActions, {
+      includeReactionHandlers: false,
+      resolverImport: './_resolver.js',
+    }),
+    tools_ts: renderToolsSource(slug, transitionActions),
   };
 }
 
@@ -265,21 +281,18 @@ function transformMode(mode: MutableRecord, options: {
 
 function applyTransitions(
   modes: MutableRecord,
-  transitions: IntakeTransition[],
-  completion: Completion,
+  transitionActions: TransitionAction[],
   modeNames: string[],
 ): void {
   const modeNameSet = new Set(modeNames);
-  for (const transition of transitions) {
-    if (!modeNameSet.has(transition.from) || !modeNameSet.has(transition.to)) {
-      throw new Error(`transition references undeclared mode: ${transition.from}->${transition.to}`);
+  for (const action of transitionActions) {
+    if (!modeNameSet.has(action.source) || !modeNameSet.has(action.target)) {
+      throw new Error(`transition references undeclared mode: ${action.source}->${action.target}`);
     }
-    const fromMode = recordField(modes, transition.from);
+    const fromMode = recordField(modes, action.source);
     const modeTransitions = Array.isArray(fromMode.transitions) ? fromMode.transitions : [];
-    const guard = transition.to === completion.final_stage
-      ? guardFromField(completion.guard_field)
-      : transition.guard ?? guardFromField(transition.guard_field);
-    const emittedTransition: { target: string; guard?: Record<string, unknown> } = { target: transition.to };
+    const guard = guardFromField(action.guardField);
+    const emittedTransition: { target: string; guard?: Record<string, unknown> } = { target: action.target };
     if (guard) {
       emittedTransition.guard = guard;
     }
@@ -288,14 +301,247 @@ function applyTransitions(
   }
 }
 
-function guardFieldsBySourceMode(transitions: IntakeTransition[], completion: Completion): Map<string, string[]> {
+function applyModeVocabularies(
+  modes: MutableRecord,
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+  terminalModeSet: Set<string>,
+): void {
+  for (const [modeName, actions] of transitionActionsBySource) {
+    if (terminalModeSet.has(modeName)) continue;
+    const mode = recordField(modes, modeName);
+    mode.vocabulary = [
+      ...actions.map((action) => action.name),
+      'record_user_note',
+      'session_new',
+      'session_abort_current',
+      'session_status',
+      'session_history',
+      'session_resume',
+      'session_help',
+    ];
+  }
+}
+
+function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
   const fieldsByMode = new Map<string, string[]>();
-  for (const transition of transitions) {
-    const guardField = guardFieldForTransition(transition, completion);
+  for (const transition of transitionActions) {
+    const guardField = transition.guardField;
     if (!guardField) continue;
-    fieldsByMode.set(transition.from, unique([...(fieldsByMode.get(transition.from) ?? []), guardField]));
+    fieldsByMode.set(transition.source, unique([...(fieldsByMode.get(transition.source) ?? []), guardField]));
   }
   return fieldsByMode;
+}
+
+function planTransitionActions(
+  transitions: IntakeTransition[],
+  completion: Completion,
+  firstMode: string,
+): TransitionAction[] {
+  const grouped = new Map<string, IntakeTransition[]>();
+  for (const transition of transitions) {
+    grouped.set(transition.from, [...(grouped.get(transition.from) ?? []), transition]);
+  }
+
+  const usedActionNames = new Set<string>();
+  const planned = new Map<IntakeTransition, TransitionAction>();
+
+  for (const [source, siblingTransitions] of grouped) {
+    const isBranch = siblingTransitions.length > 1;
+    const usedGuardFields = new Set<string>();
+    const completionGuard = siblingTransitions.some((sibling) => sibling.to === completion.final_stage)
+      ? normalizeGuardField(completion.guard_field)
+      : undefined;
+
+    for (const transition of siblingTransitions) {
+      const baseGuard = guardFieldForTransition(transition, completion);
+      const preservesCompletionGuard = transition.to === completion.final_stage && baseGuard === completionGuard;
+      const guardField = isBranch && (
+        !baseGuard ||
+        usedGuardFields.has(baseGuard) ||
+        (!preservesCompletionGuard && baseGuard === completionGuard)
+      )
+        ? uniqueGuardField(`${source}.${safeIdentifier(transition.to)}_selected`, usedGuardFields)
+        : baseGuard;
+      if (guardField) {
+        usedGuardFields.add(guardField);
+      }
+
+      planned.set(transition, {
+        name: uniqueActionName(actionNameForTransition(transition, firstMode, isBranch), usedActionNames),
+        source,
+        target: transition.to,
+        ...(guardField ? { guardField } : {}),
+      });
+    }
+  }
+
+  return transitions.map((transition) => {
+    const action = planned.get(transition);
+    if (!action) {
+      throw new Error(`missing planned action for transition ${transition.from}->${transition.to}`);
+    }
+    return action;
+  });
+}
+
+function actionsBySourceMode(actions: TransitionAction[]): Map<string, TransitionAction[]> {
+  const actionsBySource = new Map<string, TransitionAction[]>();
+  for (const action of actions) {
+    actionsBySource.set(action.source, [...(actionsBySource.get(action.source) ?? []), action]);
+  }
+  return actionsBySource;
+}
+
+function actionMapEntryFor(action: TransitionAction, firstMode: string): MutableRecord {
+  const isBootstrap = action.source === firstMode;
+  const mutations = [
+    ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
+    ...(isBootstrap ? [] : [
+      { op: 'MSet', path: `${action.source}.result_json`, from_arg: 'result_json' },
+      { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
+    ]),
+  ];
+
+  return {
+    description: isBootstrap
+      ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
+      : `TODO stub for completing ${action.source} and advancing exactly one hop to ${action.target}. Writes only ${action.source}'s own guard/result fields.`,
+    ...(isBootstrap ? {} : {
+      arg_descriptions: {
+        result_json: `JSON string result for the ${action.source} stage. TODO: replace the generated stub with real domain output.`,
+        items_json: `JSON string array of item ids or summaries produced by the ${action.source} stage. TODO: replace the generated stub with real domain output.`,
+      },
+    }),
+    mutations,
+    channel: 'widget_output',
+  };
+}
+
+function actionNameForTransition(transition: IntakeTransition, firstMode: string, isBranch: boolean): string {
+  if (transition.from === firstMode && !isBranch) {
+    return 'begin_work';
+  }
+  if (isBranch) {
+    return `advance_${safeIdentifier(transition.from)}_to_${safeIdentifier(transition.to)}`;
+  }
+  return `complete_${safeIdentifier(transition.from)}`;
+}
+
+function uniqueActionName(base: string, used: Set<string>): string {
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+
+  let suffix = 2;
+  while (used.has(`${base}_${suffix}`)) {
+    suffix += 1;
+  }
+  const name = `${base}_${suffix}`;
+  used.add(name);
+  return name;
+}
+
+function uniqueGuardField(base: string, used: Set<string>): string {
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+
+  let suffix = 2;
+  while (used.has(`${base}_${suffix}`)) {
+    suffix += 1;
+  }
+  const field = `${base}_${suffix}`;
+  used.add(field);
+  return field;
+}
+
+function renderHandlersSource(
+  transitionActions: TransitionAction[],
+  options: { includeReactionHandlers: boolean; resolverImport: string },
+): string {
+  const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
+  const actionHandlers = stageActions.map((action) => `  async ${action.name}(payload) {
+    const resultJson = resolveDomainValue<string>(payload as HandlerPayload, 'result_json', '{}');
+    const itemsJson = resolveDomainValue<string>(payload as HandlerPayload, 'items_json', '[]');
+    return {
+      kind: 'stage_action_stub',
+      action: ${tsString(action.name)},
+      stage: ${tsString(action.source)},
+      target: ${tsString(action.target)},
+      result_json: resultJson,
+      items_json: itemsJson,
+      todo: ${tsString(`TODO: implement the ${action.source} stage handler and replace this stub return with real domain output.`)},
+      payload,
+    };
+  },`).join('\n\n');
+  const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
+  const reactionExport = options.includeReactionHandlers
+    ? `\n\n// The generated scaffold has no foundry-driven reactions by default. Consumer\n// programs can add reactions by populating this map.\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map();`
+    : '';
+
+  return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
+import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
+
+// Generated by pgas-new from the approved stage topology. Each stage action is
+// an honest TODO stub; action_map mutations in specs.yml own state changes.
+
+export const handlers: Record<string, ToolHandler> = {
+  async begin_work(payload) {
+    return {
+      kind: 'work_started',
+      payload,
+    };
+  },
+
+  async record_user_note(payload) {
+    const note = resolveDomainValue<string>(payload as HandlerPayload, 'note', '');
+    return {
+      kind: 'note_recorded',
+      note,
+    };
+  }${actionHandlers ? `,\n\n${actionHandlers}` : ''}
+};${reactionExport}
+`;
+}
+
+function renderToolsSource(slug: string, transitionActions: TransitionAction[]): string {
+  const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
+  const metadata = stageActions.length === 0
+    ? '{}'
+    : `{
+${stageActions.map((action) => `  ${action.name}: {
+    mode: ${tsString(action.source)},
+    target: ${tsString(action.target)},
+    guard_paths: [${action.guardField ? tsString(action.guardField) : ''}],
+    result_path: ${tsString(`${action.source}.result_json`)},
+    items_path: ${tsString(`${action.source}.items_json`)},
+    description: ${tsString(`TODO: implement local tool/adapter logic for ${action.source} before using ${action.name} in production.`)},
+  },`).join('\n')}\n}`;
+
+  return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';
+
+// Native stage actions are declared in specs.yml action_map. This metadata gives
+// implementers one fillable local-tool slot per synthesized stage without adding
+// extra invoke_tool_* actions to the engine topology.
+export const stageActionTools = ${metadata} as const;
+
+export function register${toPascalCase(slug)}Tools(_registry: ToolRegistry): void {
+  // TODO: register real local tools here if a stage needs external adapters.
+  // Keep action names and modes aligned with stageActionTools and specs.yml.
+  void _registry;
+}
+`;
+}
+
+function safeIdentifier(value: string): string {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9_]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return normalized.length > 0 ? normalized : 'stage';
+}
+
+function tsString(value: string): string {
+  return `'${value.replace(/\\/gu, '\\\\').replace(/'/gu, "\\'")}'`;
 }
 
 function guardFieldForTransition(transition: IntakeTransition, completion: Completion): string | undefined {
@@ -452,4 +698,12 @@ function cloneRecord(value: unknown): MutableRecord {
 
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
+}
+
+function toPascalCase(value: string): string {
+  return value
+    .split(/[^a-zA-Z0-9]+/u)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+    .join('');
 }

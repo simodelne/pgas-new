@@ -68,9 +68,10 @@ describe('synthesize_program_spec handler', () => {
       name: string;
       initial: string;
       terminal: string[];
-      modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+      modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
       schema: Record<string, string>;
-      action_map: Record<string, { mutations: Array<{ path: string; value?: unknown }> }>;
+      action_map: Record<string, { mutations: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+      proceed_to: Record<string, string>;
       guidance: Record<string, string[]>;
     };
 
@@ -91,7 +92,16 @@ describe('synthesize_program_spec handler', () => {
       'triage.result_json': 'string',
       'triage.items_json': 'string',
     });
-    expect(parsed.action_map.example_action.mutations.map((mutation) => mutation.path)).toEqual([
+    expect(parsed.modes.triage.vocabulary).toEqual(expect.arrayContaining(['complete_triage']));
+    expect(parsed.modes.triage.vocabulary).not.toContain('example_action');
+    expect(parsed.proceed_to.complete_triage).toBe('resolved');
+    expect(parsed.action_map).not.toHaveProperty('example_action');
+    expect(parsed.action_map.complete_triage.mutations).toEqual([
+      { op: 'MSet', path: 'triage.summary_ready', value: true },
+      { op: 'MSet', path: 'triage.result_json', from_arg: 'result_json' },
+      { op: 'MSet', path: 'triage.items_json', from_arg: 'items_json' },
+    ]);
+    expect(parsed.action_map.complete_triage.mutations.map((mutation) => mutation.path)).toEqual([
       'triage.summary_ready',
       'triage.result_json',
       'triage.items_json',
@@ -178,12 +188,38 @@ describe('synthesize_program_spec handler', () => {
     const result = await synthesizeStageGraph('session-five-stages', stageNames);
     const artifact = getSynthesizedArtifact('session-five-stages');
     const parsed = load(artifact?.spec_yaml ?? '') as {
-      modes: Record<string, unknown>;
+      modes: Record<string, { vocabulary?: string[] }>;
       schema: Record<string, string>;
+      action_map: Record<string, { mutations: Array<{ path: string }> }>;
+      proceed_to: Record<string, string>;
     };
 
     expect(result).toMatchObject({ mode_names: stageNames });
     expect(Object.keys(parsed.modes)).toEqual(stageNames);
+    expect(parsed.action_map).not.toHaveProperty('example_action');
+    expect(parsed.modes.classify.vocabulary).toEqual(expect.arrayContaining(['complete_classify']));
+    expect(parsed.modes.investigate.vocabulary).toEqual(expect.arrayContaining(['complete_investigate']));
+    expect(parsed.modes.resolve.vocabulary).toEqual(expect.arrayContaining(['complete_resolve']));
+    expect(parsed.proceed_to).toMatchObject({
+      complete_classify: 'investigate',
+      complete_investigate: 'resolve',
+      complete_resolve: 'closed',
+    });
+    expect(parsed.action_map.complete_classify.mutations.map((mutation) => mutation.path)).toEqual([
+      'classify.ready',
+      'classify.result_json',
+      'classify.items_json',
+    ]);
+    expect(parsed.action_map.complete_investigate.mutations.map((mutation) => mutation.path)).toEqual([
+      'investigate.ready',
+      'investigate.result_json',
+      'investigate.items_json',
+    ]);
+    expect(parsed.action_map.complete_resolve.mutations.map((mutation) => mutation.path)).toEqual([
+      'resolve.ready',
+      'resolve.result_json',
+      'resolve.items_json',
+    ]);
     expect(parsed.schema).toMatchObject({
       'classify.result_json': 'string',
       'classify.items_json': 'string',
@@ -192,6 +228,76 @@ describe('synthesize_program_spec handler', () => {
       'resolve.result_json': 'string',
       'resolve.items_json': 'string',
     });
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
+  it('emits distinct branch and loop actions that only open one outgoing guard', async () => {
+    const sessionId = 'session-branch-loop-actions';
+    clearSynthesizedArtifact(sessionId);
+
+    await handlers.synthesize_program_spec({
+      sessionId,
+      domain: domain({
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          { slug: 'draft' },
+          { slug: 'review' },
+          { slug: 'revision' },
+          { slug: 'complete', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'draft', trigger: 'started', guard_field: 'intake.started' },
+          { from: 'draft', to: 'review', trigger: 'ready', guard_field: 'draft.ready' },
+          { from: 'review', to: 'revision', trigger: 'revise', guard_field: 'review.needs_revision' },
+          { from: 'review', to: 'complete', trigger: 'approve', guard_field: 'review.approved' },
+          { from: 'revision', to: 'review', trigger: 'revised', guard_field: 'revision.ready' },
+        ]),
+        'intake.completion_json': JSON.stringify({
+          final_stage: 'complete',
+          guard_field: 'review.done',
+        }),
+      }),
+    });
+
+    const artifact = getSynthesizedArtifact(sessionId);
+    const parsed = load(artifact?.spec_yaml ?? '') as {
+      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
+      action_map: Record<string, { mutations: Array<{ path: string }> }>;
+      proceed_to: Record<string, string>;
+    };
+
+    expect(parsed.modes.review.transitions).toEqual([
+      { target: 'revision', guard: { kind: 'FieldTruthy', path: 'review.needs_revision' } },
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.done' } },
+    ]);
+    expect(parsed.modes.revision.transitions).toEqual([
+      { target: 'review', guard: { kind: 'FieldTruthy', path: 'revision.ready' } },
+    ]);
+    expect(parsed.modes.review.vocabulary).toEqual(expect.arrayContaining([
+      'advance_review_to_revision',
+      'advance_review_to_complete',
+    ]));
+    expect(parsed.modes.review.vocabulary).not.toContain('complete_review');
+    expect(parsed.proceed_to.advance_review_to_revision).toBe('revision');
+    expect(parsed.proceed_to.advance_review_to_complete).toBe('complete');
+    expect(parsed.proceed_to.complete_revision).toBe('review');
+    expect(parsed.action_map.advance_review_to_revision.mutations.map((mutation) => mutation.path)).toEqual([
+      'review.needs_revision',
+      'review.result_json',
+      'review.items_json',
+    ]);
+    expect(parsed.action_map.advance_review_to_complete.mutations.map((mutation) => mutation.path)).toEqual([
+      'review.done',
+      'review.result_json',
+      'review.items_json',
+    ]);
+    expect(parsed.action_map.complete_revision.mutations.map((mutation) => mutation.path)).toEqual([
+      'revision.ready',
+      'revision.result_json',
+      'revision.items_json',
+    ]);
+    expect(parsed.action_map.advance_review_to_revision.mutations.map((mutation) => mutation.path)).not.toContain('review.done');
+    expect(parsed.action_map.advance_review_to_complete.mutations.map((mutation) => mutation.path)).not.toContain('review.needs_revision');
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 

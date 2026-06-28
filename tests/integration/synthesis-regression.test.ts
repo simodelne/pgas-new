@@ -87,6 +87,7 @@ interface SynthesizedSpec {
   }>;
   schema: Record<string, string>;
   action_map: Record<string, { channel?: string; mutations?: Array<{ path?: string }> }>;
+  proceed_to: Record<string, string>;
   features?: string[];
   control_plane?: unknown;
 }
@@ -125,6 +126,12 @@ for (const mandatePath of GRADUATION_MANDATES) {
       const fixture = await synthesizeFixture(intake);
 
       assertFmClosure(fixture.spec);
+    });
+
+    it('emits stage-scoped actions instead of a shared example action', async () => {
+      const fixture = await synthesizeFixture(intake);
+
+      assertPerStageActionTopology(fixture.spec);
     });
 
     it('does not leak reserved foundry mode names into synthesized output', async () => {
@@ -302,6 +309,55 @@ function assertFmClosure(spec: SynthesizedSpec): void {
 
   for (const path of ENGINE_OWNED_SCHEMA_PATHS) {
     expect(spec.schema[path], `FM5 ${path} should be declared`).toBeDefined();
+  }
+}
+
+function assertPerStageActionTopology(spec: SynthesizedSpec): void {
+  expect(spec.action_map, 'synthesized specs should not retain the generic placeholder action').not.toHaveProperty('example_action');
+
+  const terminalModes = new Set(
+    Object.entries(spec.modes)
+      .filter(([, mode]) => (mode.transitions ?? []).length === 0)
+      .map(([modeName]) => modeName),
+  );
+  const firstMode = Object.keys(spec.modes)[0];
+
+  for (const [modeName, mode] of Object.entries(spec.modes)) {
+    if (modeName === firstMode || terminalModes.has(modeName)) continue;
+
+    const transitions = mode.transitions ?? [];
+    expect(transitions.length, `${modeName} should have at least one outgoing transition`).toBeGreaterThan(0);
+    expect(mode.vocabulary ?? [], `${modeName} vocabulary should not expose example_action`).not.toContain('example_action');
+
+    const outgoingTargets = new Set(transitions.map((transition) => transition.target));
+    const guardPaths = new Set(transitions.map((transition) => transition.guard?.path).filter((path): path is string => Boolean(path)));
+    const stageActions = (mode.vocabulary ?? []).filter((action) => {
+      const target = spec.proceed_to[action];
+      return target !== undefined && outgoingTargets.has(target);
+    });
+
+    expect(stageActions.length, `${modeName} should expose one action per outgoing transition`).toBe(transitions.length);
+
+    for (const action of stageActions) {
+      const target = spec.proceed_to[action];
+      const transition = transitions.find((candidate) => candidate.target === target);
+      const mutationPaths = (spec.action_map[action]?.mutations ?? [])
+        .map((mutation) => mutation.path)
+        .filter((path): path is string => Boolean(path));
+      const allowedPaths = new Set([
+        `${modeName}.result_json`,
+        `${modeName}.items_json`,
+        ...(transition?.guard?.path ? [transition.guard.path] : []),
+      ]);
+
+      expect(new Set(mutationPaths), `${action} should write only ${modeName}'s own paths`).toEqual(allowedPaths);
+      expect(mutationPaths, `${action} should not write duplicate paths`).toHaveLength(allowedPaths.size);
+
+      for (const guardPath of guardPaths) {
+        if (guardPath === transition?.guard?.path) continue;
+        expect(mutationPaths, `${action} must not satisfy sibling branch guard ${guardPath}`).not.toContain(guardPath);
+      }
+    }
   }
 }
 

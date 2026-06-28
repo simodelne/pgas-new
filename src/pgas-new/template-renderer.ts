@@ -23,6 +23,9 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
+  synthesizedHandlersTs?: string;
+  synthesizedHandlersIndexTs?: string;
+  synthesizedToolsTs?: string;
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -31,6 +34,9 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
+  synthesizedHandlersTs?: string;
+  synthesizedHandlersIndexTs?: string;
+  synthesizedToolsTs?: string;
 }
 
 export interface RenderResult {
@@ -43,6 +49,13 @@ interface TemplateSpec {
   tokens: readonly string[];
   substitute?: boolean;
   content?: string;
+}
+
+interface SynthesizedSources {
+  specYaml?: string;
+  handlersTs?: string;
+  handlersIndexTs?: string;
+  toolsTs?: string;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -81,7 +94,7 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
   return renderPlan({
     plan,
     rootDir: options.outDir,
-    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, options.synthesizedSpecYaml),
+    templateForArtifact: (artifact) => templateForStandaloneArtifact(artifact, options.slug, synthesizedSourcesFor(options)),
     tokens: tokensFor(options, plan),
   });
 }
@@ -95,7 +108,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
   return renderPlan({
     plan,
     rootDir: options.repoRoot,
-    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, options.synthesizedSpecYaml),
+    templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, synthesizedSourcesFor(options)),
     tokens: tokensFor(options, plan),
   });
 }
@@ -170,9 +183,9 @@ function renderPlan(options: {
 function templateForExistingArtifact(
   artifact: PlannedArtifact,
   slug: string,
-  synthesizedSpecYaml?: string,
+  synthesizedSources: SynthesizedSources,
 ): TemplateSpec | undefined {
-  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSpecYaml);
+  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSources);
   if (synthesizedTemplate) {
     return synthesizedTemplate;
   }
@@ -213,9 +226,9 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
 function templateForStandaloneArtifact(
   artifact: PlannedArtifact,
   slug: string,
-  synthesizedSpecYaml?: string,
+  synthesizedSources: SynthesizedSources,
 ): TemplateSpec | undefined {
-  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSpecYaml);
+  const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSources);
   if (synthesizedTemplate) {
     return synthesizedTemplate;
   }
@@ -279,22 +292,25 @@ function inlineTemplate(content: string): TemplateSpec {
 function templateForSynthesizedArtifact(
   artifact: PlannedArtifact,
   slug: string,
-  synthesizedSpecYaml: string | undefined,
+  synthesizedSources: SynthesizedSources,
 ): TemplateSpec | undefined {
-  if (!synthesizedSpecYaml) {
+  if (!synthesizedSources.specYaml) {
     return undefined;
   }
   if (artifact.path.endsWith(`/${slug}/specs.yml`)) {
-    return inlineTemplate(synthesizedSpecYaml);
+    return inlineTemplate(synthesizedSources.specYaml);
   }
   if (artifact.path.endsWith(`/${slug}/registration.ts`)) {
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
-  if (artifact.path.endsWith(`/${slug}/handlers.ts`)) {
-    return spec('program/handlers-skeleton.ts.tmpl', []);
+  if (artifact.path.endsWith(`/${slug}/handlers.ts`) && synthesizedSources.handlersTs) {
+    return inlineTemplate(synthesizedSources.handlersTs);
   }
-  if (artifact.path.endsWith(`/${slug}/tools.ts`)) {
-    return spec('program/tools-skeleton.ts.tmpl', ['PASCAL_NAME']);
+  if (artifact.path.endsWith(`/${slug}/handlers/index.ts`) && synthesizedSources.handlersIndexTs) {
+    return inlineTemplate(synthesizedSources.handlersIndexTs);
+  }
+  if (artifact.path.endsWith(`/${slug}/tools.ts`) && synthesizedSources.toolsTs) {
+    return inlineTemplate(synthesizedSources.toolsTs);
   }
   return undefined;
 }
@@ -328,6 +344,20 @@ function selectTokens(tokens: Record<string, string>, names: readonly string[]):
       return [name, value];
     }),
   );
+}
+
+function synthesizedSourcesFor(options: {
+  synthesizedSpecYaml?: string;
+  synthesizedHandlersTs?: string;
+  synthesizedHandlersIndexTs?: string;
+  synthesizedToolsTs?: string;
+}): SynthesizedSources {
+  return {
+    specYaml: options.synthesizedSpecYaml,
+    handlersTs: options.synthesizedHandlersTs,
+    handlersIndexTs: options.synthesizedHandlersIndexTs,
+    toolsTs: options.synthesizedToolsTs,
+  };
 }
 
 function tokensFor(options: ProgramIdentity & { githubOwner?: string; githubRepo?: string; mandate?: string }, plan: ArtifactPlan): Record<string, string> {

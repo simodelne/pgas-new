@@ -3,6 +3,9 @@ export interface SynthesizedArtifact {
   mode_names: string[];
   sha256: string;
   created_at: string;
+  handlers_ts: string;
+  handlers_index_ts: string;
+  tools_ts: string;
 }
 
 const artifactsBySessionId = new Map<string, SynthesizedArtifact>();

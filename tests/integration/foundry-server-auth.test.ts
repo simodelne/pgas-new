@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,7 @@ import { startFoundryServer, type StartedFoundryServer } from '../../src/foundry
 
 const require = createRequire(import.meta.url);
 const BetterSqlite3 = require('better-sqlite3') as new (filename: string) => SqliteDatabase;
+const canOpenDefaultListener = await canBindDefaultListener();
 
 describe('foundry server auth bootstrap', () => {
   const originalEnv = {
@@ -47,7 +49,7 @@ describe('foundry server auth bootstrap', () => {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it('seeds initial admin once and reuses the persisted user on restart', async () => {
+  (canOpenDefaultListener ? it : it.skip)('seeds initial admin once and reuses the persisted user on restart', async () => {
     const dataDir = join(process.env.HOME!, '.local/share/pgas-new');
     mkdirSync(dataDir, { recursive: true });
     const initialAdminPath = join(dataDir, 'initial-admin.json');
@@ -80,6 +82,20 @@ describe('foundry server auth bootstrap', () => {
     }));
   });
 });
+
+async function canBindDefaultListener(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', () => {
+      resolve(false);
+    });
+    probe.listen(0, () => {
+      probe.close(() => {
+        resolve(true);
+      });
+    });
+  });
+}
 
 interface SqliteDatabase {
   prepare(sql: string): { get(...params: unknown[]): unknown };

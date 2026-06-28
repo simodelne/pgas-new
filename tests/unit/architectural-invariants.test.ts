@@ -12,6 +12,7 @@ import {
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SPEC_PATH = resolve(ROOT, 'src/foundry-program/specs.yml');
 const CLI_PATH = resolve(ROOT, 'src/cli.ts');
+const SYNTHESIZER_PATH = resolve(ROOT, 'src/foundry-program/synthesizer.ts');
 
 const REQUIRED_MODES = [
   'intake_intelligence',
@@ -74,10 +75,12 @@ interface FoundrySpec {
 
 let spec: FoundrySpec;
 let cliSource: string;
+let synthesizerSource: string;
 
 beforeAll(() => {
   spec = load(readFileSync(SPEC_PATH, 'utf8')) as FoundrySpec;
   cliSource = readFileSync(CLI_PATH, 'utf8');
+  synthesizerSource = readFileSync(SYNTHESIZER_PATH, 'utf8');
 });
 
 describe('foundry PGAS spec mode contract', () => {
@@ -141,6 +144,15 @@ describe('intake_intelligence gate-action vocabulary', () => {
       vocabulary as string[],
       'If this fails: src/foundry-program/specs.yml:29 intake_intelligence vocabulary lost a required design gate action.',
     ).toEqual(expect.arrayContaining([...REQUIRED_INTAKE_GATE_ACTIONS]));
+  });
+});
+
+describe('deterministic synthesizer action topology', () => {
+  it('does not emit a shared example_action for synthesized programs', () => {
+    expect(
+      synthesizerSource,
+      'If this fails: src/foundry-program/synthesizer.ts reintroduced a shared synthesized example_action.',
+    ).not.toContain('example_action');
   });
 });
 

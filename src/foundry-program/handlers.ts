@@ -534,6 +534,9 @@ export const handlers: Record<string, ToolHandler> = {
       spec_yaml: synthesized.spec_yaml,
       mode_names: synthesized.mode_names,
       sha256: synthesized.sha256,
+      handlers_ts: synthesized.handlers_ts,
+      handlers_index_ts: synthesized.handlers_index_ts,
+      tools_ts: synthesized.tools_ts,
       created_at: new Date().toISOString(),
     });
     return {
@@ -773,11 +776,17 @@ export const handlers: Record<string, ToolHandler> = {
           repoRoot: targetDir,
           manifest: parseWiringManifestDomainField(domain),
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedHandlersTs: synthesized.handlers_ts,
+          synthesizedHandlersIndexTs: synthesized.handlers_index_ts,
+          synthesizedToolsTs: synthesized.tools_ts,
         })
       : renderStandaloneScaffold({
           ...program,
           outDir: targetDir,
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedHandlersTs: synthesized.handlers_ts,
+          synthesizedHandlersIndexTs: synthesized.handlers_index_ts,
+          synthesizedToolsTs: synthesized.tools_ts,
         });
 
     return {
