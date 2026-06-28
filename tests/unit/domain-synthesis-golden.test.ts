@@ -65,6 +65,8 @@ async function buildGolden(domain: Record<string, string>): Promise<Omit<GoldenF
         stage: entry.stage,
         archetype: entry.archetype,
         ...(entry.adapter_kind ? { adapter_kind: entry.adapter_kind } : {}),
+        ...(entry.behavioral_gate ? { behavioral_gate: entry.behavioral_gate } : {}),
+        ...(entry.behavioral_fixture ? { behavioral_fixture: entry.behavioral_fixture } : {}),
         attempts: entry.attempts,
         cache_hit: entry.cache_hit,
         body_hash: entry.body_hash,

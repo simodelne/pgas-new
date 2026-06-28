@@ -43,9 +43,12 @@ change is required.
   minimal/zero human filling.
 - **Scope of "runs for real":**
   - *pure-compute* and *llm-reasoning* stages run for real;
-  - *external-adapter* stages get a generated working **in-memory mock** plus a
-    `TODO(real-service-swap)` to swap the real service. "Runs end-to-end" holds via
-    the mock.
+  - *external-adapter* stages in **standalone** programs get a generated working
+    **in-memory mock** plus a `TODO(real-service-swap)`;
+  - *external-adapter* stages in **existing repos** must bind to a matching real
+    integration declared by `.pgas/wiring.yml` when one exists. If no matching
+    integration is declared, synthesis keeps the in-memory mock but records the
+    gap explicitly in audit/curator-facing output.
 - **Failure policy:** per-stage `generate → verify → repair` loop, then **hard-fail**
   (no silent stub fallback) if a stage never passes.
 - **Substrate:** synthesis uses the engine's configured provider = **local Qwen
@@ -54,7 +57,9 @@ change is required.
 
 ### 2.1 Non-goals (this version)
 
-- Real external-service integration (real API/DB/scrape) — out of scope; mocks only.
+- Discovering or inventing integrations not published by the target repo manifest.
+- Reading secret values for integrations. The manifest supplies env var **names**
+  only; generated adapters import the declared module and do not read env values.
 - A stronger/dedicated codegen model — deferred; build provider-agnostic but prove on Qwen.
 - Whole-program single-shot LLM generation or LLM whole-program repair (Codex: least robust).
 
@@ -79,7 +84,8 @@ deterministic output is the source of truth where it should be:
 |---|---|---|---|
 | `pure-compute` | deterministic handler | **`result_path`** lands handler return | yes (LLM) |
 | `llm-reasoning` | model at runtime | **`from_arg`** (current pattern; the model *is* the logic) | no body; tune prompt/schema |
-| `external-adapter` | generated in-memory mock | **`result_path`** lands mock return; `adapter_kind:"in_memory_mock"` recorded | yes (LLM, mock) |
+| `external-adapter` standalone or unmatched existing repo | generated in-memory mock | **`result_path`** lands mock return; `adapter_kind:"in_memory_mock"` recorded, with audit gap for unmatched existing repo | yes (LLM, mock) |
+| `external-adapter` matched existing repo | generated adapter importing the manifest-declared module and calling the declared method | **`result_path`** lands real adapter return; `adapter_kind:"repo_integration"` and integration name recorded | yes (deterministic manifest-bound adapter) |
 
 This means `synthesizer.ts` must, per stage, emit either a `from_arg`-driven action
 (llm-reasoning) or a `result_path`-driven action (compute/external). This is the
@@ -98,8 +104,12 @@ breaking change to the generated state contract.
 3. **Body synthesizer (new, LLM = Qwen).** Generates **only** `stages/<stage>.ts`
    implementing `runStage(input, runtime): StageResult` against the frozen contract. The
    wrapper, not the body, performs state writes.
-4. **Per-stage verify → repair loop.** typecheck + a stage-local unit/smoke fixture. On
-   failure, the repair prompt receives **only** the frozen contract + compiler/test
+4. **Per-stage verify → repair loop.** typecheck + AST safety + anti-stub +
+   a stage-local **behavioral fixture**. Each generated pure/mock body is executed
+   against a deterministic input/runtime and must return key expected values
+   (`result_json.stage`, non-empty `items_json`, and adapter kind for mocks).
+   Manifest-bound repo adapters are checked against the declared import/method call.
+   On failure, the repair prompt receives **only** the frozen contract + compiler/test
    errors (never the growing conversation). Cap `N` attempts (default 4). Detect repeated
    code-hash or repeated error-signature → stop early. On persistent failure → **hard-fail**
    with a stage-local report (stage, last attempt, errors, attempt count).
@@ -167,9 +177,12 @@ with a documented gap" — anti-stub + smoke + live are all green or the run fai
 - **Prompt-injection defense.** Mandate/stage descriptions passed as **untrusted JSON**.
   AST-enforced import allowlist. Ban `eval`, dynamic `import()`, `child_process`, shell,
   raw network, and secret/env reads unless an explicit adapter contract allows them.
-- **Mocks never mask integration.** External stages record `adapter_kind:"in_memory_mock"`
-  in audit + generated docs; they may pass smoke but must **not** mark real integration
-  verified. Real-adapter tests are a separate, env-gated, future rung.
+- **Mocks never mask integration.** Standalone and unmatched existing-repo external
+  stages record `adapter_kind:"in_memory_mock"` in audit + generated docs; unmatched
+  existing-repo stages also record an explicit integration gap. Matching existing-repo
+  stages record `adapter_kind:"repo_integration"` plus the integration name/import/method.
+  The generated-code import allowlist is opened only for the manifest-declared module
+  on that adapter stage.
 - **Golden regression.** 3–5 representative mandate fixtures. Snapshot deterministic
   artifacts exactly; snapshot generated-body hashes + audit metadata (not fragile
   formatting).
@@ -196,12 +209,17 @@ with a documented gap" — anti-stub + smoke + live are all green or the run fai
 1. A non-stub program is synthesized end-to-end for a self-contained mandate, with no
    executed-path stub markers.
 2. `smoke_verify` passes deterministically (digest equality proves `result_path` wiring).
-3. The **§10 live UAT against Qwen** passes for the synthesized program (real-provider rung).
-4. Hard-fail behavior verified: an intentionally unsatisfiable stage causes a loud,
+3. Each body-synthesized stage passes its deterministic behavioral fixture, or fails
+   through the repair loop with the behavioral failure included in the repair prompt.
+4. Existing-repo external adapters bind to matching `.pgas/wiring.yml` integrations
+   and emit `adapter_kind:"repo_integration"`; unmatched existing-repo and standalone
+   adapters remain explicit mocks.
+5. The **§10 live UAT against Qwen** passes for the synthesized program (real-provider rung).
+6. Hard-fail behavior verified: an intentionally unsatisfiable stage causes a loud,
    stage-local failure with no PR graduation and no stub fallback.
-5. Idempotent re-synthesis verified: unchanged contracts reuse cached bodies; a changed
+7. Idempotent re-synthesis verified: unchanged contracts reuse cached bodies; a changed
    stage invalidates only itself + downstream dependents.
-6. Golden fixtures stable across runs (deterministic artifacts byte-identical; body
+8. Golden fixtures stable across runs (deterministic artifacts byte-identical; body
    hashes recorded).
 
 ## 11. Risks / open questions

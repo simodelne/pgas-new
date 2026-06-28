@@ -1,0 +1,33 @@
+schema_version: 1
+repo:
+  kind: existing_repo
+  package_manager: npm
+pgas:
+  server_package: "@simodelne/pgas-server"
+  allowed_imports:
+    - "@simodelne/pgas-server/plugin.js"
+    - "@simodelne/pgas-server/create-server.js"
+    - "@simodelne/pgas-server/client.js"
+    - "@simodelne/pgas-server/channels/index.js"
+    - "@simodelne/pgas-server/routes/index.js"
+paths:
+  programs_dir: "programs"
+  audit_dir: "audit"
+  pgas_new_dir: ".pgas/pgas-new"
+registration:
+  strategy: curator_request
+verification:
+  commands:
+    install: "npm install --no-audit --no-fund"
+    typecheck: "npm run typecheck"
+    test: "npm test"
+curator:
+  github_owner: simodelne
+  github_repo: fixture-existing-repo
+integrations:
+  - name: crm
+    kind: http_api
+    import: "@fixture/crm-client"
+    factory: createCrmClient
+    methods: [lookupAccount]
+    config_env: [CRM_BASE_URL, CRM_TOKEN]

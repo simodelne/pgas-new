@@ -33,6 +33,42 @@ curator:
   github_repo: simoneos
 `;
 
+const VALID_MANIFEST_WITH_INTEGRATION = `
+schema_version: 1
+repo:
+  kind: existing_repo
+  package_manager: npm
+pgas:
+  server_package: "@simodelne/pgas-server"
+  allowed_imports:
+    - "@simodelne/pgas-server/plugin.js"
+    - "@simodelne/pgas-server/create-server.js"
+    - "@simodelne/pgas-server/client.js"
+    - "@simodelne/pgas-server/channels/index.js"
+    - "@simodelne/pgas-server/routes/index.js"
+paths:
+  programs_dir: "programs"
+  audit_dir: "audit"
+  pgas_new_dir: ".pgas/pgas-new"
+registration:
+  strategy: curator_request
+verification:
+  commands:
+    install: "npm install --no-audit --no-fund"
+    typecheck: "npm run typecheck"
+    test: "npm test"
+curator:
+  github_owner: simodelne
+  github_repo: simoneos
+integrations:
+  - name: crm
+    kind: http_api
+    import: "@acme/crm-client"
+    factory: createCrmClient
+    methods: [lookupAccount]
+    config_env: [CRM_BASE_URL, CRM_TOKEN]
+`;
+
 describe('wiring manifest parser', () => {
   it('parses a valid fixed-path manifest', () => {
     const result = parseWiringManifest(VALID_MANIFEST);
@@ -41,6 +77,28 @@ describe('wiring manifest parser', () => {
     expect(result.errors).toEqual([]);
     expect(result.manifest?.pgas.server_package).toBe('@simodelne/pgas-server');
     expect(result.manifest?.paths.pgas_new_dir).toBe('.pgas/pgas-new');
+  });
+
+  it('parses optional declared repo integrations without env values', () => {
+    const result = parseWiringManifest(VALID_MANIFEST_WITH_INTEGRATION);
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.manifest?.integrations).toEqual([
+      {
+        name: 'crm',
+        kind: 'http_api',
+        import: '@acme/crm-client',
+        factory: 'createCrmClient',
+        methods: ['lookupAccount'],
+        config_env: ['CRM_BASE_URL', 'CRM_TOKEN'],
+      },
+    ]);
+  });
+
+  it('allows integrations to be omitted or empty', () => {
+    expect(parseWiringManifest(VALID_MANIFEST)).toMatchObject({ ok: true, errors: [] });
+    expect(parseWiringManifest(`${VALID_MANIFEST}\nintegrations: []\n`)).toMatchObject({ ok: true, errors: [] });
   });
 
   it('loads only .pgas/wiring.yml from a repo root', () => {
@@ -86,6 +144,53 @@ describe('wiring manifest parser', () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors).toContain('pgas.allowed_imports contains banned import: @simodelne/pgas-server/src/testing.js');
+  });
+
+  it('rejects malformed integration declarations with clear field errors', () => {
+    const result = parseWiringManifest(`
+schema_version: 1
+repo:
+  kind: existing_repo
+  package_manager: npm
+pgas:
+  server_package: "@simodelne/pgas-server"
+  allowed_imports:
+    - "@simodelne/pgas-server/plugin.js"
+paths:
+  programs_dir: "programs"
+  audit_dir: "audit"
+  pgas_new_dir: ".pgas/pgas-new"
+registration:
+  strategy: curator_request
+verification:
+  commands:
+    install: "npm install --no-audit --no-fund"
+    typecheck: "npm run typecheck"
+    test: "npm test"
+curator:
+  github_owner: simodelne
+  github_repo: simoneos
+integrations:
+  - name: ""
+    kind: raw_socket
+    import: "node:child_process"
+    factory: ""
+    methods: []
+    config_env: ["CRM_TOKEN=secret", "lowercase"]
+`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        'integrations[0].name must be a non-empty logical identifier',
+        'integrations[0].kind must be one of: http_api, db, sdk, module',
+        'integrations[0].import contains banned import: node:child_process',
+        'integrations[0].factory must be a non-empty exported symbol when present',
+        'integrations[0].methods must contain at least one exported method name',
+        'integrations[0].config_env[0] must be an env var name, not a value',
+        'integrations[0].config_env[1] must be an env var name, not a value',
+      ]),
+    );
   });
 
   it('rejects test-only and obsolete public imports from runtime wiring', () => {
