@@ -534,9 +534,13 @@ export const handlers: Record<string, ToolHandler> = {
       spec_yaml: synthesized.spec_yaml,
       mode_names: synthesized.mode_names,
       sha256: synthesized.sha256,
+      contracts_ts: synthesized.contracts_ts,
       handlers_ts: synthesized.handlers_ts,
       handlers_index_ts: synthesized.handlers_index_ts,
       tools_ts: synthesized.tools_ts,
+      smoke_test_ts: synthesized.smoke_test_ts,
+      stage_classification: synthesized.stage_classification,
+      body_stage_slugs: synthesized.body_stage_slugs,
       created_at: new Date().toISOString(),
     });
     return {

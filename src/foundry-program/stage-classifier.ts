@@ -76,14 +76,17 @@ function classifyStage(
   delegation: Record<string, unknown>,
 ): ClassifiedStage {
   const slug = stage.slug;
-  const stageText = [
+  const localStageText = [
     slug,
     words(slug),
+  ].join(' ').toLowerCase();
+  const externalStageText = [
+    localStageText,
     JSON.stringify(delegation[slug] ?? ''),
   ].join(' ').toLowerCase();
   void purpose;
 
-  if (hasAny(stageText, EXTERNAL_TERMS) || hasExternalDelegation(delegation[slug])) {
+  if (hasAny(externalStageText, EXTERNAL_TERMS) || hasExternalDelegation(delegation[slug])) {
     return {
       slug,
       archetype: 'external-adapter',
@@ -92,7 +95,7 @@ function classifyStage(
     };
   }
 
-  if (hasAny(stageText, LLM_REASONING_TERMS) && !hasAny(stageText, COMPUTE_TERMS)) {
+  if (hasAny(localStageText, LLM_REASONING_TERMS) && !hasAny(localStageText, COMPUTE_TERMS)) {
     return {
       slug,
       archetype: 'llm-reasoning',

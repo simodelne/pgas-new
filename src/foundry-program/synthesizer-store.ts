@@ -3,9 +3,15 @@ export interface SynthesizedArtifact {
   mode_names: string[];
   sha256: string;
   created_at: string;
+  contracts_ts: string;
   handlers_ts: string;
   handlers_index_ts: string;
   tools_ts: string;
+  smoke_test_ts: string;
+  stage_classification: unknown[];
+  body_stage_slugs: string[];
+  stage_sources?: Record<string, string>;
+  domain_synthesis_audit?: Array<Record<string, unknown>>;
 }
 
 const artifactsBySessionId = new Map<string, SynthesizedArtifact>();

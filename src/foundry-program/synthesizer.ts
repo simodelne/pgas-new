@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
+import {
+  classifyStagesForDomain,
+  type ClassifiedStage,
+  type StageArchetype,
+} from './stage-classifier.js';
 
 interface Stage {
   slug: string;
@@ -32,14 +37,27 @@ interface SynthesizedSpec {
   spec_yaml: string;
   mode_names: string[];
   sha256: string;
+  contracts_ts: string;
   handlers_ts: string;
   handlers_index_ts: string;
   tools_ts: string;
+  smoke_test_ts: string;
+  stage_classification: ClassifiedStage[];
+  body_stage_slugs: string[];
 }
 
 type MutableRecord = Record<string, unknown>;
 
 interface TransitionAction {
+  name: string;
+  source: string;
+  target: string;
+  guardField?: string;
+  archetype: StageArchetype;
+  adapter_kind?: 'in_memory_mock';
+}
+
+interface PlannedTransitionAction {
   name: string;
   source: string;
   target: string;
@@ -65,6 +83,11 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   assertTransitions(transitions);
   assertCompletion(completion);
   transitions = refreshStaleTransitionsForStages(stages, transitions, completion) ?? transitions;
+  const stageClassification = classifyStagesForDomain({
+    ...domain,
+    'intake.stages_json': JSON.stringify(stages),
+  });
+  const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
 
   const modeNames = stages.map((stage) => stage.slug);
   const firstMode = modeNames[0] as string;
@@ -83,7 +106,10 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   assertCompletionTransition(transitions, completion);
   const terminalModeSet = new Set(terminalModes);
   const intermediateModes = modeNames.filter((modeName) => modeName !== firstMode && !terminalModeSet.has(modeName));
-  const transitionActions = planTransitionActions(transitions, completion, firstMode);
+  const transitionActions = decorateTransitionActions(
+    planTransitionActions(transitions, completion, firstMode),
+    stageClassificationBySlug,
+  );
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
 
@@ -121,16 +147,14 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
 
   applyTransitions(synthesizedModes, transitionActions, modeNames);
   applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
+  applyStageOutputChannels(synthesizedModes, transitionActions);
   spec.modes = synthesizedModes;
 
   spec.proceed_to = Object.fromEntries(transitionActions.map((action) => [action.name, action.target]));
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
-  const intermediateJsonFields = intermediateModes.flatMap((modeName) => [
-    `${modeName}.result_json`,
-    `${modeName}.items_json`,
-  ]);
+  const intermediateJsonFields = intermediateModes.flatMap((modeName) => outputProjectionFields(modeName, stageClassificationBySlug));
   const intermediateGuardFields = unique(
     intermediateModes.flatMap((modeName) => guardFieldsByMode.get(modeName) ?? []),
   );
@@ -154,8 +178,7 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
         'notebook.entries',
         'notebook.pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
-        `${modeName}.result_json`,
-        `${modeName}.items_json`,
+        ...outputProjectionFields(modeName, stageClassificationBySlug),
       ]),
       exclude: [],
     };
@@ -183,6 +206,7 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   spec.channels = {
     ...recordField(spec, 'channels'),
     [entryChannel]: { direction: 'In', sync: 'Async' },
+    stage_output: { direction: 'Out', sync: 'Sync' },
   };
 
   const actionMap = recordField(spec, 'action_map');
@@ -205,28 +229,53 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   for (const field of unique([...guardFieldsByMode.values()].flat())) {
     schema[field] = 'boolean';
   }
-  for (const field of intermediateJsonFields) {
-    schema[field] = 'string';
+  for (const modeName of intermediateModes) {
+    const classification = stageClassificationBySlug.get(modeName);
+    if (classification?.archetype === 'llm-reasoning') {
+      schema[`${modeName}.result_json`] = 'string';
+      schema[`${modeName}.items_json`] = 'string';
+    } else {
+      schema[`${modeName}.output`] = 'object';
+      schema[`${modeName}.output.result_json`] = 'string';
+      schema[`${modeName}.output.items_json`] = 'string';
+      schema[`${modeName}.output.digest`] = 'string';
+      if (classification?.archetype === 'external-adapter') {
+        schema[`${modeName}.output.adapter_kind`] = 'string';
+      }
+    }
   }
 
   spec.guidance = guidanceFor(intermediateModes, delegation);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
+  const bodyStageSlugs = unique(
+    transitionActions
+      .filter((action) => action.name !== 'begin_work' && action.archetype !== 'llm-reasoning')
+      .map((action) => action.source),
+  );
 
   return {
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
+    contracts_ts: renderContractsSource(stageClassification, transitionActions),
     handlers_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: true,
       resolverImport: './handlers/_resolver.js',
+      contractsImport: './contracts.js',
+      stageImportPrefix: './stages',
     }),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
       resolverImport: './_resolver.js',
+      contractsImport: '../contracts.js',
+      stageImportPrefix: '../stages',
     }),
     tools_ts: renderToolsSource(slug, transitionActions),
+    smoke_test_ts: renderSmokeTestSource(slug, name, transitionActions, completion),
+    stage_classification: stageClassification,
+    body_stage_slugs: bodyStageSlugs,
   };
 }
 
@@ -322,6 +371,17 @@ function applyModeVocabularies(
   }
 }
 
+function applyStageOutputChannels(modes: MutableRecord, transitionActions: TransitionAction[]): void {
+  for (const action of transitionActions) {
+    if (action.name === 'begin_work' || action.archetype === 'llm-reasoning') {
+      continue;
+    }
+    const mode = recordField(modes, action.source);
+    const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+    mode.channels = unique([...channels, 'stage_output']);
+  }
+}
+
 function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
   const fieldsByMode = new Map<string, string[]>();
   for (const transition of transitionActions) {
@@ -336,14 +396,14 @@ function planTransitionActions(
   transitions: IntakeTransition[],
   completion: Completion,
   firstMode: string,
-): TransitionAction[] {
+): PlannedTransitionAction[] {
   const grouped = new Map<string, IntakeTransition[]>();
   for (const transition of transitions) {
     grouped.set(transition.from, [...(grouped.get(transition.from) ?? []), transition]);
   }
 
   const usedActionNames = new Set<string>();
-  const planned = new Map<IntakeTransition, TransitionAction>();
+  const planned = new Map<IntakeTransition, PlannedTransitionAction>();
 
   for (const [source, siblingTransitions] of grouped) {
     const isBranch = siblingTransitions.length > 1;
@@ -384,6 +444,20 @@ function planTransitionActions(
   });
 }
 
+function decorateTransitionActions(
+  actions: PlannedTransitionAction[],
+  stageClassificationBySlug: Map<string, ClassifiedStage>,
+): TransitionAction[] {
+  return actions.map((action) => {
+    const classification = stageClassificationBySlug.get(action.source);
+    return {
+      ...action,
+      archetype: classification?.archetype ?? 'pure-compute',
+      ...(classification?.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+    };
+  });
+}
+
 function actionsBySourceMode(actions: TransitionAction[]): Map<string, TransitionAction[]> {
   const actionsBySource = new Map<string, TransitionAction[]>();
   for (const action of actions) {
@@ -392,11 +466,19 @@ function actionsBySourceMode(actions: TransitionAction[]): Map<string, Transitio
   return actionsBySource;
 }
 
+function outputProjectionFields(modeName: string, stageClassificationBySlug: Map<string, ClassifiedStage>): string[] {
+  const classification = stageClassificationBySlug.get(modeName);
+  return classification?.archetype === 'llm-reasoning'
+    ? [`${modeName}.result_json`, `${modeName}.items_json`]
+    : [`${modeName}.output`];
+}
+
 function actionMapEntryFor(action: TransitionAction, firstMode: string): MutableRecord {
   const isBootstrap = action.source === firstMode;
+  const isResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
   const mutations = [
     ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
-    ...(isBootstrap ? [] : [
+    ...(isBootstrap || isResultPathStage ? [] : [
       { op: 'MSet', path: `${action.source}.result_json`, from_arg: 'result_json' },
       { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
     ]),
@@ -405,15 +487,18 @@ function actionMapEntryFor(action: TransitionAction, firstMode: string): Mutable
   return {
     description: isBootstrap
       ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
-      : `TODO stub for completing ${action.source} and advancing exactly one hop to ${action.target}. Writes only ${action.source}'s own guard/result fields.`,
-    ...(isBootstrap ? {} : {
+      : action.archetype === 'llm-reasoning'
+        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.`
+        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.`,
+    ...(isBootstrap || isResultPathStage ? {} : {
       arg_descriptions: {
-        result_json: `JSON string result for the ${action.source} stage. TODO: replace the generated stub with real domain output.`,
-        items_json: `JSON string array of item ids or summaries produced by the ${action.source} stage. TODO: replace the generated stub with real domain output.`,
+        result_json: `JSON string result for the ${action.source} LLM reasoning stage.`,
+        items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.`,
       },
     }),
+    ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
     mutations,
-    channel: 'widget_output',
+    channel: isResultPathStage ? 'stage_output' : 'widget_output',
   };
 }
 
@@ -459,23 +544,43 @@ function uniqueGuardField(base: string, used: Set<string>): string {
 
 function renderHandlersSource(
   transitionActions: TransitionAction[],
-  options: { includeReactionHandlers: boolean; resolverImport: string },
+  options: {
+    includeReactionHandlers: boolean;
+    resolverImport: string;
+    contractsImport: string;
+    stageImportPrefix: string;
+  },
 ): string {
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
-  const actionHandlers = stageActions.map((action) => `  async ${action.name}(payload) {
+  const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
+  const stageImports = bodyActions
+    .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
+    .join('\n');
+  const actionHandlers = stageActions.map((action) => {
+    if (action.archetype === 'llm-reasoning') {
+      return `  async ${action.name}(payload) {
     const resultJson = resolveDomainValue<string>(payload as HandlerPayload, 'result_json', '{}');
     const itemsJson = resolveDomainValue<string>(payload as HandlerPayload, 'items_json', '[]');
     return {
-      kind: 'stage_action_stub',
+      kind: 'llm_reasoning_stage_output',
       action: ${tsString(action.name)},
       stage: ${tsString(action.source)},
       target: ${tsString(action.target)},
       result_json: resultJson,
       items_json: itemsJson,
-      todo: ${tsString(`TODO: implement the ${action.source} stage handler and replace this stub return with real domain output.`)},
       payload,
     };
-  },`).join('\n\n');
+  },`;
+    }
+
+    return `  async ${action.name}(payload) {
+    const output = await run${toPascalCase(action.source)}(
+      resolveStageInput(payload as HandlerPayload, ${tsString(action.source)}),
+      createStageRuntime(payload as HandlerPayload),
+    );
+    return normalizeStageOutput(output, ${tsString(action.source)}, ${tsString(action.archetype)});
+  },`;
+  }).join('\n\n');
   const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
   const reactionExport = options.includeReactionHandlers
     ? `\n\n// The generated scaffold has no foundry-driven reactions by default. Consumer\n// programs can add reactions by populating this map.\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map();`
@@ -483,9 +588,12 @@ function renderHandlersSource(
 
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
+import { createStageRuntime, normalizeStageOutput, resolveStageInput } from ${tsString(options.contractsImport)};
+${stageImports ? `${stageImports}\n` : ''}
 
-// Generated by pgas-new from the approved stage topology. Each stage action is
-// an honest TODO stub; action_map mutations in specs.yml own state changes.
+// Generated by pgas-new from the approved stage topology. Deterministic stage
+// wrappers return values written through action_map.result_path; LLM reasoning
+// stages keep the runtime model's tool-call arguments as their source of truth.
 
 export const handlers: Record<string, ToolHandler> = {
   async begin_work(payload) {
@@ -514,10 +622,11 @@ function renderToolsSource(slug: string, transitionActions: TransitionAction[]):
 ${stageActions.map((action) => `  ${action.name}: {
     mode: ${tsString(action.source)},
     target: ${tsString(action.target)},
+    archetype: ${tsString(action.archetype)},
     guard_paths: [${action.guardField ? tsString(action.guardField) : ''}],
-    result_path: ${tsString(`${action.source}.result_json`)},
-    items_path: ${tsString(`${action.source}.items_json`)},
-    description: ${tsString(`TODO: implement local tool/adapter logic for ${action.source} before using ${action.name} in production.`)},
+    output_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`)},
+    items_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.items_json` : `${action.source}.output.items_json`)},
+    description: ${tsString(`Generated stage action metadata for ${action.source}.`)},
   },`).join('\n')}\n}`;
 
   return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';
@@ -528,11 +637,212 @@ ${stageActions.map((action) => `  ${action.name}: {
 export const stageActionTools = ${metadata} as const;
 
 export function register${toPascalCase(slug)}Tools(_registry: ToolRegistry): void {
-  // TODO: register real local tools here if a stage needs external adapters.
-  // Keep action names and modes aligned with stageActionTools and specs.yml.
+  // Stage actions are native action_map entries. Real service adapters belong
+  // behind generated external-adapter stage bodies, not extra topology actions.
   void _registry;
 }
 `;
+}
+
+function renderContractsSource(stageClassification: ClassifiedStage[], transitionActions: TransitionAction[]): string {
+  const classified = JSON.stringify(stageClassification, null, 2);
+  const actionContracts = JSON.stringify(
+    transitionActions
+      .filter((action) => action.name !== 'begin_work')
+      .map((action) => ({
+        action: action.name,
+        stage: action.source,
+        target: action.target,
+        archetype: action.archetype,
+        output_path: action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`,
+        guard_path: action.guardField,
+        adapter_kind: action.adapter_kind,
+      })),
+    null,
+    2,
+  );
+
+  return `import { createHash } from 'node:crypto';
+import type { HandlerPayload } from './handlers/_resolver.js';
+
+export type StageArchetype = 'pure-compute' | 'llm-reasoning' | 'external-adapter';
+
+export interface StageInput {
+  stage: string;
+  payload: HandlerPayload;
+  domain: Record<string, unknown>;
+}
+
+export interface StageRuntime {
+  now(): string;
+  random(): number;
+  llm(prompt: string): Promise<string>;
+}
+
+export interface StageOutput {
+  result_json: string;
+  items_json: string;
+  digest: string;
+  adapter_kind?: 'in_memory_mock';
+}
+
+export const stageClassification = ${classified} as const;
+
+export const stageActionContracts = ${actionContracts} as const;
+
+export function resolveStageInput(payload: HandlerPayload, stage: string): StageInput {
+  const domain = payload.domain && typeof payload.domain === 'object' && !Array.isArray(payload.domain)
+    ? payload.domain as Record<string, unknown>
+    : {};
+  return { stage, payload, domain };
+}
+
+export function createStageRuntime(payload: HandlerPayload): StageRuntime {
+  const runtime = payload.__stage_runtime;
+  const fixedNow = runtime && typeof runtime === 'object' && !Array.isArray(runtime) && typeof (runtime as { now_iso?: unknown }).now_iso === 'string'
+    ? (runtime as { now_iso: string }).now_iso
+    : '1970-01-01T00:00:00.000Z';
+  const fixedRandom = runtime && typeof runtime === 'object' && !Array.isArray(runtime) && typeof (runtime as { random?: unknown }).random === 'number'
+    ? (runtime as { random: number }).random
+    : 0.5;
+  return {
+    now: () => fixedNow,
+    random: () => fixedRandom,
+    llm: async () => {
+      throw new Error('StageRuntime.llm is not available inside deterministic generated wrappers.');
+    },
+  };
+}
+
+export function normalizeStageOutput(output: unknown, stage: string, archetype: StageArchetype): StageOutput {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    throw new Error(\`stage \${stage} returned a non-object output\`);
+  }
+  const candidate = output as Partial<StageOutput>;
+  const resultJson = assertJsonString(candidate.result_json, \`\${stage}.result_json\`, 'object');
+  const itemsJson = assertJsonString(candidate.items_json, \`\${stage}.items_json\`, 'array');
+  const normalized: StageOutput = {
+    result_json: resultJson,
+    items_json: itemsJson,
+    digest: digestStageOutput(resultJson, itemsJson),
+  };
+  if (archetype === 'external-adapter') {
+    normalized.adapter_kind = 'in_memory_mock';
+  }
+  assertNoStubMarkers(normalized, stage);
+  return normalized;
+}
+
+export function digestStageOutput(resultJson: string, itemsJson: string): string {
+  return createHash('sha256').update(resultJson).update('\\n').update(itemsJson).digest('hex');
+}
+
+function assertJsonString(value: unknown, label: string, topLevel: 'object' | 'array'): string {
+  if (typeof value !== 'string') {
+    throw new Error(\`\${label} must be a JSON string\`);
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (topLevel === 'array' ? !Array.isArray(parsed) : !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(\`\${label} must encode a JSON \${topLevel}\`);
+  }
+  return JSON.stringify(parsed);
+}
+
+function assertNoStubMarkers(output: StageOutput, stage: string): void {
+  const text = JSON.stringify(output).toLowerCase();
+  for (const marker of ['stage_action_stub', '"todo"', 'replace this stub', 'not implemented']) {
+    if (text.includes(marker)) {
+      throw new Error(\`stage \${stage} output contains stub marker: \${marker}\`);
+    }
+  }
+}
+`;
+}
+
+function renderSmokeTestSource(
+  slug: string,
+  name: string,
+  transitionActions: TransitionAction[],
+  completion: Completion,
+): string {
+  const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
+  const responses = pathActions.map((action) => {
+    if (action.archetype === 'llm-reasoning') {
+      return `        effect(${tsString(action.name)}, {
+          result_json: JSON.stringify({ stage: ${tsString(action.source)}, status: 'reasoned' }),
+          items_json: JSON.stringify([${tsString(`${action.source}-item`)}]),
+        }),`;
+    }
+    return `        effect(${tsString(action.name)}, { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),`;
+  }).join('\n');
+
+  return `import { describe, expect, it } from 'vitest';
+import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
+import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
+
+describe('generated program smoke', () => {
+  it('runs ${name} through the deterministic completion path without stub output', async () => {
+    const harness = await createTestHarness(create${toPascalCase(slug)}ProgramEntry(), {
+      programName: ${tsString(slug)},
+      defaultChannel: 'user_text',
+      authorResponses: [
+${responses}
+      ],
+    });
+
+    try {
+      await harness.trigger('start generated smoke');
+${pathActions.slice(1).map(() => "      await harness.trigger('continue generated smoke');").join('\n')}
+      const snapshot = await harness.snapshot();
+      expect(snapshot.mode).toBe(${tsString(completion.final_stage)});
+      const serialized = JSON.stringify(snapshot.domain).toLowerCase();
+      expect(serialized).not.toContain('stage_action_stub');
+      expect(serialized).not.toContain('"todo"');
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
+  return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
+}
+`;
+}
+
+function actionsForCompletionPath(actions: TransitionAction[], finalStage: string): TransitionAction[] {
+  if (actions.length === 0) {
+    return [];
+  }
+
+  const bySource = actionsBySourceMode(actions);
+  const path: TransitionAction[] = [];
+  let current = actions[0]?.source;
+  const seen = new Set<string>();
+  while (current && current !== finalStage && !seen.has(current)) {
+    seen.add(current);
+    const next = (bySource.get(current) ?? []).find((action) => reachesFinalStage(action.target, finalStage, bySource, new Set()));
+    if (!next) break;
+    path.push(next);
+    current = next.target;
+  }
+  return path;
+}
+
+function reachesFinalStage(
+  mode: string,
+  finalStage: string,
+  bySource: Map<string, TransitionAction[]>,
+  seen: Set<string>,
+): boolean {
+  if (mode === finalStage) {
+    return true;
+  }
+  if (seen.has(mode)) {
+    return false;
+  }
+  seen.add(mode);
+  return (bySource.get(mode) ?? []).some((action) => reachesFinalStage(action.target, finalStage, bySource, seen));
 }
 
 function safeIdentifier(value: string): string {

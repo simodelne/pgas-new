@@ -12,9 +12,13 @@ function artifact(specYaml: string, modeNames: string[]): SynthesizedArtifact {
     mode_names: modeNames,
     sha256: `sha-${modeNames.join('-')}`,
     created_at: '2026-06-22T00:00:00.000Z',
+    contracts_ts: 'export const stageActionContracts = [];',
     handlers_ts: 'export const handlers = {};',
     handlers_index_ts: 'export const handlers = {};',
     tools_ts: 'export function registerProgramTools() {}',
+    smoke_test_ts: 'describe("generated program smoke", () => {});',
+    stage_classification: [],
+    body_stage_slugs: [],
   };
 }
 
