@@ -5,6 +5,7 @@ import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
+import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import {
   clearSynthesizedArtifact,
   getSynthesizedArtifact,
@@ -158,10 +159,39 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.guidance.triage.join('\n')).toContain('delegation');
     expect(artifact?.contracts_ts).toContain('triage');
     expect(artifact?.handlers_ts).toContain('runTriage');
+    expect(artifact?.handlers_ts).toContain('async session_status(payload)');
+    expect(artifact?.handlers_ts).toContain("control: 'session_status'");
     expect(artifact?.handlers_ts).not.toContain('stage_action_stub');
     expect(artifact?.smoke_test_ts).toContain('generated program smoke');
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
+  it('does not import synthesized stage contracts for an LLM-only program with no generated stage bodies', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'brief-summarizer',
+      'program.name': 'Brief Summarizer',
+      'program.target_dir': '/tmp/brief-summarizer',
+      'program.design_path': 'design',
+      'intake.purpose': 'Summarize a natural-language project brief into structured output.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'brief_summary' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'brief_summary', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'brief_summary', to: 'complete', trigger: 'summarized', guard_field: 'brief_summary.done' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'brief_summary.done' }),
+    });
+
+    expect(artifact.body_stage_slugs).toEqual([]);
+    expect(artifact.handlers_ts).not.toContain('./contracts.js');
+    expect(artifact.handlers_index_ts).not.toContain('../contracts.js');
+    expect(artifact.handlers_ts).toContain('async complete_brief_summary(payload)');
   });
 
   it('binds matching existing-repo external stages to declared manifest integrations in stored contracts', async () => {

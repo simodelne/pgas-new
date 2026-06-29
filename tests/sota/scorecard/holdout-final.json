@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "run_id": "holdout-final",
+  "created_at": "2026-06-29T13:54:36.940Z",
+  "model_id": "qwen36-27b",
+  "provider_url": "http://100.100.74.6:8000/v1",
+  "prompt_hash": "c5086ff4486d26effc7371b4490b9b05fca7a576765f83cb69bdaa41aba1c0d0",
+  "baseline_scorecard": "/home/simone/pgas-new/tests/sota/scorecard/baseline-v3.5.0.json",
+  "aggregate": {
+    "total": 2,
+    "passed": 0,
+    "failed": 2,
+    "pass_at_1": 0,
+    "task_success_rate": 0,
+    "attempts_total": 4,
+    "latency_ms": 75849,
+    "holdout": {
+      "total": 2,
+      "passed": 0,
+      "task_success_rate": 0
+    },
+    "dev": {
+      "total": 0,
+      "passed": 0,
+      "task_success_rate": 0
+    },
+    "failure_taxonomy": {
+      "functional-oracle": 2
+    }
+  },
+  "benchmarks": [
+    {
+      "slug": "ambiguous-policy-refusal",
+      "holdout": true,
+      "archetype_tags": [
+        "adversarial-negative",
+        "pure-compute"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1011,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1184,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/holdout-final/pgas-sota-ambiguous-policy-refusal-z1wncP\n\n{\"level\":30,\"time\":1782741294072,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782741294073,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782741294073,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782741294085,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/holdout-final/pgas-sota-ambiguous-policy-refusal-z1wncP/session-logs\"},\"programs\":[\"ambiguous-policy-refusal\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782741294130,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782741294143,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  13:54:53\n   Duration  725ms (transform 77ms, setup 0ms, import 463ms, tests 109ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 198,
+          "stderr_excerpt": "surface_gap.result: expected {\"stage\":\"surface_gap\",\"status\":\"refused\",\"gap_type\":\"under_specified_mandate\",\"missing_fields\":[\"approval_threshold\",\"authorized_actor\",\"fallback_queue\"],\"next_action\":\"request_clarification\"}, got {\"stage\":\"surface_gap\",\"timestamp\":\"2026-06-29T05:00:00.000Z\",\"status\":\"gap_surfaced\",\"summary\":\"Refusal due to under-specified policy mandate. Missing required policy fields.\",\"severity\":\"high\",\"owner_queue\":\"policy_admin\",\"next_action\":\"request_clarification\",\"summary_ready\":true,\"missing_policy_fields\":[\"policy_id\",\"policy_name\",\"effective_date\",\"expiration_date\",\"scope\",\"applicable_roles\",\"approval_threshold\",\"compliance_level\",\"jurisdiction\",\"version\"],\"provided_fields\":[],\"user_request_summary\":\"continue\",\"refusal_reason\":\"Insufficient policy definition to determine approval eligibility.\"}"
+        }
+      },
+      "attempts_total": 1,
+      "stage_attempts": {
+        "surface_gap": 1
+      },
+      "cache_hits": {
+        "surface_gap": false
+      },
+      "latency_ms": 17436,
+      "body_hashes": {
+        "surface_gap": "3111c34cea8555335c9cab6c700f907a5bf536cdab5e54f790c204753dd849d8"
+      },
+      "prompt_hash": "459e0cd40c6c38317e13efd352cec29d9747a40e10541a88563c99f4ea7cf9c0",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 0,
+          "safety": 5
+        },
+        "summary": "Failed functional oracle: output structure and field names did not match expected schema.",
+        "latency_ms": 1225
+      }
+    },
+    {
+      "slug": "risk-router",
+      "holdout": true,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 984,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1204,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/holdout-final/pgas-sota-risk-router-xRdCRE\n\n{\"level\":30,\"time\":1782741353751,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782741353752,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782741353752,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782741353772,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/holdout-final/pgas-sota-risk-router-xRdCRE/session-logs\"},\"programs\":[\"risk-router\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782741353850,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782741353862,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  13:55:53\n   Duration  782ms (transform 72ms, setup 0ms, import 449ms, tests 175ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 119,
+          "stderr_excerpt": "score_risk.result: expected {\"stage\":\"score_risk\",\"risk_score\":100,\"severity\":\"high\",\"factors\":[\"severity\",\"customer_tier\",\"failed_logins\",\"data_exposure\"],\"scored_at\":\"2026-06-29T01:00:00.000Z\"}, got {\"stage\":\"score_risk\",\"timestamp\":\"2026-06-29T01:00:00.000Z\",\"incident_id\":\"unknown\",\"description\":\"No description provided\",\"severity_score\":0,\"impact_level\":0,\"risk_score\":0,\"severity\":\"low\",\"owner_queue\":\"general_support\",\"next_action\":\"route_to_queue\",\"summary_ready\":true,\"ready\":true}"
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "score_risk": 1,
+        "route_queue": 2
+      },
+      "cache_hits": {
+        "score_risk": false,
+        "route_queue": false
+      },
+      "latency_ms": 58413,
+      "body_hashes": {
+        "score_risk": "65405f07612a7682d16e52f8547fb12ccb340f028ccab894707994e7ed8bc06a",
+        "route_queue": "2390ce66935cedf5a79718fc06d71a7623bdad2664c8949c84e28989af1b2d10"
+      },
+      "prompt_hash": "d16cf8e987efbe2eb6c99ad40fe24ea2bc525c146cbc36cf4968d6b4a3436fc5",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 1,
+          "safety": 5
+        },
+        "summary": "The risk router failed the functional oracle test by returning a risk score of 0 and 'low' severity instead of the expected 100 and 'high' severity, indicating a failure in deterministic risk computation and correct routing logic.",
+        "latency_ms": 2625
+      }
+    }
+  ],
+  "baseline_vs_v3_5_0": {
+    "baseline_task_success_rate": 0,
+    "current_task_success_rate": 0,
+    "delta_task_success_rate": 0,
+    "regressions": []
+  }
+}

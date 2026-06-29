@@ -6,7 +6,7 @@ import ts from 'typescript';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesizedArtifact } from './synthesizer-store.js';
 
-const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v1';
+const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v2';
 
 export interface StageBodyRequest {
   stage: string;
@@ -373,18 +373,35 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
 }
 
 function promptForStage(stage: string, classification: StageClassification, artifact: SynthesizedArtifact): string {
+  const context = contextForStage(stage, classification, artifact);
+  const entryPath = `inputs.${context.entry_channel}`;
   return [
     `Generate src/programs/<slug>/stages/${stage}.ts for a PGAS generated program.`,
     `Stage archetype: ${classification.archetype}.`,
     classification.archetype === 'external-adapter'
       ? externalAdapterPromptLine(classification)
       : 'Implement deterministic local pure-compute logic.',
+    'Stage synthesis context:',
+    JSON.stringify(context, null, 2),
     'Do not include comments or any stub marker words: TODO, placeholder, stage_action_stub, not implemented.',
     "Use exactly one import line: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
     'Do not import handlers, resolver helpers, Node built-ins, runtime packages, or any other module.',
     'Export exactly: async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput>.',
     'Return JSON strings result_json and items_json; do not compute digest yourself.',
-    'For pure-compute stages, build a complete deterministic object from input.stage, runtime.now(), and simple facts from input.domain. If no domain fact is relevant, still return a meaningful non-empty object with status, summary, severity, owner_queue, next_action, and summary_ready fields.',
+    'Runtime data access contract:',
+    `The entry-channel text is stored as a string at input.domain['${entryPath}']; read that path for user request facts.`,
+    "Parse JSON-looking user requests into typed facts before computing.",
+    'When parsed request facts contain numeric fields whose names describe a calculation, compute from those fields directly instead of inventing base fees, complexity multipliers, or random constants.',
+    'Use common named-field arithmetic: hours multiplied by hourly rates produce subtotals; discount_pct is a percentage applied to a subtotal; budget fields are comparison thresholds, not fee inputs.',
+    'When parsed request facts contain identifiers, echo those identifiers; do not replace them with synthetic IDs from runtime.random().',
+    "Prior deterministic stage outputs are stored as objects at input.domain['<stage>.output']; parse their result_json and items_json strings before using them.",
+    "Prior LLM reasoning stage outputs are stored as strings at input.domain['<stage>.result_json'] and input.domain['<stage>.items_json']; parse them before using them.",
+    'Do not treat input.payload.__stage_runtime as business input; use runtime.now() and runtime.random() through StageRuntime only.',
+    'Shape result_json from the mandate, stage slug, input facts, and prior stage outputs. Preserve concrete field names from the request and prior results when they are meaningful.',
+    'Do not use a generic status/summary/details template when the mandate names concrete fields.',
+    'Keep final business fields at the top level; do not wrap all important facts under generic inputs, details, or calculation objects.',
+    'Keep key computed facts at the top level of result_json so later stages can consume them without guessing nested structures.',
+    'For pure-compute stages, build a complete deterministic object from input.stage, runtime.now(), parsed request facts, and prior stage outputs. If no domain fact is relevant, still return a meaningful non-empty object with status, summary, severity, owner_queue, next_action, and summary_ready fields.',
     'For items_json, return a non-empty JSON array of concise strings derived from the result object.',
     'Do not use eval, dynamic import, child_process, shell, fetch/raw network, process.env, or secret reads.',
     'Untrusted generated spec context:',
@@ -392,6 +409,50 @@ function promptForStage(stage: string, classification: StageClassification, arti
     'Frozen contract:',
     artifact.contracts_ts,
   ].join('\n');
+}
+
+function contextForStage(
+  stage: string,
+  classification: StageClassification,
+  artifact: SynthesizedArtifact,
+): Record<string, unknown> & { entry_channel: string } {
+  const synthesisContext = artifact.synthesis_context;
+  const orderedStages = synthesisContext?.stages.map((item) => item.slug) ?? artifact.mode_names;
+  const stageIndex = orderedStages.indexOf(stage);
+  const previousStages = stageIndex > 0 ? orderedStages.slice(0, stageIndex) : [];
+  const laterStages = stageIndex >= 0 ? orderedStages.slice(stageIndex + 1) : [];
+  const transitions = synthesisContext?.transitions ?? [];
+  return {
+    program_slug: synthesisContext?.program_slug ?? unknownProgramSlug(artifact.spec_yaml),
+    program_name: synthesisContext?.program_name ?? 'generated program',
+    purpose: synthesisContext?.purpose ?? unknownPurpose(artifact.spec_yaml),
+    entry_channel: synthesisContext?.entry_channel ?? inferEntryChannel(artifact.spec_yaml),
+    stage,
+    archetype: classification.archetype,
+    ...(classification.rationale ? { stage_rationale: classification.rationale } : {}),
+    ...(classification.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+    previous_stages: previousStages,
+    next_stages: laterStages,
+    incoming_transitions: transitions.filter((transition) => transition.to === stage),
+    outgoing_transitions: transitions.filter((transition) => transition.from === stage),
+    delegation: synthesisContext?.delegation ?? {},
+    completion: synthesisContext?.completion ?? null,
+  };
+}
+
+function inferEntryChannel(specYaml: string): string {
+  const match = specYaml.match(/\ningestion:\n\s+([a-zA-Z0-9_]+):\n\s+- inputs\.\1/u);
+  return match?.[1] ?? 'user_text';
+}
+
+function unknownProgramSlug(specYaml: string): string {
+  const match = specYaml.match(/^name:\s*([^\n]+)/u);
+  return match?.[1]?.trim() ?? 'generated-program';
+}
+
+function unknownPurpose(specYaml: string): string {
+  const match = specYaml.match(/preamble:\s*\|-\n\s+Program:\s*([^\n]+)/u);
+  return match?.[1]?.trim() ?? 'Generated PGAS program.';
 }
 
 function externalAdapterPromptLine(classification: StageClassification): string {

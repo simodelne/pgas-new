@@ -138,6 +138,27 @@ describe('template renderer', () => {
     }
   });
 
+  it('renders synthesized smoke tests even when all body stages are LLM-reasoning stages', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-llm-smoke-'));
+    try {
+      const result = renderStandaloneScaffold({
+        outDir,
+        slug: 'brief-summarizer',
+        name: 'Brief Summarizer',
+        synthesizedSpecYaml: 'name: brief-summarizer\n',
+        synthesizedHandlersTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedHandlersIndexTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedToolsTs: 'export const stageActionTools = {};\n',
+        synthesizedSmokeTestTs: 'import { describe } from "vitest";\ndescribe("generated program smoke", () => {});\n',
+      });
+
+      expect(result.written).toContain('tests/generated-program-smoke.test.ts');
+      expect(readFileSync(join(outDir, 'tests/generated-program-smoke.test.ts'), 'utf8')).toContain('generated program smoke');
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders required public PGAS v2 imports and no banned imports', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-imports-'));
     try {

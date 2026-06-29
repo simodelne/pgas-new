@@ -50,6 +50,29 @@ function artifact(): SynthesizedArtifact {
   };
 }
 
+function artifactWithContext(): SynthesizedArtifact {
+  return {
+    ...artifact(),
+    synthesis_context: {
+      program_slug: 'fee-calculator',
+      program_name: 'Fee Calculator',
+      purpose: 'Calculate a deterministic subscription fee from plan, seats, and region facts.',
+      entry_channel: 'user_text',
+      stages: [
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'calculate' },
+        { slug: 'done', is_terminal: true },
+      ],
+      transitions: [
+        { from: 'intake', to: 'calculate', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'calculate', to: 'done', trigger: 'calculated', guard_field: 'calculate.ready' },
+      ],
+      delegation: { enabled: false },
+      completion: { final_stage: 'done', guard_field: 'calculate.ready' },
+    },
+  };
+}
+
 function externalArtifact(stage = 'crm_lookup'): SynthesizedArtifact {
   return {
     ...artifact(),
@@ -114,6 +137,31 @@ describe('domain logic synthesis', () => {
           expected_items_non_empty: true,
         }),
       }));
+    });
+  });
+
+  it('prompts generated stage bodies to read the entry-channel request and prior stage outputs', async () => {
+    await withCache(async (cacheDir) => {
+      let prompt = '';
+      await synthesizeDomainLogic(artifactWithContext(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async (request) => {
+          prompt = request.prompt;
+          return validBody;
+        },
+      });
+
+      expect(prompt).toContain('Stage synthesis context:');
+      expect(prompt).toContain("input.domain['inputs.user_text']");
+      expect(prompt).toContain("input.domain['<stage>.output']");
+      expect(prompt).toContain('Parse JSON-looking user requests into typed facts before computing.');
+      expect(prompt).toContain('When parsed request facts contain numeric fields whose names describe a calculation, compute from those fields directly instead of inventing base fees, complexity multipliers, or random constants.');
+      expect(prompt).toContain('Use common named-field arithmetic: hours multiplied by hourly rates produce subtotals; discount_pct is a percentage applied to a subtotal; budget fields are comparison thresholds, not fee inputs.');
+      expect(prompt).toContain('When parsed request facts contain identifiers, echo those identifiers; do not replace them with synthetic IDs from runtime.random().');
+      expect(prompt).toContain('Keep final business fields at the top level; do not wrap all important facts under generic inputs, details, or calculation objects.');
+      expect(prompt).toContain('Do not use a generic status/summary/details template when the mandate names concrete fields.');
     });
   });
 

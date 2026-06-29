@@ -47,3 +47,9 @@ uploads/
 # that is the deterministic replay fixture.)
 tests/sota/generated/
 tests/sota/.body-cache/
+
+# SOTA iteration-loop scratch scorecards (keep baseline + holdout-final only)
+tests/sota/scorecard/iterate-*.json
+tests/sota/scorecard/iterate-*.md
+tests/sota/scorecard/verify-*.json
+tests/sota/scorecard/verify-*.md

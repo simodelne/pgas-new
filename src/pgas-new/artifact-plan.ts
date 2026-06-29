@@ -58,6 +58,7 @@ export interface ArtifactPlan {
 
 export interface GeneratedArtifactPlanOptions {
   stageSlugs?: string[];
+  includeSmokeTest?: boolean;
 }
 
 export function createStandaloneArtifactPlan(
@@ -126,7 +127,7 @@ export function createStandaloneArtifactPlan(
       artifact('test', 'tests/program-deterministic.test.ts', 'Verify deterministic program behavior without live provider calls.', 'static_verify', [
         'npm-test',
       ]),
-      ...(stageSlugs.length > 0
+      ...(stageSlugs.length > 0 || options.includeSmokeTest === true
         ? [artifact('test', 'tests/generated-program-smoke.test.ts', 'Verify synthesized stage bodies run through the deterministic smoke path without stub output.', 'smoke_verify', [
             'smoke_verify',
             'npm-test',

@@ -98,7 +98,10 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
   const synthesizedSources = synthesizedSourcesFor(options);
   const plan = createStandaloneArtifactPlan(
     { slug: options.slug, name: options.name },
-    { stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}) },
+    {
+      stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}),
+      includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
+    },
   );
   assertSupportedTemplate(options.template);
 
