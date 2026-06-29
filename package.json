@@ -10,7 +10,8 @@
     "test:manifest": "bash tests/plugin-manifest.test.sh",
     "test:static": "bash tests/pgas-new-static.test.sh",
     "test": "npm run typecheck && npm run test:manifest && npm run test:unit && npm run test:static",
-    "pgas-new": "node --import tsx src/cli.ts"
+    "pgas-new": "node --import tsx src/cli.ts",
+    "sota:harness": "node --import tsx tests/sota/harness.ts"
   },
   "bin": {
     "pgas-new": "./bin/pgas-new"

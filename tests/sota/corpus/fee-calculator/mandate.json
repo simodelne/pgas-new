@@ -1,0 +1,12 @@
+{
+  "program.slug": "fee-calculator",
+  "program.name": "Fee Calculator",
+  "program.target_dir": "/tmp/pgas-sota-fee-calculator",
+  "program.design_path": "design",
+  "intake.purpose": "Calculate a deterministic subscription fee from plan, seats, and region facts.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"calculate_fee\"},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"calculate_fee\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"calculate_fee\",\"to\":\"complete\",\"trigger\":\"calculated\",\"guard_field\":\"calculate_fee.ready\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"calculate_fee.ready\"}"
+}

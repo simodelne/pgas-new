@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "run_id": "sota-2026-06-29T13-13-26-644Z",
+  "created_at": "2026-06-29T13:13:26.644Z",
+  "model_id": "sota-replay-model",
+  "provider_url": "http://sota-replay.local/v1",
+  "prompt_hash": "ddc5d1764e7ac87c4768be8858398916fd7d5144a48a11f973fcccdb62337155",
+  "baseline_scorecard": "/home/simone/pgas-new/tests/sota/scorecard/baseline-v3.5.0.json",
+  "aggregate": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "pass_at_1": 1,
+    "task_success_rate": 1,
+    "attempts_total": 0,
+    "latency_ms": 2689,
+    "holdout": {
+      "total": 0,
+      "passed": 0,
+      "task_success_rate": 0
+    },
+    "dev": {
+      "total": 1,
+      "passed": 1,
+      "task_success_rate": 1
+    },
+    "failure_taxonomy": {}
+  },
+  "benchmarks": [
+    {
+      "slug": "fee-calculator",
+      "holdout": false,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1147,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1284,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/latest/pgas-sota-fee-calculator-fedOf6\n\n{\"level\":30,\"time\":1782738808990,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782738808992,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782738808992,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782738809011,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/latest/pgas-sota-fee-calculator-fedOf6/session-logs\"},\"programs\":[\"fee-calculator\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782738809082,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782738809095,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  13:13:28\n   Duration  800ms (transform 70ms, setup 0ms, import 461ms, tests 173ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 191
+        }
+      },
+      "attempts_total": 0,
+      "stage_attempts": {
+        "calculate_fee": 0
+      },
+      "cache_hits": {
+        "calculate_fee": true
+      },
+      "latency_ms": 2689,
+      "body_hashes": {
+        "calculate_fee": "58d644973d8785d858ebd28588708bc22c8e6d9adecd0ebce0d76343d882448b"
+      },
+      "prompt_hash": "2c77a117a6bc3298f25000170704fc9884d5a9d3412729162d37adf17aabaf87",
+      "scorecard_path": null,
+      "advisory_judge": null
+    }
+  ],
+  "baseline_vs_v3_5_0": {
+    "baseline_task_success_rate": 0,
+    "current_task_success_rate": 1,
+    "delta_task_success_rate": 1,
+    "regressions": []
+  }
+}

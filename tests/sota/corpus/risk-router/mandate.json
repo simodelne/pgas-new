@@ -1,0 +1,12 @@
+{
+  "program.slug": "risk-router",
+  "program.name": "Risk Router",
+  "program.target_dir": "/tmp/pgas-sota-risk-router",
+  "program.design_path": "design",
+  "intake.purpose": "Score operational risk from incident facts and route the case to a deterministic owner queue.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"score_risk\"},{\"slug\":\"route_queue\"},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"score_risk\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"score_risk\",\"to\":\"route_queue\",\"trigger\":\"scored\",\"guard_field\":\"score_risk.ready\"},{\"from\":\"route_queue\",\"to\":\"complete\",\"trigger\":\"routed\",\"guard_field\":\"route_queue.ready\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"route_queue.ready\"}"
+}

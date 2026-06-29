@@ -1,0 +1,19 @@
+{
+  "slug": "crm-mock-lookup",
+  "name": "CRM Mock Lookup",
+  "archetype_tags": ["external-adapter", "in-memory-mock", "multi-stage"],
+  "holdout": false,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "crm_lookup", "eligibility_score", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "crm_lookup": "external-adapter",
+      "eligibility_score": "pure-compute"
+    },
+    "body_stages": ["crm_lookup", "eligibility_score"],
+    "llm_stages": [],
+    "external_adapter_stages": ["crm_lookup"]
+  }
+}

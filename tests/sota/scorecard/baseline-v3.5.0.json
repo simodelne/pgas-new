@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "run_id": "first-qwen-2026-06-29",
+  "created_at": "2026-06-29T12:58:33.890Z",
+  "model_id": "qwen36-27b",
+  "provider_url": "http://100.100.74.6:8000/v1",
+  "prompt_hash": "63788f3e7d2fc04f5f5303b817ea3ebc40f46bb082bbf0cb59f8a58db7aea8ad",
+  "baseline_scorecard": null,
+  "aggregate": {
+    "total": 6,
+    "passed": 0,
+    "failed": 6,
+    "pass_at_1": 0,
+    "task_success_rate": 0,
+    "attempts_total": 15,
+    "latency_ms": 262787,
+    "holdout": {
+      "total": 2,
+      "passed": 0,
+      "task_success_rate": 0
+    },
+    "dev": {
+      "total": 4,
+      "passed": 0,
+      "task_success_rate": 0
+    },
+    "failure_taxonomy": {
+      "functional-oracle": 5,
+      "typecheck": 1
+    }
+  },
+  "benchmarks": [
+    {
+      "slug": "ambiguous-policy-refusal",
+      "holdout": true,
+      "archetype_tags": [
+        "adversarial-negative",
+        "pure-compute"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1068,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1271,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-ambiguous-policy-refusal-TJqU7k\n\n{\"level\":30,\"time\":1782737943693,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782737943695,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782737943695,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782737943714,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-ambiguous-policy-refusal-TJqU7k/session-logs\"},\"programs\":[\"ambiguous-policy-refusal\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782737943784,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782737943796,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  12:59:03\n   Duration  796ms (transform 78ms, setup 0ms, import 474ms, tests 163ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 1
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 220,
+          "stderr_excerpt": "surface_gap.result: expected {\"stage\":\"surface_gap\",\"status\":\"refused\",\"gap_type\":\"under_specified_mandate\",\"missing_fields\":[\"approval_threshold\",\"authorized_actor\",\"fallback_queue\"],\"next_action\":\"request_clarification\"}, got {\"stage\":\"surface_gap\",\"timestamp\":\"2026-06-29T05:00:00.000Z\",\"status\":\"ready\",\"summary\":\"Surface gap analysis for ambiguous policy refusal. Missing fields: none.\",\"severity\":\"low\",\"owner_queue\":\"policy_review\",\"next_action\":\"proceed_to_refusal\",\"summary_ready\":true,\"missing_fields\":[],\"context\":{\"user_text_length\":8,\"notebook_entry_count\":0,\"notebook_pin_count\":0,\"intake_started\":true}}"
+        }
+      },
+      "attempts_total": 2,
+      "stage_attempts": {
+        "surface_gap": 2
+      },
+      "cache_hits": {
+        "surface_gap": false
+      },
+      "latency_ms": 30162,
+      "body_hashes": {
+        "surface_gap": "00dc092315f92a7af6d1b3d6605b9d0677c877ec05b6c32fa89f2a00e81f60eb"
+      },
+      "prompt_hash": "459e0cd40c6c38317e13efd352cec29d9747a40e10541a88563c99f4ea7cf9c0",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 0,
+          "safety": 5
+        },
+        "summary": "Failed functional oracle: model reported no missing fields and status 'ready' instead of identifying 'under_specified_mandate' gaps and refusing.",
+        "latency_ms": 1591
+      }
+    },
+    {
+      "slug": "brief-summarizer",
+      "holdout": false,
+      "archetype_tags": [
+        "llm-reasoning"
+      ],
+      "passed": false,
+      "failure_taxonomy": "typecheck",
+      "gates": {
+        "typecheck": {
+          "status": "fail",
+          "duration_ms": 976,
+          "stdout_excerpt": "src/programs/brief-summarizer/handlers.ts(3,77): error TS2307: Cannot find module './contracts.js' or its corresponding type declarations.\nsrc/programs/brief-summarizer/handlers/index.ts(3,77): error TS2307: Cannot find module '../contracts.js' or its corresponding type declarations.\n",
+          "stderr_excerpt": "Command failed: /usr/bin/node /home/simone/pgas-new/node_modules/typescript/bin/tsc -p tsconfig.sota-typecheck.json\n"
+        },
+        "smoke": {
+          "status": "fail",
+          "duration_ms": 0,
+          "stderr_excerpt": "not run because typecheck failed"
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 0,
+          "stderr_excerpt": "not run because typecheck failed"
+        }
+      },
+      "attempts_total": 0,
+      "stage_attempts": {},
+      "cache_hits": {},
+      "latency_ms": 1018,
+      "body_hashes": {},
+      "prompt_hash": "64173f0ecd43945066a4ece71be5eb9c54adea6ccc9bd90618dc345fb016b939",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 0,
+          "safety": 5
+        },
+        "summary": "Typecheck failed due to missing module './contracts.js', preventing execution.",
+        "latency_ms": 1076
+      }
+    },
+    {
+      "slug": "crm-mock-lookup",
+      "holdout": false,
+      "archetype_tags": [
+        "external-adapter",
+        "in-memory-mock",
+        "multi-stage"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1074,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1222,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-crm-mock-lookup-VhcKQT\n\n{\"level\":30,\"time\":1782737992722,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782737992724,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782737992724,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782737992743,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-crm-mock-lookup-VhcKQT/session-logs\"},\"programs\":[\"crm-mock-lookup\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782737992824,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782737992839,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  12:59:52\n   Duration  786ms (transform 72ms, setup 0ms, import 464ms, tests 181ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 111,
+          "stderr_excerpt": "crm_lookup.result: expected {\"stage\":\"crm_lookup\",\"adapter_kind\":\"in_memory_mock\",\"account_id\":\"acct-1001\",\"tier\":\"gold\",\"active_contract\":true,\"mocked_at\":\"2026-06-29T04:00:00.000Z\"}, got {\"stage\":\"crm_lookup\",\"timestamp\":\"2026-06-29T04:00:00.000Z\",\"adapter_kind\":\"in_memory_mock\",\"account\":{\"id\":\"mock-acc-001\",\"name\":\"Test Account\",\"status\":\"active\",\"tier\":\"standard\",\"lookup_source\":\"in_memory_mock\"},\"status\":\"success\",\"summary\":\"CRM account lookup completed via in-memory mock.\",\"severity\":\"info\",\"owner_queue\":\"crm_processing\",\"next_action\":\"eligibility_score\",\"summary_ready\":true}"
+        }
+      },
+      "attempts_total": 4,
+      "stage_attempts": {
+        "crm_lookup": 3,
+        "eligibility_score": 1
+      },
+      "cache_hits": {
+        "crm_lookup": false,
+        "eligibility_score": false
+      },
+      "latency_ms": 45249,
+      "body_hashes": {
+        "crm_lookup": "269fd81a4aba87f068b620cc154e8013179d51d73e694df8e2817418b103faaf",
+        "eligibility_score": "f576807d40093a500f3e76de621c4a1a45cce5d4a9b9f3fadc9f75d62c3372c1"
+      },
+      "prompt_hash": "00069c9f8368535b6e65b2dcde6d67d516051b2d9363f5313beb588d68d22cf1",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 1,
+          "specificity": 2,
+          "safety": 5
+        },
+        "summary": "The implementation uses an in-memory mock adapter and includes adapter_kind, but fails the functional oracle because the output schema does not match the expected structure (nested account object vs flat fields) and eligibility logic is missing.",
+        "latency_ms": 3220
+      }
+    },
+    {
+      "slug": "fee-calculator",
+      "holdout": false,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 947,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1182,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-fee-calculator-2hvCbt\n\n{\"level\":30,\"time\":1782738032880,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782738032882,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782738032882,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782738032902,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-fee-calculator-2hvCbt/session-logs\"},\"programs\":[\"fee-calculator\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782738032971,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782738032982,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  13:00:32\n   Duration  770ms (transform 66ms, setup 0ms, import 456ms, tests 162ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 79,
+          "stderr_excerpt": "calculate_fee.result: expected {\"stage\":\"calculate_fee\",\"plan\":\"pro\",\"seats\":12,\"region\":\"us\",\"base_usd\":100,\"seat_rate_usd\":7,\"subtotal_usd\":184,\"region_multiplier\":1,\"total_usd\":184,\"currency\":\"USD\",\"priced_at\":\"2026-06-29T00:00:00.000Z\"}, got {\"stage\":\"calculate_fee\",\"status\":\"success\",\"summary\":\"Calculated fee for 1 seats on standard plan in us-east-1.\",\"severity\":\"info\",\"owner_queue\":\"billing\",\"next_action\":\"complete\",\"summary_ready\":true,\"timestamp\":\"2026-06-29T00:00:00.000Z\",\"details\":{\"plan\":\"standard\",\"seats\":1,\"region\":\"us-east-1\",\"baseRate\":10,\"regionMultiplier\":1,\"totalFee\":10}}"
+        }
+      },
+      "attempts_total": 2,
+      "stage_attempts": {
+        "calculate_fee": 2
+      },
+      "cache_hits": {
+        "calculate_fee": false
+      },
+      "latency_ms": 36884,
+      "body_hashes": {
+        "calculate_fee": "df3db62b06c8e4a31dee2a99aae1954d071d8ea3b9e3ac33526b0cec619af2ad"
+      },
+      "prompt_hash": "2c77a117a6bc3298f25000170704fc9884d5a9d3412729162d37adf17aabaf87",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 1,
+          "safety": 5
+        },
+        "summary": "The implementation failed the functional oracle test. It returned a generic success message with hardcoded default values (1 seat, standard plan) instead of computing the deterministic fee based on the input parameters (12 seats, pro plan). The output structure also lacked the required specific calculation fields like base_usd and subtotal_usd.",
+        "latency_ms": 4892
+      }
+    },
+    {
+      "slug": "proposal-ops-stateful",
+      "holdout": false,
+      "archetype_tags": [
+        "multi-stage",
+        "pure-compute"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 958,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1246,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-proposal-ops-stateful-l2vk9o\n\n{\"level\":30,\"time\":1782738101164,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782738101166,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782738101166,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782738101185,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-proposal-ops-stateful-l2vk9o/session-logs\"},\"programs\":[\"proposal-ops-stateful\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782738101269,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782738101283,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  13:01:40\n   Duration  808ms (transform 78ms, setup 0ms, import 466ms, tests 188ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 53,
+          "stderr_excerpt": "estimate_fee.result: expected {\"stage\":\"estimate_fee\",\"base_hours\":80,\"hourly_rate_usd\":150,\"subtotal_usd\":12000}, got {\"status\":\"estimated\",\"summary\":\"Estimated fee for proposal based on input length 8 and complexity factor 1.\",\"severity\":\"info\",\"owner_queue\":\"finance\",\"next_action\":\"apply_discount\",\"summary_ready\":true,\"timestamp\":\"2026-06-29T02:00:00.000Z\",\"stage\":\"estimate_fee\",\"base_fee\":100,\"complexity_factor\":1,\"estimated_fee\":100,\"intake_started\":true,\"notebook_entry_count\":0,\"notebook_pin_count\":0}"
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "estimate_fee": 1,
+        "apply_discount": 2
+      },
+      "cache_hits": {
+        "estimate_fee": false,
+        "apply_discount": false
+      },
+      "latency_ms": 63384,
+      "body_hashes": {
+        "estimate_fee": "7b2a0ccb700f765f4be222b8c9e56ebc64fb3f6407a36df60e19cb65286b8655",
+        "apply_discount": "babd454fc32781907edcdd42273d16185df05aa2d924bad9220ad9ed48838ea8"
+      },
+      "prompt_hash": "bee46d86e666213b98f10a85ddcff9488d2164cbce2be4b77ac48e1b45fe1144",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 1,
+          "safety": 5
+        },
+        "summary": "Functional oracle failed: estimate_fee output structure and values (base_fee 100 vs expected 12000) do not match the deterministic benchmark requirements.",
+        "latency_ms": 2721
+      }
+    },
+    {
+      "slug": "risk-router",
+      "holdout": true,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": false,
+      "failure_taxonomy": "functional-oracle",
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 945,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1232,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-risk-router-twWomw\n\n{\"level\":30,\"time\":1782738189976,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782738189977,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782738189977,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782738189997,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/first-qwen-2026-06-29-fresh/pgas-sota-risk-router-twWomw/session-logs\"},\"programs\":[\"risk-router\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782738190076,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782738190086,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  13:03:09\n   Duration  790ms (transform 74ms, setup 0ms, import 458ms, tests 177ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "fail",
+          "duration_ms": 63,
+          "stderr_excerpt": "score_risk.result: expected {\"stage\":\"score_risk\",\"risk_score\":100,\"severity\":\"high\",\"factors\":[\"severity\",\"customer_tier\",\"failed_logins\",\"data_exposure\"],\"scored_at\":\"2026-06-29T01:00:00.000Z\"}, got {\"status\":\"scored\",\"summary\":\"Risk assessment completed for input length 8 with 0 notes and 0 pins.\",\"severity\":\"medium\",\"severity_score\":10,\"owner_queue\":\"standard-review\",\"next_action\":\"route_queue\",\"summary_ready\":true,\"timestamp\":\"2026-06-29T01:00:00.000Z\",\"stage\":\"score_risk\"}"
+        }
+      },
+      "attempts_total": 4,
+      "stage_attempts": {
+        "score_risk": 1,
+        "route_queue": 3
+      },
+      "cache_hits": {
+        "score_risk": false,
+        "route_queue": false
+      },
+      "latency_ms": 86090,
+      "body_hashes": {
+        "score_risk": "0918d17176ec20d6a880c11686f61a8c959c1bc8719eca97a70ec3a19a4145a3",
+        "route_queue": "b362de4f42ff8fd5298346a8bff11d1c90775f0d9329f4f02e746e1c360fcdf3"
+      },
+      "prompt_hash": "d16cf8e987efbe2eb6c99ad40fe24ea2bc525c146cbc36cf4968d6b4a3436fc5",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 0,
+          "specificity": 1,
+          "safety": 5
+        },
+        "summary": "The risk router failed the functional oracle test. It returned a 'medium' severity with a score of 10, whereas the deterministic expectation required a 'high' severity with a score of 100, indicating a failure in deterministic risk computation and correct routing logic.",
+        "latency_ms": 3574
+      }
+    }
+  ],
+  "baseline_vs_v3_5_0": null
+}

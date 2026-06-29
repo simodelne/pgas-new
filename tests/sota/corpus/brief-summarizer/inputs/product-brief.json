@@ -1,0 +1,19 @@
+{
+  "id": "product-brief",
+  "prompt": "Summarize this brief: Launch beta onboarding for enterprise admins. Audience: customer success. Constraints: no billing changes this release. Deadline: 2026-07-15.",
+  "domain": {
+    "audience": "customer success",
+    "deadline": "2026-07-15",
+    "constraint": "no billing changes this release"
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T03:00:00.000Z",
+    "random": 0.3
+  },
+  "llm_outputs": {
+    "brief_summary": {
+      "result_json": "{\"stage\":\"brief_summary\",\"audience\":\"customer success\",\"deadline\":\"2026-07-15\",\"constraint\":\"no billing changes this release\",\"decision\":\"prepare enterprise admin beta onboarding\"}",
+      "items_json": "[\"audience:customer success\",\"deadline:2026-07-15\",\"constraint:no billing changes this release\"]"
+    }
+  }
+}

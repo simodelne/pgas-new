@@ -1,0 +1,12 @@
+{
+  "program.slug": "brief-summarizer",
+  "program.name": "Brief Summarizer",
+  "program.target_dir": "/tmp/pgas-sota-brief-summarizer",
+  "program.design_path": "design",
+  "intake.purpose": "Summarize a natural-language project brief into decision-ready structured output.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"brief_summary\"},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"brief_summary\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"brief_summary\",\"to\":\"complete\",\"trigger\":\"summarized\",\"guard_field\":\"brief_summary.done\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"brief_summary.done\"}"
+}

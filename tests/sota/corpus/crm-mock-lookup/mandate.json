@@ -1,0 +1,12 @@
+{
+  "program.slug": "crm-mock-lookup",
+  "program.name": "CRM Mock Lookup",
+  "program.target_dir": "/tmp/pgas-sota-crm-mock-lookup",
+  "program.design_path": "design",
+  "intake.purpose": "Lookup a CRM account through an in-memory mock adapter and compute eligibility from the mock account data.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"crm_lookup\"},{\"slug\":\"eligibility_score\"},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"crm_lookup\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"crm_lookup\",\"to\":\"eligibility_score\",\"trigger\":\"looked_up\",\"guard_field\":\"crm_lookup.ready\"},{\"from\":\"eligibility_score\",\"to\":\"complete\",\"trigger\":\"scored\",\"guard_field\":\"eligibility_score.ready\"}]",
+  "intake.delegation_json": "{\"crm_lookup\":{\"service\":\"crm\",\"adapter\":\"in-memory mock account lookup\",\"network\":\"forbidden\"}}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"eligibility_score.ready\"}"
+}

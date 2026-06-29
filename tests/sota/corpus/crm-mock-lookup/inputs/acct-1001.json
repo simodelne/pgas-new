@@ -1,0 +1,13 @@
+{
+  "id": "acct-1001",
+  "prompt": "{\"account_id\":\"acct-1001\",\"requested_seats\":25,\"region\":\"us\"}",
+  "domain": {
+    "account_id": "acct-1001",
+    "requested_seats": 25,
+    "region": "us"
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T04:00:00.000Z",
+    "random": 0.4
+  }
+}

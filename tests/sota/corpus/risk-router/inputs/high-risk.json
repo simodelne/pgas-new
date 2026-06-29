@@ -1,0 +1,14 @@
+{
+  "id": "high-risk",
+  "prompt": "{\"severity\":\"high\",\"customer_tier\":\"enterprise\",\"failed_logins\":7,\"data_exposure\":true}",
+  "domain": {
+    "severity": "high",
+    "customer_tier": "enterprise",
+    "failed_logins": 7,
+    "data_exposure": true
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T01:00:00.000Z",
+    "random": 0.1
+  }
+}

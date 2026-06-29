@@ -1,0 +1,12 @@
+{
+  "program.slug": "ambiguous-policy-refusal",
+  "program.name": "Ambiguous Policy Refusal",
+  "program.target_dir": "/tmp/pgas-sota-ambiguous-policy-refusal",
+  "program.design_path": "design",
+  "intake.purpose": "Given an under-specified policy mandate, refuse to fabricate an approval decision and surface the missing policy fields.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"surface_gap\"},{\"slug\":\"refused\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"surface_gap\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"surface_gap\",\"to\":\"refused\",\"trigger\":\"gap_surfaced\",\"guard_field\":\"surface_gap.ready\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"refused\",\"guard_field\":\"surface_gap.ready\"}"
+}

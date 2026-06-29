@@ -1,0 +1,18 @@
+{
+  "slug": "brief-summarizer",
+  "name": "Brief Summarizer",
+  "archetype_tags": ["llm-reasoning"],
+  "holdout": false,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "brief_summary", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "brief_summary": "llm-reasoning"
+    },
+    "body_stages": [],
+    "llm_stages": ["brief_summary"],
+    "external_adapter_stages": []
+  }
+}

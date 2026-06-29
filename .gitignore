@@ -41,3 +41,9 @@ tests/**/*.js
 # working tree — bulky, transient, never committed).
 session-logs/
 uploads/
+
+# SOTA harness scratch: programs synthesized during a live corpus run + live body
+# caches. Transient, per-run, never committed. (tests/sota/fixtures/** IS committed —
+# that is the deterministic replay fixture.)
+tests/sota/generated/
+tests/sota/.body-cache/
