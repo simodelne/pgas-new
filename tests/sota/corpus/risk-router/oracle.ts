@@ -9,7 +9,7 @@ import {
 
 function expected(input: Parameters<SotaOracle['expected']>[0]): SotaFunctionalActual {
   const score = riskScore(input.domain);
-  const queue = score >= 90 ? 'security-escalation' : score >= 60 ? 'risk-ops' : 'standard-support';
+  const queue = ownerQueue(score, input.domain);
   return {
     final_stage: 'complete',
     domain: {},
@@ -20,13 +20,13 @@ function expected(input: Parameters<SotaOracle['expected']>[0]): SotaFunctionalA
         severity: input.domain.severity,
         factors: ['severity', 'customer_tier', 'failed_logins', 'data_exposure'],
         scored_at: input.runtime?.now_iso ?? '2026-06-29T01:00:00.000Z',
-      }, [`risk_score:${score}`]),
+      }, [`risk_score:${score}`, `severity:${String(input.domain.severity)}`]),
       route_queue: stage('route_queue', {
         stage: 'route_queue',
         risk_score: score,
         owner_queue: queue,
-        sla_minutes: queue === 'security-escalation' ? 15 : queue === 'risk-ops' ? 60 : 240,
-      }, [`queue:${queue}`, `sla:${queue === 'security-escalation' ? 15 : queue === 'risk-ops' ? 60 : 240}`]),
+        route_reason: routeReason(score, input.domain),
+      }, [`owner_queue:${queue}`, `risk_score:${score}`]),
     },
   };
 }
@@ -42,18 +42,36 @@ function assertOutput(input: Parameters<SotaOracle['assertOutput']>[0], actual: 
 
 function mutations(_input: Parameters<SotaOracle['mutations']>[0], good: SotaFunctionalActual): SotaFunctionalActual[] {
   const wrongQueue = cloneActual(good);
-  wrongQueue.stages.route_queue.result.owner_queue = 'standard-support';
+  wrongQueue.stages.route_queue.result.owner_queue = 'standard_ops';
   const wrongScore = cloneActual(good);
   wrongScore.stages.score_risk.result.risk_score = 50;
-  return [wrongQueue, wrongScore];
+  const wrongItems = cloneActual(good);
+  wrongItems.stages.route_queue.items = ['queue:security_escalation', 'sla:15'];
+  const wrongReason = cloneActual(good);
+  wrongReason.stages.route_queue.result.route_reason = 'enterprise_data_exposure';
+  return [wrongQueue, wrongScore, wrongItems, wrongReason];
 }
 
 function riskScore(domain: Record<string, unknown>): number {
-  const severity = domain.severity === 'high' ? 45 : domain.severity === 'medium' ? 25 : 10;
-  const tier = domain.customer_tier === 'enterprise' ? 25 : 5;
-  const failedLogins = Math.min(Number(domain.failed_logins ?? 0) * 3, 20);
-  const exposure = domain.data_exposure === true ? 20 : 0;
+  const severity = domain.severity === 'critical' ? 90 : domain.severity === 'high' ? 70 : domain.severity === 'medium' ? 50 : 20;
+  const tier = domain.customer_tier === 'enterprise' ? 15 : 0;
+  const failedLogins = Number(domain.failed_logins ?? 0) >= 5 ? 15 : 0;
+  const exposure = domain.data_exposure === true ? 15 : 0;
   return Math.min(100, severity + tier + failedLogins + exposure);
+}
+
+function ownerQueue(score: number, domain: Record<string, unknown>): string {
+  if (score >= 90) return 'security_escalation';
+  if (domain.customer_tier === 'enterprise' && domain.data_exposure === true) return 'security_escalation';
+  if (score >= 60) return 'risk_review';
+  return 'standard_ops';
+}
+
+function routeReason(score: number, domain: Record<string, unknown>): string {
+  if (score >= 90) return 'risk_score_at_least_90';
+  if (domain.customer_tier === 'enterprise' && domain.data_exposure === true) return 'enterprise_data_exposure';
+  if (score >= 60) return 'risk_score_at_least_60';
+  return 'risk_score_below_60';
 }
 
 function stage(stageName: string, result: Record<string, unknown>, items: unknown[]): SotaStageActual {

@@ -1,0 +1,12 @@
+{
+  "program.slug": "release-note-extractor",
+  "program.name": "Release Note Extractor",
+  "program.target_dir": "/tmp/pgas-sota-release-note-extractor",
+  "program.design_path": "design",
+  "intake.purpose": "Extract structured launch facts from a release note without inventing operational details.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"release_note_summary\",\"domain_spec\":{\"reads\":[\"inputs.initial_user_text\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"product\":\"string\",\"version\":\"string\",\"risk_level\":\"string\",\"customer_action\":\"string\",\"change_count\":\"number\"},\"items_json\":[\"product:<product>\",\"version:<version>\",\"risk_level:<risk_level>\",\"action:<customer_action>\"]},\"rules\":[\"Extract product, version, risk_level, customer_action, and change_count from the release note text.\",\"risk_level must come from an explicit risk statement in the release note.\",\"customer_action must be an explicit action requested for customers, support, operators, or admins.\",\"change_count counts the explicit product changes described before the risk statement.\",\"Do not invent rollback, billing, or migration windows when the release note does not state them.\"],\"invariants\":[\"result_json.stage must equal release_note_summary.\",\"product, version, risk_level, customer_action, and change_count must be top-level fields.\",\"items_json must include product:<product>, version:<version>, risk_level:<risk_level>, and action:<customer_action>.\"]}},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"release_note_summary\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"release_note_summary\",\"to\":\"complete\",\"trigger\":\"summarized\",\"guard_field\":\"release_note_summary.done\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"release_note_summary.done\"}"
+}

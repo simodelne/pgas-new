@@ -1,0 +1,20 @@
+{
+  "slug": "refund-ledger-stateful",
+  "name": "Refund Ledger Stateful",
+  "archetype_tags": ["multi-stage", "pure-compute"],
+  "holdout": true,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "normalize_refund", "apply_refund_policy", "ledger_posting", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "normalize_refund": "pure-compute",
+      "apply_refund_policy": "pure-compute",
+      "ledger_posting": "pure-compute"
+    },
+    "body_stages": ["normalize_refund", "apply_refund_policy", "ledger_posting"],
+    "llm_stages": [],
+    "external_adapter_stages": []
+  }
+}

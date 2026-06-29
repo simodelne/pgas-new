@@ -1,0 +1,19 @@
+{
+  "slug": "warehouse-mock-reservation",
+  "name": "Warehouse Mock Reservation",
+  "archetype_tags": ["external-adapter", "in-memory-mock", "multi-stage"],
+  "holdout": true,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "inventory_lookup", "reservation_decision", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "inventory_lookup": "external-adapter",
+      "reservation_decision": "pure-compute"
+    },
+    "body_stages": ["inventory_lookup", "reservation_decision"],
+    "llm_stages": [],
+    "external_adapter_stages": ["inventory_lookup"]
+  }
+}

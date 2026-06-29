@@ -1,0 +1,14 @@
+{
+  "id": "missing-sla-policy",
+  "prompt": "{\"request\":\"Route a P1 billing incident for a platinum customer before the launch review\",\"known_policy\":{\"priority\":\"P1\"}}",
+  "domain": {
+    "request": "Route a P1 billing incident for a platinum customer before the launch review",
+    "known_policy": {
+      "priority": "P1"
+    }
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T09:00:00.000Z",
+    "random": 0.8
+  }
+}

@@ -1,23 +1,41 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadSotaCorpus, requireLiveSynthConfig } from './harness.js';
+import { loadOracle, loadSotaCorpus, requireLiveSynthConfig } from './harness.js';
 
 describe('SOTA corpus harness', () => {
   it('loads a governed corpus with dev and holdout benchmarks across required archetypes', async () => {
     const corpus = await loadSotaCorpus();
 
-    expect(corpus).toHaveLength(6);
+    expect(corpus).toHaveLength(11);
     expect(corpus.map((benchmark) => benchmark.slug)).toEqual([
       'ambiguous-policy-refusal',
       'brief-summarizer',
       'crm-mock-lookup',
       'fee-calculator',
       'proposal-ops-stateful',
+      'refund-ledger-stateful',
+      'release-note-extractor',
+      'risk-router',
+      'sla-policy-refusal',
+      'usage-invoice-calculator',
+      'warehouse-mock-reservation',
+    ]);
+    expect(corpus.filter((benchmark) => !benchmark.meta.holdout).map((benchmark) => benchmark.slug)).toEqual([
+      'brief-summarizer',
+      'crm-mock-lookup',
+      'fee-calculator',
+      'proposal-ops-stateful',
       'risk-router',
     ]);
-    expect(corpus.some((benchmark) => benchmark.meta.holdout)).toBe(true);
-    expect(corpus.some((benchmark) => !benchmark.meta.holdout)).toBe(true);
+    expect(corpus.filter((benchmark) => benchmark.meta.holdout).map((benchmark) => benchmark.slug)).toEqual([
+      'ambiguous-policy-refusal',
+      'refund-ledger-stateful',
+      'release-note-extractor',
+      'sla-policy-refusal',
+      'usage-invoice-calculator',
+      'warehouse-mock-reservation',
+    ]);
 
     const archetypes = new Set(corpus.flatMap((benchmark) => benchmark.meta.archetype_tags));
     expect(archetypes).toEqual(new Set([
@@ -35,6 +53,36 @@ describe('SOTA corpus harness', () => {
       expect(benchmark.meta.expected_topology.stages.at(-1)).toBe(benchmark.meta.expected_topology.final_stage);
       expect(benchmark.mandate['intake.completion_json']).toContain(benchmark.meta.expected_topology.final_stage);
     }
+  });
+
+  it('keeps risk-router visible and aligned to its canonical queue/item contract', async () => {
+    const [benchmark] = (await loadSotaCorpus()).filter((item) => item.slug === 'risk-router');
+    expect(benchmark).toBeDefined();
+    expect(benchmark.meta.holdout).toBe(false);
+    expect(benchmark.rubric).toContain('Canonical intent:');
+
+    const stages = JSON.parse(String(benchmark.mandate['intake.stages_json'])) as Array<{
+      slug: string;
+      domain_spec?: {
+        produces?: {
+          items_json?: unknown;
+        };
+      };
+    }>;
+    expect(stages.find((stage) => stage.slug === 'score_risk')?.domain_spec?.produces?.items_json)
+      .toEqual(['risk_score:<risk_score>', 'severity:<severity>']);
+    expect(stages.find((stage) => stage.slug === 'route_queue')?.domain_spec?.produces?.items_json)
+      .toEqual(['owner_queue:<owner_queue>', 'risk_score:<risk_score>']);
+
+    const oracle = await loadOracle(benchmark);
+    const [input] = benchmark.inputs.filter((item) => item.id === 'high-risk');
+    expect(input).toBeDefined();
+    const expected = oracle.expected(input);
+    expect(expected.stages.score_risk.result.risk_score).toBe(100);
+    expect(expected.stages.score_risk.items).toEqual(['risk_score:100', 'severity:high']);
+    expect(expected.stages.route_queue.result.owner_queue).toBe('security_escalation');
+    expect(expected.stages.route_queue.items).toEqual(['owner_queue:security_escalation', 'risk_score:100']);
+    expect(() => oracle.assertOutput(input, expected)).not.toThrow();
   });
 
   it('fails loudly when live synthesis is requested without provider env', () => {

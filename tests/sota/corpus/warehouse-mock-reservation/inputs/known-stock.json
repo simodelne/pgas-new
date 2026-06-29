@@ -1,0 +1,13 @@
+{
+  "id": "known-stock",
+  "prompt": "{\"order_id\":\"SO-447\",\"sku\":\"SKU-RED-5\",\"requested_units\":5}",
+  "domain": {
+    "order_id": "SO-447",
+    "sku": "SKU-RED-5",
+    "requested_units": 5
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T07:00:00.000Z",
+    "random": 0.6
+  }
+}

@@ -2,7 +2,7 @@
   "slug": "risk-router",
   "name": "Risk Router",
   "archetype_tags": ["pure-compute"],
-  "holdout": true,
+  "holdout": false,
   "repair_budget": 4,
   "expected_topology": {
     "entry_channel": "user_text",

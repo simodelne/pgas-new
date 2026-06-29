@@ -1,0 +1,18 @@
+{
+  "slug": "usage-invoice-calculator",
+  "name": "Usage Invoice Calculator",
+  "archetype_tags": ["pure-compute"],
+  "holdout": true,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "calculate_invoice", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "calculate_invoice": "pure-compute"
+    },
+    "body_stages": ["calculate_invoice"],
+    "llm_stages": [],
+    "external_adapter_stages": []
+  }
+}

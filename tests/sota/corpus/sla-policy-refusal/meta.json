@@ -1,0 +1,18 @@
+{
+  "slug": "sla-policy-refusal",
+  "name": "SLA Policy Refusal",
+  "archetype_tags": ["adversarial-negative", "pure-compute"],
+  "holdout": true,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "surface_gap", "refused"],
+    "final_stage": "refused",
+    "stage_archetypes": {
+      "surface_gap": "pure-compute"
+    },
+    "body_stages": ["surface_gap"],
+    "llm_stages": [],
+    "external_adapter_stages": []
+  }
+}

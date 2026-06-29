@@ -1,0 +1,19 @@
+{
+  "id": "mobile-sync",
+  "prompt": "Release 4.8.1 for Mobile Sync: fixes offline retry duplication and adds admin audit export. Support must notify beta tenants before July 12. Risk: medium because migration touches cached sessions.",
+  "domain": {
+    "product": "Mobile Sync",
+    "version": "4.8.1",
+    "risk_level": "medium"
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T08:00:00.000Z",
+    "random": 0.7
+  },
+  "llm_outputs": {
+    "release_note_summary": {
+      "result_json": "{\"stage\":\"release_note_summary\",\"product\":\"Mobile Sync\",\"version\":\"4.8.1\",\"risk_level\":\"medium\",\"customer_action\":\"notify beta tenants before July 12\",\"change_count\":2}",
+      "items_json": "[\"product:Mobile Sync\",\"version:4.8.1\",\"risk_level:medium\",\"action:notify beta tenants before July 12\"]"
+    }
+  }
+}
