@@ -6,7 +6,7 @@ import ts from 'typescript';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesizedArtifact } from './synthesizer-store.js';
 
-const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v2';
+const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v4';
 
 export interface StageBodyRequest {
   stage: string;
@@ -43,6 +43,13 @@ interface StageClassification {
   integration_method?: string;
   integration_gap?: boolean;
   audit_note?: string;
+}
+
+interface StageDomainSpec {
+  reads: string[];
+  produces: Record<string, unknown>;
+  rules: string[];
+  invariants: string[];
 }
 
 interface CacheRecord {
@@ -117,11 +124,13 @@ export async function synthesizeDomainLogic(
     if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
       attemptsUsed = 1;
       const body = renderRepoIntegrationStageBody(stage, repoIntegration);
+      const domainSpec = domainSpecForStage(artifact, stage);
       const verification = await verifyStageBody(body, classification.archetype, {
         stage,
         allowedIntegrationImport: repoIntegration.import,
         integrationName: repoIntegration.name,
         integrationMethod: repoIntegration.methods[0],
+        ...(domainSpec ? { domainSpec } : {}),
       });
       if (verification.ok) {
         accepted = {
@@ -143,7 +152,11 @@ export async function synthesizeDomainLogic(
           prompt,
           ...(lastError ? { repair: { attempt, lastError } } : {}),
         });
-        const verification = await verifyStageBody(body, classification.archetype, { stage });
+        const domainSpec = domainSpecForStage(artifact, stage);
+        const verification = await verifyStageBody(body, classification.archetype, {
+          stage,
+          ...(domainSpec ? { domainSpec } : {}),
+        });
         if (verification.ok) {
           accepted = {
             body,
@@ -189,6 +202,7 @@ function verifyStageBody(
     allowedIntegrationImport?: string;
     integrationName?: string;
     integrationMethod?: string;
+    domainSpec?: StageDomainSpec;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture }
@@ -225,7 +239,110 @@ function verifyStageBody(
     });
   }
 
+  const typecheckError = typecheckStageBody(body, options);
+  if (typecheckError) {
+    return Promise.resolve({ ok: false, error: typecheckError });
+  }
+
   return runBehavioralGate(body, archetype, options);
+}
+
+function typecheckStageBody(
+  body: string,
+  options: { allowedIntegrationImport?: string },
+): string | undefined {
+  if (options.allowedIntegrationImport) {
+    return undefined;
+  }
+
+  const stageFile = '/virtual/pgas/stages/stage.ts';
+  const contractsFile = '/virtual/pgas/contracts.ts';
+  const compilerOptions: ts.CompilerOptions = {
+    noEmit: true,
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    skipLibCheck: true,
+  };
+  const contractsSource = `export interface StageDomainSpec {
+  reads: readonly string[];
+  produces: Record<string, unknown>;
+  rules: readonly string[];
+  invariants: readonly string[];
+}
+
+export interface StageInput {
+  stage: string;
+  payload: Record<string, unknown>;
+  domain: Record<string, unknown>;
+  domain_spec: StageDomainSpec;
+}
+
+export interface StageRuntime {
+  now(): string;
+  random(): number;
+  llm(prompt: string): Promise<string>;
+}
+
+export interface StageOutput {
+  result_json: string;
+  items_json: string;
+  digest: string;
+  adapter_kind?: 'in_memory_mock' | 'repo_integration';
+}
+`;
+
+  const baseHost = ts.createCompilerHost(compilerOptions, true);
+  const host: ts.CompilerHost = {
+    ...baseHost,
+    fileExists: (fileName) =>
+      fileName === stageFile ||
+      fileName === contractsFile ||
+      baseHost.fileExists(fileName),
+    readFile: (fileName) => {
+      if (fileName === stageFile) return body;
+      if (fileName === contractsFile) return contractsSource;
+      return baseHost.readFile(fileName);
+    },
+    getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+      if (fileName === stageFile) {
+        return ts.createSourceFile(fileName, body, languageVersion, true, ts.ScriptKind.TS);
+      }
+      if (fileName === contractsFile) {
+        return ts.createSourceFile(fileName, contractsSource, languageVersion, true, ts.ScriptKind.TS);
+      }
+      return baseHost.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+    },
+    resolveModuleNames: (moduleNames) => moduleNames.map((moduleName) => {
+      if (moduleName === '../contracts.js') {
+        return {
+          resolvedFileName: contractsFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      return undefined;
+    }),
+  };
+  const program = ts.createProgram([stageFile], compilerOptions, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program).filter((diagnostic) =>
+    diagnostic.file?.fileName === stageFile ||
+    diagnostic.file?.fileName === contractsFile ||
+    diagnostic.file === undefined,
+  );
+  return diagnostics.length > 0
+    ? diagnostics.map((diagnostic) => formatDiagnostic(diagnostic)).join('\n')
+    : undefined;
+}
+
+function formatDiagnostic(diagnostic: ts.Diagnostic): string {
+  const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+  if (!diagnostic.file || diagnostic.start === undefined) {
+    return message;
+  }
+  const location = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+  return `${diagnostic.file.fileName}:${location.line + 1}:${location.character + 1}: ${message}`;
 }
 
 function scanBodyStubMarkers(body: string, archetype: 'pure-compute' | 'external-adapter'): string | undefined {
@@ -375,6 +492,18 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
 function promptForStage(stage: string, classification: StageClassification, artifact: SynthesizedArtifact): string {
   const context = contextForStage(stage, classification, artifact);
   const entryPath = `inputs.${context.entry_channel}`;
+  const initialEntryPath = context.initial_entry_path;
+  const domainSpecLines = context.domain_spec
+    ? [
+        'Author-provided domain spec for this stage is normative.',
+        'Implement these rules exactly; do not infer alternate business logic.',
+        'Treat domain_spec.produces.result_json as the exact result_json object schema and insertion order; emit those top-level keys only.',
+        'When domain_spec.produces.items_json is an array, treat it as the exact ordered item template list; emit that many strings and no extras.',
+        'If request data is missing for a required read, surface that gap in result_json rather than fabricating values.',
+        'Stage domain spec:',
+        JSON.stringify(context.domain_spec, null, 2),
+      ]
+    : [];
   return [
     `Generate src/programs/<slug>/stages/${stage}.ts for a PGAS generated program.`,
     `Stage archetype: ${classification.archetype}.`,
@@ -383,13 +512,16 @@ function promptForStage(stage: string, classification: StageClassification, arti
       : 'Implement deterministic local pure-compute logic.',
     'Stage synthesis context:',
     JSON.stringify(context, null, 2),
+    ...domainSpecLines,
     'Do not include comments or any stub marker words: TODO, placeholder, stage_action_stub, not implemented.',
     "Use exactly one import line: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
     'Do not import handlers, resolver helpers, Node built-ins, runtime packages, or any other module.',
     'Export exactly: async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput>.',
     'Return JSON strings result_json and items_json; do not compute digest yourself.',
+    'Use strict TypeScript: include StageInput, StageOutput, and StageRuntime in the contract import; assign unknown object values to Record<string, unknown> before indexing.',
     'Runtime data access contract:',
-    `The entry-channel text is stored as a string at input.domain['${entryPath}']; read that path for user request facts.`,
+    `The original entry-channel request is stored as a stable string at input.domain['${initialEntryPath}']; read that path for user request facts.`,
+    `input.domain['${entryPath}'] is the latest trigger text and may be a continuation such as "continue"; do not use it as the source of original request facts when the stable path is present.`,
     "Parse JSON-looking user requests into typed facts before computing.",
     'When parsed request facts contain numeric fields whose names describe a calculation, compute from those fields directly instead of inventing base fees, complexity multipliers, or random constants.',
     'Use common named-field arithmetic: hours multiplied by hourly rates produce subtotals; discount_pct is a percentage applied to a subtotal; budget fields are comparison thresholds, not fee inputs.',
@@ -398,11 +530,13 @@ function promptForStage(stage: string, classification: StageClassification, arti
     "Prior LLM reasoning stage outputs are stored as strings at input.domain['<stage>.result_json'] and input.domain['<stage>.items_json']; parse them before using them.",
     'Do not treat input.payload.__stage_runtime as business input; use runtime.now() and runtime.random() through StageRuntime only.',
     'Shape result_json from the mandate, stage slug, input facts, and prior stage outputs. Preserve concrete field names from the request and prior results when they are meaningful.',
+    'If the domain spec declares produces.result_json, construct result_json with exactly those declared top-level keys, in that declared order, and no extra top-level keys.',
     'Do not use a generic status/summary/details template when the mandate names concrete fields.',
     'Keep final business fields at the top level; do not wrap all important facts under generic inputs, details, or calculation objects.',
     'Keep key computed facts at the top level of result_json so later stages can consume them without guessing nested structures.',
     'For pure-compute stages, build a complete deterministic object from input.stage, runtime.now(), parsed request facts, and prior stage outputs. If no domain fact is relevant, still return a meaningful non-empty object with status, summary, severity, owner_queue, next_action, and summary_ready fields.',
-    'For items_json, return a non-empty JSON array of concise strings derived from the result object.',
+    'For items_json, return a non-empty JSON array of concise lower-case key:value strings derived from the result object; when the domain spec names item formats, use those exact formats without extra spaces.',
+    'If the domain spec declares produces.items_json as an array, construct items_json with exactly those item templates, in order, and no additional items.',
     'Do not use eval, dynamic import, child_process, shell, fetch/raw network, process.env, or secret reads.',
     'Untrusted generated spec context:',
     artifact.spec_yaml,
@@ -411,26 +545,34 @@ function promptForStage(stage: string, classification: StageClassification, arti
   ].join('\n');
 }
 
+function domainSpecForStage(artifact: SynthesizedArtifact, stage: string): StageDomainSpec | undefined {
+  return artifact.synthesis_context?.stages.find((item) => item.slug === stage)?.domain_spec;
+}
+
 function contextForStage(
   stage: string,
   classification: StageClassification,
   artifact: SynthesizedArtifact,
-): Record<string, unknown> & { entry_channel: string } {
+): Record<string, unknown> & { entry_channel: string; initial_entry_path: string; domain_spec?: StageDomainSpec } {
   const synthesisContext = artifact.synthesis_context;
   const orderedStages = synthesisContext?.stages.map((item) => item.slug) ?? artifact.mode_names;
+  const currentStage = synthesisContext?.stages.find((item) => item.slug === stage);
   const stageIndex = orderedStages.indexOf(stage);
   const previousStages = stageIndex > 0 ? orderedStages.slice(0, stageIndex) : [];
   const laterStages = stageIndex >= 0 ? orderedStages.slice(stageIndex + 1) : [];
   const transitions = synthesisContext?.transitions ?? [];
+  const domainSpec = currentStage?.domain_spec;
   return {
     program_slug: synthesisContext?.program_slug ?? unknownProgramSlug(artifact.spec_yaml),
     program_name: synthesisContext?.program_name ?? 'generated program',
     purpose: synthesisContext?.purpose ?? unknownPurpose(artifact.spec_yaml),
     entry_channel: synthesisContext?.entry_channel ?? inferEntryChannel(artifact.spec_yaml),
+    initial_entry_path: initialInputPath(synthesisContext?.entry_channel ?? inferEntryChannel(artifact.spec_yaml)),
     stage,
     archetype: classification.archetype,
     ...(classification.rationale ? { stage_rationale: classification.rationale } : {}),
     ...(classification.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+    ...(domainSpec ? { domain_spec: domainSpec } : {}),
     previous_stages: previousStages,
     next_stages: laterStages,
     incoming_transitions: transitions.filter((transition) => transition.to === stage),
@@ -443,6 +585,11 @@ function contextForStage(
 function inferEntryChannel(specYaml: string): string {
   const match = specYaml.match(/\ningestion:\n\s+([a-zA-Z0-9_]+):\n\s+- inputs\.\1/u);
   return match?.[1] ?? 'user_text';
+}
+
+function initialInputPath(entryChannel: string): string {
+  const normalized = entryChannel.trim().replace(/[^a-zA-Z0-9_]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return `inputs.initial_${normalized.length > 0 ? normalized : 'user_text'}`;
 }
 
 function unknownProgramSlug(specYaml: string): string {
@@ -567,6 +714,7 @@ async function runBehavioralGate(
     allowedIntegrationImport?: string;
     integrationName?: string;
     integrationMethod?: string;
+    domainSpec?: StageDomainSpec;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture }
@@ -594,7 +742,7 @@ async function runBehavioralGate(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `behavioral gate failed for stage ${options.stage}: runStage timed out`,
     );
-    const behaviorError = assertBehavioralOutput(output, options.stage, archetype);
+    const behaviorError = assertBehavioralOutput(output, options.stage, archetype, options.domainSpec);
     if (behaviorError) {
       return { ok: false, error: `behavioral gate failed for stage ${options.stage}: ${behaviorError}` };
     }
@@ -653,9 +801,69 @@ function behaviorFixtureFor(
         },
       },
       domain: {
+        'inputs.initial_user_text': JSON.stringify({
+          plan: 'pro',
+          seats: 2,
+          region: 'us',
+          account_id: 'acct-behavior-001',
+          requested_seats: 5,
+          base_hours: 2,
+          hourly_rate_usd: 100,
+          discount_pct: 10,
+          budget_usd: 250,
+          severity: 'high',
+          customer_tier: 'enterprise',
+          failed_logins: 6,
+          data_exposure: true,
+          request: 'approve request',
+          known_policy: 'manager may approve some requests',
+        }),
+        'inputs.user_text': 'continue',
         'account.id': 'acct-behavior-001',
         'record.id': 'record-behavior-001',
         'owner.queue': 'operations',
+        'crm_lookup.output': {
+          result_json: JSON.stringify({
+            stage: 'crm_lookup',
+            account_id: 'acct-behavior-001',
+            tier: 'gold',
+            active_contract: true,
+            adapter_kind: 'in_memory_mock',
+          }),
+          items_json: JSON.stringify(['account:acct-behavior-001', 'tier:gold']),
+          digest: '',
+          adapter_kind: 'in_memory_mock',
+        },
+        'estimate_fee.output': {
+          result_json: JSON.stringify({
+            stage: 'estimate_fee',
+            base_hours: 2,
+            hourly_rate_usd: 100,
+            subtotal_usd: 200,
+          }),
+          items_json: JSON.stringify(['subtotal_usd:200']),
+          digest: '',
+        },
+        'apply_discount.output': {
+          result_json: JSON.stringify({
+            stage: 'apply_discount',
+            previous_total_usd: 200,
+            discount_pct: 10,
+            discounted_total_usd: 180,
+          }),
+          items_json: JSON.stringify(['discounted_total_usd:180']),
+          digest: '',
+        },
+        'score_risk.output': {
+          result_json: JSON.stringify({
+            stage: 'score_risk',
+            risk_score: 100,
+            severity: 'high',
+            factors: ['severity', 'customer_tier', 'failed_logins', 'data_exposure'],
+          }),
+          items_json: JSON.stringify(['risk_score:100', 'severity:high']),
+          digest: '',
+        },
       },
     },
     runtime: {
@@ -694,6 +902,7 @@ function assertBehavioralOutput(
   output: unknown,
   stage: string,
   archetype: 'pure-compute' | 'external-adapter',
+  domainSpec?: StageDomainSpec,
 ): string | undefined {
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
     return 'runStage returned a non-object output';
@@ -724,8 +933,16 @@ function assertBehavioralOutput(
   if ((result as { stage?: unknown }).stage !== stage) {
     return `expected result_json.stage to equal ${stage}; got ${String((result as { stage?: unknown }).stage)}`;
   }
+  const schemaError = assertResultJsonSchema(result, domainSpec);
+  if (schemaError) {
+    return schemaError;
+  }
   if (!Array.isArray(items) || items.length === 0) {
     return 'expected items_json to encode a non-empty array';
+  }
+  const itemSchemaError = assertItemsJsonSchema(items, domainSpec);
+  if (itemSchemaError) {
+    return itemSchemaError;
   }
   if (archetype === 'external-adapter') {
     const resultAdapterKind = (result as { adapter_kind?: unknown }).adapter_kind;
@@ -735,6 +952,64 @@ function assertBehavioralOutput(
     }
   }
   return undefined;
+}
+
+function assertResultJsonSchema(result: unknown, domainSpec?: StageDomainSpec): string | undefined {
+  const schema = domainSpec?.produces.result_json;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return undefined;
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return 'result_json must encode an object';
+  }
+  const expectedKeys = Object.keys(schema);
+  if (expectedKeys.length === 0) {
+    return undefined;
+  }
+  const actualKeys = Object.keys(result as Record<string, unknown>);
+  if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    return `expected result_json keys to exactly match domain_spec.produces.result_json in order ${JSON.stringify(expectedKeys)}; got ${JSON.stringify(actualKeys)}`;
+  }
+  return undefined;
+}
+
+function assertItemsJsonSchema(items: unknown[], domainSpec?: StageDomainSpec): string | undefined {
+  const schema = domainSpec?.produces.items_json;
+  if (!Array.isArray(schema) || schema.length === 0 || !schema.every((item) => typeof item === 'string')) {
+    return undefined;
+  }
+  if (items.length !== schema.length) {
+    return `expected items_json to contain exactly ${schema.length} items from domain_spec.produces.items_json; got ${items.length}`;
+  }
+  for (let index = 0; index < schema.length; index += 1) {
+    const item = items[index];
+    if (typeof item !== 'string') {
+      return `expected items_json[${index}] to be a string`;
+    }
+    const template = schema[index] as string;
+    const matcher = itemTemplateMatcher(template);
+    if (!matcher.test(item)) {
+      return `expected items_json[${index}] to match domain_spec template ${JSON.stringify(template)}; got ${JSON.stringify(item)}`;
+    }
+  }
+  return undefined;
+}
+
+function itemTemplateMatcher(template: string): RegExp {
+  const parts: string[] = [];
+  let cursor = 0;
+  const placeholder = /<[^>]+>/gu;
+  for (let match = placeholder.exec(template); match; match = placeholder.exec(template)) {
+    parts.push(escapeRegExp(template.slice(cursor, match.index)));
+    parts.push('.+');
+    cursor = match.index + match[0].length;
+  }
+  parts.push(escapeRegExp(template.slice(cursor)));
+  return new RegExp(`^${parts.join('')}$`, 'u');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function renderRepoIntegrationStageBody(stage: string, integration: WiringIntegration): string {

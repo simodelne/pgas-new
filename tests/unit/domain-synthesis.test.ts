@@ -32,6 +32,20 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 }
 `;
 
+const validDomainSpecBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const raw = input.domain['inputs.initial_user_text'];
+  const facts = typeof raw === 'string' ? JSON.parse(raw) as Record<string, unknown> : {};
+  return {
+    result_json: JSON.stringify({ stage: input.stage, plan: String(facts.plan ?? 'unknown'), total_fee: 0 }),
+    items_json: JSON.stringify(['plan:' + String(facts.plan ?? 'unknown')]),
+    digest: '',
+  };
+}
+`;
+
 function artifact(): SynthesizedArtifact {
   return {
     spec_yaml: 'name: test',
@@ -70,6 +84,48 @@ function artifactWithContext(): SynthesizedArtifact {
       delegation: { enabled: false },
       completion: { final_stage: 'done', guard_field: 'calculate.ready' },
     },
+  };
+}
+
+function artifactWithDomainSpecContext(): SynthesizedArtifact {
+  return {
+    ...artifactWithContext(),
+    synthesis_context: {
+      ...artifactWithContext().synthesis_context!,
+      stages: [
+        { slug: 'intake', is_bootstrap: true },
+        {
+          slug: 'calculate',
+          domain_spec: {
+            reads: ['inputs.initial_user_text.plan', 'inputs.initial_user_text.seats'],
+            produces: {
+              result_json: {
+                stage: 'string',
+                plan: 'string',
+                total_fee: 'number',
+              },
+              items_json: ['plan:<plan>'],
+            },
+            rules: [
+              'Parse input.domain["inputs.initial_user_text"] as JSON before computing.',
+              'total_fee = seats * per_seat_rate.',
+            ],
+            invariants: [
+              'result_json.stage must equal calculate.',
+              'items_json must include the selected plan.',
+            ],
+          },
+        } as Record<string, unknown> as { slug: string },
+        { slug: 'done', is_terminal: true },
+      ],
+    },
+    contracts_ts: [
+      'export interface StageDomainSpec { reads: readonly string[]; produces: Record<string, unknown>; rules: readonly string[]; invariants: readonly string[]; }',
+      'export interface StageInput { domain_spec: StageDomainSpec; }',
+      'export interface StageRuntime {}',
+      'export interface StageOutput {}',
+      'export const stageDomainSpecs = { calculate: { rules: ["total_fee = seats * per_seat_rate."] } };',
+    ].join('\n'),
   };
 }
 
@@ -140,6 +196,96 @@ describe('domain logic synthesis', () => {
     });
   });
 
+  it('behaviorally verifies bodies that read request facts from the stable initial input path', async () => {
+    await withCache(async (cacheDir) => {
+      const requestFactBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const raw = input.domain['inputs.initial_user_text'];
+  const facts = typeof raw === 'string' ? JSON.parse(raw) as Record<string, unknown> : {};
+  return {
+    result_json: JSON.stringify({ stage: input.stage, plan: facts.plan, seats: facts.seats }),
+    items_json: JSON.stringify(['plan:' + String(facts.plan), 'seats:' + String(facts.seats)]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => requestFactBody,
+      });
+
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        behavioral_gate: 'passed',
+      }));
+    });
+  });
+
+  it('provides stable request facts in the behavioral fixture for fact-dependent item output', async () => {
+    await withCache(async (cacheDir) => {
+      const factDependentItemsBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const raw = input.domain['inputs.initial_user_text'];
+  const facts = typeof raw === 'string' ? JSON.parse(raw) as Record<string, unknown> : {};
+  const items: string[] = [];
+  if (typeof facts.base_hours === 'number') items.push('base_hours:' + facts.base_hours);
+  if (typeof facts.hourly_rate_usd === 'number') items.push('hourly_rate_usd:' + facts.hourly_rate_usd);
+  return {
+    result_json: JSON.stringify({ stage: input.stage, base_hours: facts.base_hours, hourly_rate_usd: facts.hourly_rate_usd }),
+    items_json: JSON.stringify(items),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => factDependentItemsBody,
+      });
+
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        behavioral_gate: 'passed',
+      }));
+    });
+  });
+
+  it('behaviorally verifies bodies that parse prior stage outputs from the fixture domain', async () => {
+    await withCache(async (cacheDir) => {
+      const priorOutputBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const prior = input.domain['estimate_fee.output'] as { result_json?: string } | undefined;
+  const result = prior?.result_json ? JSON.parse(prior.result_json) as Record<string, unknown> : {};
+  return {
+    result_json: JSON.stringify({ stage: input.stage, subtotal_usd: result.subtotal_usd }),
+    items_json: JSON.stringify(['subtotal_usd:' + String(result.subtotal_usd)]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => priorOutputBody,
+      });
+
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        behavioral_gate: 'passed',
+      }));
+    });
+  });
+
   it('prompts generated stage bodies to read the entry-channel request and prior stage outputs', async () => {
     await withCache(async (cacheDir) => {
       let prompt = '';
@@ -154,14 +300,113 @@ describe('domain logic synthesis', () => {
       });
 
       expect(prompt).toContain('Stage synthesis context:');
-      expect(prompt).toContain("input.domain['inputs.user_text']");
+      expect(prompt).toContain("input.domain['inputs.initial_user_text']");
+      expect(prompt).toContain('latest trigger text');
       expect(prompt).toContain("input.domain['<stage>.output']");
       expect(prompt).toContain('Parse JSON-looking user requests into typed facts before computing.');
       expect(prompt).toContain('When parsed request facts contain numeric fields whose names describe a calculation, compute from those fields directly instead of inventing base fees, complexity multipliers, or random constants.');
       expect(prompt).toContain('Use common named-field arithmetic: hours multiplied by hourly rates produce subtotals; discount_pct is a percentage applied to a subtotal; budget fields are comparison thresholds, not fee inputs.');
       expect(prompt).toContain('When parsed request facts contain identifiers, echo those identifiers; do not replace them with synthetic IDs from runtime.random().');
+      expect(prompt).toContain('assign unknown object values to Record<string, unknown> before indexing');
+      expect(prompt).toContain('concise lower-case key:value strings');
       expect(prompt).toContain('Keep final business fields at the top level; do not wrap all important facts under generic inputs, details, or calculation objects.');
       expect(prompt).toContain('Do not use a generic status/summary/details template when the mandate names concrete fields.');
+    });
+  });
+
+  it('treats the author-provided stage domain spec as the normative synthesis contract', async () => {
+    await withCache(async (cacheDir) => {
+      let prompt = '';
+      await synthesizeDomainLogic(artifactWithDomainSpecContext(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async (request) => {
+          prompt = request.prompt;
+          return validDomainSpecBody;
+        },
+      });
+
+      expect(prompt).toContain('Author-provided domain spec for this stage is normative.');
+      expect(prompt).toContain('"reads":');
+      expect(prompt).toContain('"produces":');
+      expect(prompt).toContain('"rules":');
+      expect(prompt).toContain('"invariants":');
+      expect(prompt).toContain('total_fee = seats * per_seat_rate.');
+      expect(prompt).toContain('result_json.stage must equal calculate.');
+      expect(prompt).toContain('Implement these rules exactly; do not infer alternate business logic.');
+      expect(prompt).toContain('Treat domain_spec.produces.result_json as the exact result_json object schema and insertion order');
+      expect(prompt).toContain('When domain_spec.produces.items_json is an array, treat it as the exact ordered item template list');
+      expect(prompt).toContain('construct result_json with exactly those declared top-level keys, in that declared order');
+      expect(prompt).toContain('construct items_json with exactly those item templates, in order');
+    });
+  });
+
+  it('repairs bodies whose result_json does not match the domain spec schema exactly', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const wrongSchemaBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, total_fee: 0, plan: 'pro', extra: true }),
+    items_json: JSON.stringify(['plan:pro']),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifactWithDomainSpecContext(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? wrongSchemaBody : validDomainSpecBody;
+        },
+      });
+
+      expect(attempts).toEqual([
+        'initial',
+        expect.stringContaining('expected result_json keys to exactly match domain_spec.produces.result_json in order'),
+      ]);
+      expect(result.stage_sources?.calculate).toBe(validDomainSpecBody);
+    });
+  });
+
+  it('repairs bodies whose items_json does not match the domain spec templates exactly', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const wrongItemsBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, plan: 'pro', total_fee: 0 }),
+    items_json: JSON.stringify(['plan:pro', 'total_fee:0']),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifactWithDomainSpecContext(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? wrongItemsBody : validDomainSpecBody;
+        },
+      });
+
+      expect(attempts).toEqual([
+        'initial',
+        expect.stringContaining('expected items_json to contain exactly 1 items from domain_spec.produces.items_json'),
+      ]);
+      expect(result.stage_sources?.calculate).toBe(validDomainSpecBody);
     });
   });
 
@@ -196,6 +441,73 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
         attempts: 2,
         behavioral_gate: 'passed',
       }));
+    });
+  });
+
+  it('repairs bodies that omit required contract type imports before project typecheck', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const missingOutputImport = `import type { StageInput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, status: 'ok' }),
+    items_json: JSON.stringify([input.stage]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? missingOutputImport : validBody;
+        },
+      });
+
+      expect(attempts).toEqual(['initial', expect.stringContaining('StageOutput')]);
+      expect(result.stage_sources?.calculate).toBe(validBody);
+    });
+  });
+
+  it('repairs bodies with strict TypeScript errors that transpileModule would miss', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const unsafeObjectIndexing = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const previous = input.domain['previous.output'];
+  let value = 'none';
+  if (previous && typeof previous === 'object' && !Array.isArray(previous)) {
+    value = String(previous['result_json'] ?? 'none');
+  }
+  return {
+    result_json: JSON.stringify({ stage: input.stage, value }),
+    items_json: JSON.stringify([value]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? unsafeObjectIndexing : validBody;
+        },
+      });
+
+      expect(attempts).toEqual(['initial', expect.stringContaining("can't be used to index type")]);
+      expect(result.stage_sources?.calculate).toBe(validBody);
     });
   });
 

@@ -1,0 +1,10 @@
+{
+  "body": "import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';\n\nexport async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {\n  const facts = parseFacts(input.domain['inputs.initial_user_text']);\n  const plan = String(facts.plan);\n  const seats = Number(facts.seats);\n  const region = String(facts.region);\n  const pricing = plan === 'enterprise'\n    ? { base_usd: 500, seat_rate_usd: 12 }\n    : plan === 'pro'\n      ? { base_usd: 100, seat_rate_usd: 7 }\n      : { base_usd: 40, seat_rate_usd: 5 };\n  const regionMultiplier = region === 'eu' ? 1.2 : region === 'apac' ? 1.1 : 1;\n  const subtotal = pricing.base_usd + seats * pricing.seat_rate_usd;\n  const total = Math.round(subtotal * regionMultiplier);\n  return {\n    result_json: JSON.stringify({\n      stage: input.stage,\n      plan,\n      seats,\n      region,\n      base_usd: pricing.base_usd,\n      seat_rate_usd: pricing.seat_rate_usd,\n      subtotal_usd: subtotal,\n      region_multiplier: regionMultiplier,\n      total_usd: total,\n      currency: 'USD',\n      priced_at: runtime.now(),\n    }),\n    items_json: JSON.stringify(['plan:' + plan, 'seats:' + seats, 'total_usd:' + total]),\n    digest: '',\n  };\n}\n\nfunction parseFacts(value: unknown): Record<string, unknown> {\n  if (typeof value !== 'string') return {};\n  try {\n    const parsed = JSON.parse(value) as unknown;\n    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};\n  } catch {\n    return {};\n  }\n}\n",
+  "body_hash": "255894128b2b2aec621d556beb5ff69b9a90709da8c202d9e7ae410a4c47ce4a",
+  "behavioral_gate": "passed",
+  "behavioral_fixture": {
+    "input_stage": "calculate_fee",
+    "expected_result_stage": "calculate_fee",
+    "expected_items_non_empty": true
+  }
+}

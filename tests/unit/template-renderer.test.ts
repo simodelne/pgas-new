@@ -179,8 +179,8 @@ describe('template renderer', () => {
       expect(registration).toContain('loadSpecWithPatterns');
       expect(registration).toContain('createPgasNewProgramEntry');
       expect(registration).toContain('registerPgasNewTools');
+      expect(registration).toContain('reactionHandlers');
       expect(registration).not.toContain('enableNotebook');
-      expect(registration).not.toContain('reactionHandlers');
       expect(repl).toContain("from '@simodelne/pgas-server/client.js'");
       expect(repl).toContain('connectNotifications');
       expect(apiTest).toContain("from '@simodelne/pgas-server/client.js'");

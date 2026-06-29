@@ -7,6 +7,12 @@ export interface SynthesisContext {
     slug: string;
     is_bootstrap?: boolean;
     is_terminal?: boolean;
+    domain_spec?: {
+      reads: string[];
+      produces: Record<string, unknown>;
+      rules: string[];
+      invariants: string[];
+    };
   }>;
   transitions: Array<{
     from: string;

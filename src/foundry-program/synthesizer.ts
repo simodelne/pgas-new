@@ -18,9 +18,17 @@ interface Stage {
   slug: string;
   is_bootstrap?: boolean;
   is_terminal?: boolean;
+  domain_spec?: StageDomainSpec;
 }
 
 type StageInput = Stage | string;
+
+interface StageDomainSpec {
+  reads: string[];
+  produces: Record<string, unknown>;
+  rules: string[];
+  invariants: string[];
+}
 
 interface IntakeTransition {
   from: string;
@@ -90,6 +98,7 @@ export function synthesizeProgramSpecFromDomain(
   const name = stringDomainField(domain, 'program.name');
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = stringDomainField(domain, 'intake.entry_channel');
+  const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseJsonDomainField<StageInput[]>(domain, 'intake.stages_json'));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
@@ -107,6 +116,11 @@ export function synthesizeProgramSpecFromDomain(
     options,
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
+  const stageDomainSpecBySlug = new Map(
+    stages
+      .filter((stage): stage is Stage & { domain_spec: StageDomainSpec } => !!stage.domain_spec)
+      .map((stage) => [stage.slug, stage.domain_spec]),
+  );
 
   const modeNames = stages.map((stage) => stage.slug);
   const firstMode = modeNames[0] as string;
@@ -142,6 +156,7 @@ export function synthesizeProgramSpecFromDomain(
   spec.preamble = `Program: ${name}. ${purpose}\n\nThis spec was synthesized mechanically by pgas-new.`;
   spec.initial = firstMode;
   spec.terminal = terminalModes;
+  spec.features = unique([...(Array.isArray(spec.features) ? spec.features as string[] : []), 'reactions']);
 
   const sourceModes = recordField(spec, 'modes');
   const synthesizedModes: MutableRecord = {};
@@ -180,13 +195,13 @@ export function synthesizeProgramSpecFromDomain(
 
   const projection: MutableRecord = {
     [firstMode]: {
-      include: unique([`inputs.${entryChannel}`, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
+      include: unique([`inputs.${entryChannel}`, initialEntryPath, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
       exclude: [],
     },
   };
   for (const modeName of terminalModes) {
     projection[modeName] = {
-      include: unique([...intermediateGuardFields, ...intermediateJsonFields]),
+      include: unique([initialEntryPath, ...intermediateGuardFields, ...intermediateJsonFields]),
       exclude: [],
     };
   }
@@ -194,6 +209,7 @@ export function synthesizeProgramSpecFromDomain(
     projection[modeName] = {
       include: unique([
         `inputs.${entryChannel}`,
+        initialEntryPath,
         'notebook.entries',
         'notebook.pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
@@ -213,13 +229,21 @@ export function synthesizeProgramSpecFromDomain(
       : `Terminal sink mode after ${name} cannot progress further.`;
   }
   for (const modeName of intermediateModes) {
-    prompts[modeName] = `Perform the ${modeName} stage for ${name}.`;
+    prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName));
   }
   spec.prompts = prompts;
 
   spec.ingestion = {
     [entryChannel]: [`inputs.${entryChannel}`],
     system_mode_entry: ['inputs.mode_entry'],
+  };
+
+  spec.reactions = {
+    capture_initial_entry_input: {
+      event: 'AfterIngestion',
+      watch: [`inputs.${entryChannel}`],
+      write_scope: [initialEntryPath],
+    },
   };
 
   spec.channels = {
@@ -235,7 +259,7 @@ export function synthesizeProgramSpecFromDomain(
     delete actionMap.begin_work;
   }
   for (const action of transitionActions) {
-    actionMap[action.name] = actionMapEntryFor(action, firstMode);
+    actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source));
   }
 
   const schema = recordField(spec, 'schema');
@@ -244,6 +268,7 @@ export function synthesizeProgramSpecFromDomain(
   delete schema['work.example_result_json'];
   delete schema['work.example_items_json'];
   schema[`inputs.${entryChannel}`] = 'string';
+  schema[initialEntryPath] = 'string';
   schema[startedField] = 'boolean';
   for (const field of unique([...guardFieldsByMode.values()].flat())) {
     schema[field] = 'boolean';
@@ -264,7 +289,7 @@ export function synthesizeProgramSpecFromDomain(
     }
   }
 
-  spec.guidance = guidanceFor(intermediateModes, delegation);
+  spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -278,18 +303,22 @@ export function synthesizeProgramSpecFromDomain(
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
-    contracts_ts: renderContractsSource(stageClassification, transitionActions),
+    contracts_ts: renderContractsSource(stages, stageClassification, transitionActions),
     handlers_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: true,
       resolverImport: './handlers/_resolver.js',
       contractsImport: './contracts.js',
       stageImportPrefix: './stages',
+      initialEntryPath,
+      entryPath: `inputs.${entryChannel}`,
     }),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
       resolverImport: './_resolver.js',
       contractsImport: '../contracts.js',
       stageImportPrefix: '../stages',
+      initialEntryPath,
+      entryPath: `inputs.${entryChannel}`,
     }),
     tools_ts: renderToolsSource(slug, transitionActions),
     smoke_test_ts: renderSmokeTestSource(slug, name, transitionActions, completion),
@@ -553,9 +582,12 @@ function outputProjectionFields(modeName: string, stageClassificationBySlug: Map
     : [`${modeName}.output`];
 }
 
-function actionMapEntryFor(action: TransitionAction, firstMode: string): MutableRecord {
+function actionMapEntryFor(action: TransitionAction, firstMode: string, domainSpec?: StageDomainSpec): MutableRecord {
   const isBootstrap = action.source === firstMode;
   const isResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
+  const domainSpecDescription = domainSpec
+    ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpec)}`
+    : '';
   const mutations = [
     ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
     ...(isBootstrap || isResultPathStage ? [] : [
@@ -568,12 +600,12 @@ function actionMapEntryFor(action: TransitionAction, firstMode: string): Mutable
     description: isBootstrap
       ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
       : action.archetype === 'llm-reasoning'
-        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.`
-        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.`,
+        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`
+        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`,
     ...(isBootstrap || isResultPathStage ? {} : {
       arg_descriptions: {
-        result_json: `JSON string result for the ${action.source} LLM reasoning stage.`,
-        items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.`,
+        result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
+        items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
       },
     }),
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
@@ -629,6 +661,8 @@ function renderHandlersSource(
     resolverImport: string;
     contractsImport: string;
     stageImportPrefix: string;
+    initialEntryPath: string;
+    entryPath: string;
   },
 ): string {
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
@@ -680,7 +714,7 @@ function renderHandlersSource(
   }).join('\n\n');
   const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\n// The generated scaffold has no foundry-driven reactions by default. Consumer\n// programs can add reactions by populating this map.\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map();`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }],\n]);`
     : '';
 
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
@@ -743,8 +777,13 @@ export function register${toPascalCase(slug)}Tools(_registry: ToolRegistry): voi
 `;
 }
 
-function renderContractsSource(stageClassification: ClassifiedStage[], transitionActions: TransitionAction[]): string {
+function renderContractsSource(
+  stages: Stage[],
+  stageClassification: ClassifiedStage[],
+  transitionActions: TransitionAction[],
+): string {
   const classified = JSON.stringify(stageClassification, null, 2);
+  const domainSpecs = JSON.stringify(domainSpecsByStage(stages), null, 2);
   const actionContracts = JSON.stringify(
     transitionActions
       .filter((action) => action.name !== 'begin_work')
@@ -771,10 +810,18 @@ import type { HandlerPayload } from './handlers/_resolver.js';
 
 export type StageArchetype = 'pure-compute' | 'llm-reasoning' | 'external-adapter';
 
+export interface StageDomainSpec {
+  reads: readonly string[];
+  produces: Record<string, unknown>;
+  rules: readonly string[];
+  invariants: readonly string[];
+}
+
 export interface StageInput {
   stage: string;
   payload: HandlerPayload;
   domain: Record<string, unknown>;
+  domain_spec: StageDomainSpec;
 }
 
 export interface StageRuntime {
@@ -792,13 +839,15 @@ export interface StageOutput {
 
 export const stageClassification = ${classified} as const;
 
+export const stageDomainSpecs = ${domainSpecs} as Record<string, StageDomainSpec>;
+
 export const stageActionContracts = ${actionContracts} as const;
 
 export function resolveStageInput(payload: HandlerPayload, stage: string): StageInput {
   const domain = payload.domain && typeof payload.domain === 'object' && !Array.isArray(payload.domain)
     ? payload.domain as Record<string, unknown>
     : {};
-  return { stage, payload, domain };
+  return { stage, payload, domain, domain_spec: stageDomainSpecs[stage] ?? emptyStageDomainSpec };
 }
 
 export function createStageRuntime(payload: HandlerPayload): StageRuntime {
@@ -865,6 +914,13 @@ function assertNoStubMarkers(output: StageOutput, stage: string): void {
     }
   }
 }
+
+const emptyStageDomainSpec: StageDomainSpec = {
+  reads: [],
+  produces: {},
+  rules: [],
+  invariants: [],
+};
 `;
 }
 
@@ -983,18 +1039,46 @@ function normalizeGuardField(field: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function guidanceFor(modeNames: string[], delegation: Record<string, unknown>): Record<string, string[]> {
-  const guidance = [
+function promptForStage(modeName: string, programName: string, domainSpec?: StageDomainSpec): string {
+  const base = `Perform the ${modeName} stage for ${programName}.`;
+  if (!domainSpec) return base;
+  return [
+    base,
+    `Author-provided domain spec for ${modeName} is normative; implement it exactly and do not infer alternate business logic.`,
+    JSON.stringify(domainSpec),
+  ].join('\n');
+}
+
+function guidanceFor(
+  modeNames: string[],
+  delegation: Record<string, unknown>,
+  stageDomainSpecBySlug: Map<string, StageDomainSpec>,
+): Record<string, string[]> {
+  const baseGuidance = [
     'Use the synthesized JSON-string scalar fields for structured handler results.',
   ];
   if (Object.keys(delegation).length > 0) {
-    guidance.push(`delegation intake captured for this program: ${JSON.stringify(delegation)}.`);
+    baseGuidance.push(`delegation intake captured for this program: ${JSON.stringify(delegation)}.`);
   }
-  return Object.fromEntries(modeNames.map((modeName) => [modeName, guidance]));
+  return Object.fromEntries(modeNames.map((modeName) => {
+    const domainSpec = stageDomainSpecBySlug.get(modeName);
+    const stageGuidance = domainSpec
+      ? [
+          ...baseGuidance,
+          `Author-provided domain spec for ${modeName}: ${JSON.stringify(domainSpec)}.`,
+          'Domain spec rules and invariants are mandatory; do not substitute guessed defaults.',
+        ]
+      : baseGuidance;
+    return [modeName, stageGuidance];
+  }));
 }
 
 function channelsForBootstrap(entryChannel: string): string[] {
   return unique([entryChannel, 'system_mode_entry', 'widget_output']);
+}
+
+function initialInputPath(entryChannel: string): string {
+  return `inputs.initial_${safeIdentifier(entryChannel)}`;
 }
 
 function validateSynthesizedSpec(specYaml: string): void {
@@ -1019,6 +1103,9 @@ function assertStages(stages: Stage[]): void {
     if (!stage || typeof stage.slug !== 'string' || stage.slug.length === 0) {
       throw new Error('each stage must declare a non-empty slug');
     }
+    if (stage.domain_spec) {
+      assertDomainSpec(stage.domain_spec, stage.slug);
+    }
   }
 }
 
@@ -1027,7 +1114,12 @@ function normalizeStages(stages: StageInput[]): Stage[] {
     throw new Error('intake.stages_json must decode to an array');
   }
   return stages.map((stage, index) => {
-    if (typeof stage !== 'string') return stage;
+    if (typeof stage !== 'string') {
+      return {
+        ...stage,
+        ...(stage.domain_spec ? { domain_spec: normalizeDomainSpec(stage.domain_spec, stage.slug) } : {}),
+      };
+    }
     const slug = stage.trim();
     return {
       slug,
@@ -1035,6 +1127,56 @@ function normalizeStages(stages: StageInput[]): Stage[] {
       ...(index === stages.length - 1 ? { is_terminal: true } : {}),
     };
   });
+}
+
+function domainSpecsByStage(stages: Stage[]): Record<string, StageDomainSpec> {
+  return Object.fromEntries(
+    stages
+      .filter((stage): stage is Stage & { domain_spec: StageDomainSpec } => !!stage.domain_spec)
+      .map((stage) => [stage.slug, stage.domain_spec]),
+  );
+}
+
+function normalizeDomainSpec(value: unknown, stageSlug: string): StageDomainSpec {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`stage ${stageSlug} domain_spec must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const spec = {
+    reads: stringArrayField(record, 'reads', stageSlug),
+    produces: objectField(record, 'produces', stageSlug),
+    rules: stringArrayField(record, 'rules', stageSlug),
+    invariants: stringArrayField(record, 'invariants', stageSlug),
+  };
+  assertDomainSpec(spec, stageSlug);
+  return spec;
+}
+
+function assertDomainSpec(value: StageDomainSpec, stageSlug: string): void {
+  stringArrayField(value as unknown as Record<string, unknown>, 'reads', stageSlug);
+  objectField(value as unknown as Record<string, unknown>, 'produces', stageSlug);
+  stringArrayField(value as unknown as Record<string, unknown>, 'rules', stageSlug);
+  stringArrayField(value as unknown as Record<string, unknown>, 'invariants', stageSlug);
+}
+
+function stringArrayField(record: Record<string, unknown>, field: keyof StageDomainSpec, stageSlug: string): string[] {
+  const value = record[field];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((item) => typeof item === 'string' && item.trim().length > 0)
+  ) {
+    throw new Error(`stage ${stageSlug} domain_spec.${field} must be a non-empty string array`);
+  }
+  return value.map((item) => item.trim());
+}
+
+function objectField(record: Record<string, unknown>, field: keyof StageDomainSpec, stageSlug: string): Record<string, unknown> {
+  const value = record[field];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`stage ${stageSlug} domain_spec.${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function assertTransitions(transitions: IntakeTransition[]): void {

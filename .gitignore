@@ -53,3 +53,5 @@ tests/sota/scorecard/iterate-*.json
 tests/sota/scorecard/iterate-*.md
 tests/sota/scorecard/verify-*.json
 tests/sota/scorecard/verify-*.md
+tests/sota/scorecard/iter2-*.json
+tests/sota/scorecard/iter2-*.md
