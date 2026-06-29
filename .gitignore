@@ -55,3 +55,7 @@ tests/sota/scorecard/verify-*.json
 tests/sota/scorecard/verify-*.md
 tests/sota/scorecard/iter2-*.json
 tests/sota/scorecard/iter2-*.md
+tests/sota/scorecard/rl-*.json
+tests/sota/scorecard/rl-*.md
+tests/sota/scorecard/verify-closegap*.json
+tests/sota/scorecard/verify-closegap*.md

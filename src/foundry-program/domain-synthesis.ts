@@ -66,6 +66,9 @@ interface StageBehaviorFixture {
   expected_adapter_kind?: 'in_memory_mock' | 'repo_integration';
   expected_integration?: string;
   expected_method?: string;
+  available_domain_paths?: string[];
+  domain_spec_reads?: string[];
+  expected_items_templates?: string[];
 }
 
 export async function synthesizeDomainLogic(
@@ -737,14 +740,17 @@ async function runBehavioralGate(
 
   try {
     const runStage = loadRunStageForBehavior(body);
-    const fixture = behaviorFixtureFor(options.stage, archetype);
+    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec);
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `behavioral gate failed for stage ${options.stage}: runStage timed out`,
     );
     const behaviorError = assertBehavioralOutput(output, options.stage, archetype, options.domainSpec);
     if (behaviorError) {
-      return { ok: false, error: `behavioral gate failed for stage ${options.stage}: ${behaviorError}` };
+      return {
+        ok: false,
+        error: formatBehavioralGateFailure(options.stage, behaviorError, fixture.audit),
+      };
     }
     return {
       ok: true,
@@ -785,12 +791,23 @@ function loadRunStageForBehavior(body: string): (input: unknown, runtime: unknow
 function behaviorFixtureFor(
   stage: string,
   archetype: 'pure-compute' | 'external-adapter',
+  domainSpec?: StageDomainSpec,
 ): {
   input: Record<string, unknown>;
   runtime: Record<string, unknown>;
   audit: StageBehaviorFixture;
 } {
   const expectedAdapterKind = archetype === 'external-adapter' ? { expected_adapter_kind: 'in_memory_mock' as const } : {};
+  const requestFacts = seedInitialRequestFacts(domainSpec);
+  const domain = {
+    'inputs.initial_user_text': JSON.stringify(requestFacts),
+    'inputs.user_text': 'continue',
+    'account.id': 'acct-behavior-001',
+    'record.id': 'record-behavior-001',
+    'owner.queue': 'operations',
+    ...seedPriorStageOutputs(domainSpec),
+  };
+  const itemTemplates = domainSpec?.produces.items_json;
   return {
     input: {
       stage,
@@ -800,71 +817,7 @@ function behaviorFixtureFor(
           random: 0.25,
         },
       },
-      domain: {
-        'inputs.initial_user_text': JSON.stringify({
-          plan: 'pro',
-          seats: 2,
-          region: 'us',
-          account_id: 'acct-behavior-001',
-          requested_seats: 5,
-          base_hours: 2,
-          hourly_rate_usd: 100,
-          discount_pct: 10,
-          budget_usd: 250,
-          severity: 'high',
-          customer_tier: 'enterprise',
-          failed_logins: 6,
-          data_exposure: true,
-          request: 'approve request',
-          known_policy: 'manager may approve some requests',
-        }),
-        'inputs.user_text': 'continue',
-        'account.id': 'acct-behavior-001',
-        'record.id': 'record-behavior-001',
-        'owner.queue': 'operations',
-        'crm_lookup.output': {
-          result_json: JSON.stringify({
-            stage: 'crm_lookup',
-            account_id: 'acct-behavior-001',
-            tier: 'gold',
-            active_contract: true,
-            adapter_kind: 'in_memory_mock',
-          }),
-          items_json: JSON.stringify(['account:acct-behavior-001', 'tier:gold']),
-          digest: '',
-          adapter_kind: 'in_memory_mock',
-        },
-        'estimate_fee.output': {
-          result_json: JSON.stringify({
-            stage: 'estimate_fee',
-            base_hours: 2,
-            hourly_rate_usd: 100,
-            subtotal_usd: 200,
-          }),
-          items_json: JSON.stringify(['subtotal_usd:200']),
-          digest: '',
-        },
-        'apply_discount.output': {
-          result_json: JSON.stringify({
-            stage: 'apply_discount',
-            previous_total_usd: 200,
-            discount_pct: 10,
-            discounted_total_usd: 180,
-          }),
-          items_json: JSON.stringify(['discounted_total_usd:180']),
-          digest: '',
-        },
-        'score_risk.output': {
-          result_json: JSON.stringify({
-            stage: 'score_risk',
-            risk_score: 100,
-            severity: 'high',
-            factors: ['severity', 'customer_tier', 'failed_logins', 'data_exposure'],
-          }),
-          items_json: JSON.stringify(['risk_score:100', 'severity:high']),
-          digest: '',
-        },
-      },
+      domain,
     },
     runtime: {
       now: () => '2026-06-28T00:00:00.000Z',
@@ -878,8 +831,218 @@ function behaviorFixtureFor(
       expected_result_stage: stage,
       expected_items_non_empty: true,
       ...expectedAdapterKind,
+      available_domain_paths: Object.keys(domain).sort(),
+      ...(domainSpec?.reads ? { domain_spec_reads: [...domainSpec.reads] } : {}),
+      ...(Array.isArray(itemTemplates) && itemTemplates.every((item) => typeof item === 'string')
+        ? { expected_items_templates: [...itemTemplates] }
+        : {}),
     },
   };
+}
+
+function seedInitialRequestFacts(domainSpec?: StageDomainSpec): Record<string, unknown> {
+  const facts: Record<string, unknown> = {
+    plan: 'pro',
+    seats: 2,
+    region: 'us',
+    account_id: 'acct-behavior-001',
+    requested_seats: 5,
+    base_hours: 2,
+    hourly_rate_usd: 100,
+    discount_pct: 10,
+    budget_usd: 250,
+    severity: 'high',
+    customer_tier: 'enterprise',
+    failed_logins: 6,
+    data_exposure: true,
+    request: 'approve request',
+    known_policy: 'manager may approve some requests',
+  };
+  for (const read of domainSpec?.reads ?? []) {
+    const fieldPath = initialInputReadFieldPath(read);
+    if (fieldPath) {
+      setNestedRecord(facts, fieldPath, sampleBehaviorValue(fieldPath));
+    }
+  }
+  return facts;
+}
+
+function seedPriorStageOutputs(domainSpec?: StageDomainSpec): Record<string, unknown> {
+  const seeded: Record<string, unknown> = {
+    'crm_lookup.output': stageOutputFixture('crm_lookup', {
+      stage: 'crm_lookup',
+      account_id: 'acct-behavior-001',
+      tier: 'gold',
+      active_contract: true,
+      adapter_kind: 'in_memory_mock',
+    }, ['account:acct-behavior-001', 'tier:gold'], 'in_memory_mock'),
+    'estimate_fee.output': stageOutputFixture('estimate_fee', {
+      stage: 'estimate_fee',
+      base_hours: 2,
+      hourly_rate_usd: 100,
+      subtotal_usd: 200,
+    }, ['subtotal_usd:200']),
+    'apply_discount.output': stageOutputFixture('apply_discount', {
+      stage: 'apply_discount',
+      previous_total_usd: 200,
+      discount_pct: 10,
+      discounted_total_usd: 180,
+    }, ['discounted_total_usd:180']),
+    'score_risk.output': stageOutputFixture('score_risk', {
+      stage: 'score_risk',
+      risk_score: 100,
+      severity: 'high',
+      factors: ['severity', 'customer_tier', 'failed_logins', 'data_exposure'],
+    }, ['risk_score:100', 'severity:high']),
+  };
+
+  for (const read of domainSpec?.reads ?? []) {
+    const deterministic = read.match(/^([a-zA-Z0-9_]+)\.output\.result_json(?:\.(.+))?$/u);
+    if (deterministic?.[1] && deterministic[2]) {
+      const outputPath = `${deterministic[1]}.output`;
+      const output = isRecord(seeded[outputPath])
+        ? { ...(seeded[outputPath] as Record<string, unknown>) }
+        : stageOutputFixture(deterministic[1], { stage: deterministic[1] }, [`stage:${deterministic[1]}`]);
+      const result = parseRecordJson(output.result_json);
+      setNestedRecord(result, deterministic[2], sampleBehaviorValue(deterministic[2]));
+      output.result_json = JSON.stringify(result);
+      output.items_json = JSON.stringify(itemsForResult(result));
+      seeded[outputPath] = output;
+      continue;
+    }
+
+    const llmReasoning = read.match(/^([a-zA-Z0-9_]+)\.result_json(?:\.(.+))?$/u);
+    if (llmReasoning?.[1] && llmReasoning[2]) {
+      const resultPath = `${llmReasoning[1]}.result_json`;
+      const result = parseRecordJson(seeded[resultPath]);
+      if (!Object.hasOwn(result, 'stage')) {
+        result.stage = llmReasoning[1];
+      }
+      setNestedRecord(result, llmReasoning[2], sampleBehaviorValue(llmReasoning[2]));
+      seeded[resultPath] = JSON.stringify(result);
+      seeded[`${llmReasoning[1]}.items_json`] = JSON.stringify(itemsForResult(result));
+    }
+  }
+
+  return seeded;
+}
+
+function initialInputReadFieldPath(read: string): string | undefined {
+  const match = read.match(/^inputs\.initial_[a-zA-Z0-9_]+(?:\.(.+))?$/u);
+  return match?.[1];
+}
+
+function stageOutputFixture(
+  stage: string,
+  result: Record<string, unknown>,
+  items: string[],
+  adapterKind?: 'in_memory_mock' | 'repo_integration',
+): Record<string, unknown> {
+  return {
+    result_json: JSON.stringify({ stage, ...result }),
+    items_json: JSON.stringify(items),
+    digest: '',
+    ...(adapterKind ? { adapter_kind: adapterKind } : {}),
+  };
+}
+
+function sampleBehaviorValue(fieldPath: string): unknown {
+  const field = fieldPath.split('.').at(-1)?.toLowerCase() ?? fieldPath.toLowerCase();
+  if (field === 'order_id') return 'ORD-BEHAVIOR-001';
+  if (field === 'account_id') return 'acct-behavior-001';
+  if (field === 'sku') return 'sku-behavior-001';
+  if (field === 'plan') return 'pro';
+  if (field === 'region') return 'us';
+  if (field === 'severity') return 'high';
+  if (field === 'customer_tier') return 'enterprise';
+  if (field === 'tier') return 'gold';
+  if (field === 'policy_code') return 'partial_refund_window';
+  if (field === 'posting_type') return 'refund';
+  if (field === 'basis') return 'discounted_total_within_budget';
+  if (field === 'reason') return 'stock_available';
+  if (field === 'currency') return 'USD';
+  if (field === 'refund_requested' || field === 'approved' || field === 'eligible' || field === 'reserved' || field === 'active_contract' || field.startsWith('is_') || field.startsWith('has_')) {
+    return true;
+  }
+  if (field === 'delivered_days_ago') return 42;
+  if (field === 'refund_pct') return 50;
+  if (field === 'discount_pct') return 10;
+  if (field === 'original_amount_cents') return 12500;
+  if (field === 'refund_cents' || field === 'amount_cents') return 6250;
+  if (field === 'subtotal_usd' || field === 'previous_total_usd') return 200;
+  if (field === 'discounted_total_usd') return 180;
+  if (field === 'budget_usd') return 250;
+  if (field === 'base_hours') return 2;
+  if (field === 'hourly_rate_usd') return 100;
+  if (field === 'risk_score') return 100;
+  if (field === 'requested_units') return 4;
+  if (field === 'available_units') return 10;
+  if (field === 'reserved_units') return 4;
+  if (field === 'backorder_units') return 0;
+  if (field === 'failed_logins') return 6;
+  if (/(?:amount|budget|count|days|events|hours|minutes|pct|rate|score|seats|total|units|usd|cents)$/u.test(field)) {
+    return 1;
+  }
+  return `${field.replace(/_/gu, '-')}-behavior`;
+}
+
+function setNestedRecord(target: Record<string, unknown>, fieldPath: string, value: unknown): void {
+  const parts = fieldPath.split('.').filter(Boolean);
+  if (parts.length === 0) {
+    return;
+  }
+  let cursor = target;
+  for (const part of parts.slice(0, -1)) {
+    const next = cursor[part];
+    if (!isRecord(next)) {
+      cursor[part] = {};
+    }
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  cursor[parts[parts.length - 1] as string] = value;
+}
+
+function parseRecordJson(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function itemsForResult(result: Record<string, unknown>): string[] {
+  const entries = Object.entries(result).filter(([key]) => key !== 'stage');
+  return entries.length > 0
+    ? entries.map(([key, value]) => `${key}:${String(value)}`)
+    : [`stage:${String(result.stage ?? 'unknown')}`];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function formatBehavioralGateFailure(stage: string, behaviorError: string, fixture: StageBehaviorFixture): string {
+  const lines = [
+    `behavioral gate failed for stage ${stage}: ${behaviorError}`,
+  ];
+  if (fixture.domain_spec_reads && fixture.domain_spec_reads.length > 0) {
+    lines.push(`domain_spec.reads: ${JSON.stringify(fixture.domain_spec_reads)}`);
+  }
+  if (fixture.expected_items_templates && fixture.expected_items_templates.length > 0) {
+    lines.push(`domain_spec.produces.items_json: ${JSON.stringify(fixture.expected_items_templates)}`);
+  }
+  if (fixture.available_domain_paths && fixture.available_domain_paths.length > 0) {
+    lines.push(`Available behavioral fixture domain paths: ${JSON.stringify(fixture.available_domain_paths)}`);
+  }
+  lines.push(
+    "Stateful repair hint: read request JSON from input.domain['inputs.initial_user_text']; for deterministic prior output reads like prior_stage.output.result_json.field, read input.domain['prior_stage.output'].result_json and JSON.parse it before using field.",
+    'For items_json, emit one string per domain_spec.produces.items_json template even when a computed value is 0 or false; do not return an empty array for declared item templates.',
+  );
+  return lines.join('\n');
 }
 
 async function withBehaviorTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
@@ -1065,12 +1228,15 @@ function cacheKeyFor(input: { stage: string; contract: string; prompt: string; m
 function readCache(path: string): CacheRecord | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<CacheRecord>;
+  const behavioralFixture = isStageBehaviorFixture(parsed.behavioral_fixture)
+    ? normalizeStageBehaviorFixture(parsed.behavioral_fixture)
+    : undefined;
   return typeof parsed.body === 'string' && typeof parsed.body_hash === 'string'
     ? {
         body: parsed.body,
         body_hash: parsed.body_hash,
         ...(typeof parsed.behavioral_gate === 'string' ? { behavioral_gate: parsed.behavioral_gate } : {}),
-        ...(isStageBehaviorFixture(parsed.behavioral_fixture) ? { behavioral_fixture: parsed.behavioral_fixture } : {}),
+        ...(behavioralFixture ? { behavioral_fixture: behavioralFixture } : {}),
       }
     : undefined;
 }
@@ -1082,6 +1248,24 @@ function isStageBehaviorFixture(value: unknown): value is StageBehaviorFixture {
     typeof (value as { input_stage?: unknown }).input_stage === 'string' &&
     typeof (value as { expected_result_stage?: unknown }).expected_result_stage === 'string' &&
     (value as { expected_items_non_empty?: unknown }).expected_items_non_empty === true;
+}
+
+function normalizeStageBehaviorFixture(value: StageBehaviorFixture): StageBehaviorFixture {
+  return {
+    input_stage: value.input_stage,
+    expected_result_stage: value.expected_result_stage,
+    expected_items_non_empty: true,
+    ...(value.expected_adapter_kind ? { expected_adapter_kind: value.expected_adapter_kind } : {}),
+    ...(value.expected_integration ? { expected_integration: value.expected_integration } : {}),
+    ...(value.expected_method ? { expected_method: value.expected_method } : {}),
+    ...(stringArray(value.available_domain_paths) ? { available_domain_paths: value.available_domain_paths } : {}),
+    ...(stringArray(value.domain_spec_reads) ? { domain_spec_reads: value.domain_spec_reads } : {}),
+    ...(stringArray(value.expected_items_templates) ? { expected_items_templates: value.expected_items_templates } : {}),
+  };
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 function extractCode(content: string): string {

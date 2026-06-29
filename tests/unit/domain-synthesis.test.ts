@@ -286,6 +286,233 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     });
   });
 
+  it('behaviorally verifies bodies that read domain-spec prior output dependencies', async () => {
+    await withCache(async (cacheDir) => {
+      const statefulBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const requestRaw = input.domain['inputs.initial_user_text'];
+  const request = typeof requestRaw === 'string' ? JSON.parse(requestRaw) as Record<string, unknown> : {};
+  const previousRaw = input.domain['normalize_refund.output'];
+  const previousOutput = previousRaw && typeof previousRaw === 'object' && !Array.isArray(previousRaw)
+    ? previousRaw as Record<string, unknown>
+    : {};
+  const previousResultRaw = previousOutput.result_json;
+  const previous = typeof previousResultRaw === 'string'
+    ? JSON.parse(previousResultRaw) as Record<string, unknown>
+    : {};
+  const originalAmountCents = Number(previous.original_amount_cents);
+  const deliveredDaysAgo = Number(request.delivered_days_ago);
+  const refundPct = deliveredDaysAgo <= 30 ? 100 : deliveredDaysAgo <= 60 ? 50 : 0;
+  const refundCents = Math.round(originalAmountCents * refundPct / 100);
+  const policyCode = refundPct === 100 ? 'full_refund_window' : refundPct === 50 ? 'partial_refund_window' : 'outside_refund_window';
+  return {
+    result_json: JSON.stringify({
+      stage: input.stage,
+      order_id: String(previous.order_id),
+      delivered_days_ago: deliveredDaysAgo,
+      refund_pct: refundPct,
+      refund_cents: refundCents,
+      policy_code: policyCode,
+    }),
+    items_json: JSON.stringify(['policy:' + policyCode, 'refund_cents:' + refundCents]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic({
+        ...artifactWithContext(),
+        mode_names: ['intake', 'normalize_refund', 'apply_refund_policy', 'done'],
+        stage_classification: [
+          { slug: 'normalize_refund', archetype: 'pure-compute', rationale: 'compute' },
+          { slug: 'apply_refund_policy', archetype: 'pure-compute', rationale: 'compute' },
+        ],
+        body_stage_slugs: ['apply_refund_policy'],
+        synthesis_context: {
+          ...artifactWithContext().synthesis_context!,
+          stages: [
+            { slug: 'intake', is_bootstrap: true },
+            {
+              slug: 'normalize_refund',
+              domain_spec: {
+                reads: [
+                  'inputs.initial_user_text.order_id',
+                  'inputs.initial_user_text.original_amount_cents',
+                  'inputs.initial_user_text.refund_requested',
+                ],
+                produces: {
+                  result_json: {
+                    stage: 'string',
+                    order_id: 'string',
+                    original_amount_cents: 'number',
+                    refund_requested: 'boolean',
+                  },
+                  items_json: ['order:<order_id>', 'amount_cents:<original_amount_cents>'],
+                },
+                rules: ['Echo request refund fields.'],
+                invariants: ['result_json.stage must equal normalize_refund.'],
+              },
+            },
+            {
+              slug: 'apply_refund_policy',
+              domain_spec: {
+                reads: [
+                  'normalize_refund.output.result_json.order_id',
+                  'normalize_refund.output.result_json.original_amount_cents',
+                  'inputs.initial_user_text.delivered_days_ago',
+                ],
+                produces: {
+                  result_json: {
+                    stage: 'string',
+                    order_id: 'string',
+                    delivered_days_ago: 'number',
+                    refund_pct: 'number',
+                    refund_cents: 'number',
+                    policy_code: 'string',
+                  },
+                  items_json: ['policy:<policy_code>', 'refund_cents:<refund_cents>'],
+                },
+                rules: [
+                  'Parse normalize_refund.output.result_json and the original request JSON before applying policy.',
+                  'If delivered_days_ago is greater than 30 and less than or equal to 60, refund_pct is 50 and policy_code is partial_refund_window.',
+                  'refund_cents = Math.round(original_amount_cents * refund_pct / 100).',
+                ],
+                invariants: ['result_json.stage must equal apply_refund_policy.'],
+              },
+            },
+            { slug: 'done', is_terminal: true },
+          ],
+          transitions: [
+            { from: 'intake', to: 'normalize_refund', trigger: 'started', guard_field: 'intake.started' },
+            { from: 'normalize_refund', to: 'apply_refund_policy', trigger: 'normalized', guard_field: 'normalize_refund.ready' },
+            { from: 'apply_refund_policy', to: 'done', trigger: 'applied', guard_field: 'apply_refund_policy.ready' },
+          ],
+        },
+      }, {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => statefulBody,
+      });
+
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'apply_refund_policy',
+        behavioral_gate: 'passed',
+        behavioral_fixture: expect.objectContaining({
+          available_domain_paths: expect.arrayContaining([
+            'inputs.initial_user_text',
+            'normalize_refund.output',
+          ]),
+          domain_spec_reads: expect.arrayContaining([
+            'normalize_refund.output.result_json.original_amount_cents',
+            'inputs.initial_user_text.delivered_days_ago',
+          ]),
+          expected_items_templates: ['policy:<policy_code>', 'refund_cents:<refund_cents>'],
+        }),
+      }));
+    });
+  });
+
+  it('feeds stateful domain-spec paths into behavioral repair feedback', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const emptyItemsBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, previous_total_usd: 200, discount_pct: 10, discounted_total_usd: 180 }),
+    items_json: JSON.stringify([]),
+    digest: '',
+  };
+}
+`;
+      const validStatefulBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const estimateOutput = input.domain['estimate_fee.output'] as Record<string, unknown>;
+  const estimate = JSON.parse(String(estimateOutput.result_json)) as Record<string, unknown>;
+  const request = JSON.parse(String(input.domain['inputs.initial_user_text'])) as Record<string, unknown>;
+  const previousTotal = Number(estimate.subtotal_usd);
+  const discountPct = Number(request.discount_pct);
+  const discountedTotal = previousTotal * (1 - discountPct / 100);
+  return {
+    result_json: JSON.stringify({ stage: input.stage, previous_total_usd: previousTotal, discount_pct: discountPct, discounted_total_usd: discountedTotal }),
+    items_json: JSON.stringify(['previous_total_usd:' + previousTotal, 'discounted_total_usd:' + discountedTotal]),
+    digest: '',
+  };
+}
+`;
+
+      const statefulArtifact = {
+        ...artifactWithContext(),
+        mode_names: ['intake', 'estimate_fee', 'apply_discount', 'done'],
+        stage_classification: [
+          { slug: 'estimate_fee', archetype: 'pure-compute', rationale: 'compute' },
+          { slug: 'apply_discount', archetype: 'pure-compute', rationale: 'compute' },
+        ],
+        body_stage_slugs: ['apply_discount'],
+        synthesis_context: {
+          ...artifactWithContext().synthesis_context!,
+          stages: [
+            { slug: 'intake', is_bootstrap: true },
+            { slug: 'estimate_fee' },
+            {
+              slug: 'apply_discount',
+              domain_spec: {
+                reads: [
+                  'inputs.initial_user_text.discount_pct',
+                  'estimate_fee.output.result_json.subtotal_usd',
+                ],
+                produces: {
+                  result_json: {
+                    stage: 'string',
+                    previous_total_usd: 'number',
+                    discount_pct: 'number',
+                    discounted_total_usd: 'number',
+                  },
+                  items_json: ['previous_total_usd:<previous_total_usd>', 'discounted_total_usd:<discounted_total_usd>'],
+                },
+                rules: [
+                  'Parse estimate_fee.output.result_json and the original request JSON before computing.',
+                  'previous_total_usd = estimate_fee.output.result_json.subtotal_usd.',
+                  'discounted_total_usd = previous_total_usd * (1 - discount_pct / 100).',
+                ],
+                invariants: ['result_json.stage must equal apply_discount.'],
+              },
+            },
+            { slug: 'done', is_terminal: true },
+          ],
+        },
+      } satisfies SynthesizedArtifact;
+
+      const result = await synthesizeDomainLogic(statefulArtifact, {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? emptyItemsBody : validStatefulBody;
+        },
+      });
+
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        behavioral_gate: 'passed',
+        attempts: 2,
+      }));
+      expect(attempts[1]).toContain('domain_spec.reads');
+      expect(attempts[1]).toContain('estimate_fee.output.result_json.subtotal_usd');
+      expect(attempts[1]).toContain('Available behavioral fixture domain paths');
+      expect(attempts[1]).toContain('estimate_fee.output');
+      expect(attempts[1]).toContain('domain_spec.produces.items_json');
+      expect(attempts[1]).toContain('previous_total_usd:<previous_total_usd>');
+    });
+  });
+
   it('prompts generated stage bodies to read the entry-channel request and prior stage outputs', async () => {
     await withCache(async (cacheDir) => {
       let prompt = '';

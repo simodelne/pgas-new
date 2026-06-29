@@ -7,11 +7,13 @@ describe('SOTA corpus harness', () => {
   it('loads a governed corpus with dev and holdout benchmarks across required archetypes', async () => {
     const corpus = await loadSotaCorpus();
 
-    expect(corpus).toHaveLength(11);
+    expect(corpus).toHaveLength(13);
     expect(corpus.map((benchmark) => benchmark.slug)).toEqual([
       'ambiguous-policy-refusal',
       'brief-summarizer',
+      'credit-memo-stateful',
       'crm-mock-lookup',
+      'entitlement-seat-stateful',
       'fee-calculator',
       'proposal-ops-stateful',
       'refund-ledger-stateful',
@@ -30,6 +32,8 @@ describe('SOTA corpus harness', () => {
     ]);
     expect(corpus.filter((benchmark) => benchmark.meta.holdout).map((benchmark) => benchmark.slug)).toEqual([
       'ambiguous-policy-refusal',
+      'credit-memo-stateful',
+      'entitlement-seat-stateful',
       'refund-ledger-stateful',
       'release-note-extractor',
       'sla-policy-refusal',

@@ -1,0 +1,20 @@
+{
+  "slug": "entitlement-seat-stateful",
+  "name": "Entitlement Seat Stateful",
+  "archetype_tags": ["multi-stage", "external-adapter", "in-memory-mock", "pure-compute"],
+  "holdout": true,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "entitlement_lookup", "seat_delta_policy", "audit_decision", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "entitlement_lookup": "external-adapter",
+      "seat_delta_policy": "pure-compute",
+      "audit_decision": "pure-compute"
+    },
+    "body_stages": ["entitlement_lookup", "seat_delta_policy", "audit_decision"],
+    "llm_stages": [],
+    "external_adapter_stages": ["entitlement_lookup"]
+  }
+}

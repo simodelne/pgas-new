@@ -254,6 +254,128 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.action_map.complete_brief_summary.arg_descriptions?.result_json).toContain('audience');
   });
 
+  it('projects prior stage outputs into every later stateful stage', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'refund-ledger-stateful-test',
+      'program.name': 'Refund Ledger Stateful Test',
+      'program.target_dir': '/tmp/refund-ledger-stateful-test',
+      'program.design_path': 'design',
+      'intake.purpose': 'Normalize a refund, apply policy, and post the resulting ledger entry.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'normalize_refund' },
+        { slug: 'apply_refund_policy' },
+        { slug: 'ledger_posting' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'normalize_refund', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'normalize_refund', to: 'apply_refund_policy', trigger: 'normalized', guard_field: 'normalize_refund.ready' },
+        { from: 'apply_refund_policy', to: 'ledger_posting', trigger: 'policy_applied', guard_field: 'apply_refund_policy.ready' },
+        { from: 'ledger_posting', to: 'complete', trigger: 'posted', guard_field: 'ledger_posting.ready' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'ledger_posting.ready' }),
+    });
+
+    const parsed = load(artifact.spec_yaml) as {
+      projection: Record<string, { include: string[] }>;
+    };
+
+    expect(parsed.projection.normalize_refund.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+    ]));
+    expect(parsed.projection.apply_refund_policy.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+      'apply_refund_policy.output',
+    ]));
+    expect(parsed.projection.ledger_posting.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+      'apply_refund_policy.output',
+      'ledger_posting.output',
+    ]));
+    expect(parsed.projection.complete.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+      'apply_refund_policy.output',
+      'ledger_posting.output',
+    ]));
+  });
+
+  it('seeds generated smoke input from initial input fields read by stateful domain specs', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'stateful-smoke-input-test',
+      'program.name': 'Stateful Smoke Input Test',
+      'program.target_dir': '/tmp/stateful-smoke-input-test',
+      'program.design_path': 'design',
+      'intake.purpose': 'Normalize an input, apply a policy, and complete.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        {
+          slug: 'normalize_request',
+          domain_spec: {
+            reads: [
+              'inputs.initial_user_text.order_id',
+              'inputs.initial_user_text.original_amount_cents',
+              'inputs.initial_user_text.refund_requested',
+            ],
+            produces: {
+              result_json: {
+                stage: 'string',
+                order_id: 'string',
+                original_amount_cents: 'number',
+                refund_requested: 'boolean',
+              },
+              items_json: 'string[]',
+            },
+            rules: ['Parse the original entry-channel JSON request before normalizing.'],
+            invariants: ['result_json.stage must equal normalize_request.'],
+          },
+        },
+        {
+          slug: 'apply_policy',
+          domain_spec: {
+            reads: [
+              'normalize_request.output.result_json.order_id',
+              'inputs.initial_user_text.delivered_days_ago',
+            ],
+            produces: {
+              result_json: {
+                stage: 'string',
+                order_id: 'string',
+                delivered_days_ago: 'number',
+              },
+              items_json: 'string[]',
+            },
+            rules: ['Read both prior stage output and the original entry-channel JSON request.'],
+            invariants: ['order_id must be preserved from normalize_request.'],
+          },
+        },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'normalize_request', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'normalize_request', to: 'apply_policy', trigger: 'normalized', guard_field: 'normalize_request.ready' },
+        { from: 'apply_policy', to: 'complete', trigger: 'done', guard_field: 'apply_policy.ready' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'apply_policy.ready' }),
+    });
+
+    expect(artifact.smoke_test_ts).toContain('await harness.trigger(JSON.stringify({');
+    expect(artifact.smoke_test_ts).toContain('order_id');
+    expect(artifact.smoke_test_ts).toContain('original_amount_cents');
+    expect(artifact.smoke_test_ts).toContain('refund_requested');
+    expect(artifact.smoke_test_ts).toContain('delivered_days_ago');
+    expect(artifact.smoke_test_ts).toContain('"delivered_days_ago": 14');
+    expect(artifact.smoke_test_ts).not.toContain("await harness.trigger('start generated smoke');");
+  });
+
   it('binds matching existing-repo external stages to declared manifest integrations in stored contracts', async () => {
     const sessionId = 'session-existing-repo-integration-synth';
     clearSynthesizedArtifact(sessionId);

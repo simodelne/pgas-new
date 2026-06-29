@@ -192,6 +192,15 @@ export function synthesizeProgramSpecFromDomain(
   const intermediateGuardFields = unique(
     intermediateModes.flatMap((modeName) => guardFieldsByMode.get(modeName) ?? []),
   );
+  const accumulatedOutputFieldsBefore = (modeName: string): string[] => {
+    const modeIndex = modeNames.indexOf(modeName);
+    if (modeIndex < 0) {
+      return [];
+    }
+    return intermediateModes
+      .filter((candidate) => modeNames.indexOf(candidate) < modeIndex)
+      .flatMap((candidate) => outputProjectionFields(candidate, stageClassificationBySlug));
+  };
 
   const projection: MutableRecord = {
     [firstMode]: {
@@ -213,6 +222,7 @@ export function synthesizeProgramSpecFromDomain(
         'notebook.entries',
         'notebook.pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
+        ...accumulatedOutputFieldsBefore(modeName),
         ...outputProjectionFields(modeName, stageClassificationBySlug),
       ]),
       exclude: [],
@@ -321,7 +331,7 @@ export function synthesizeProgramSpecFromDomain(
       entryPath: `inputs.${entryChannel}`,
     }),
     tools_ts: renderToolsSource(slug, transitionActions),
-    smoke_test_ts: renderSmokeTestSource(slug, name, transitionActions, completion),
+    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
     synthesis_context: {
@@ -927,10 +937,13 @@ const emptyStageDomainSpec: StageDomainSpec = {
 function renderSmokeTestSource(
   slug: string,
   name: string,
+  entryChannel: string,
+  stages: Stage[],
   transitionActions: TransitionAction[],
   completion: Completion,
 ): string {
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
+  const initialTrigger = smokeInitialTriggerExpression(stages, entryChannel);
   const responses = pathActions.map((action) => {
     if (action.archetype === 'llm-reasoning') {
       return `        effect(${tsString(action.name)}, {
@@ -953,14 +966,14 @@ describe('generated program smoke', () => {
   it('runs ${name} through the deterministic completion path without stub output', async () => {
     const harness = await createTestHarness(create${toPascalCase(slug)}ProgramEntry(), {
       programName: ${tsString(slug)},
-      defaultChannel: 'user_text',
+      defaultChannel: ${tsString(entryChannel)},
       authorResponses: [
 ${responses}
       ],
     });
 
     try {
-      await harness.trigger('start generated smoke');
+      await harness.trigger(${initialTrigger});
 ${pathActions.slice(1).map(() => "      await harness.trigger('continue generated smoke');").join('\n')}
       const snapshot = await harness.snapshot();
       expect(snapshot.mode).toBe(${tsString(completion.final_stage)});
@@ -977,6 +990,75 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
 }
 `;
+}
+
+function smokeInitialTriggerExpression(stages: Stage[], entryChannel: string): string {
+  const initialRoot = initialInputPath(entryChannel);
+  const initialPrefix = `${initialRoot}.`;
+  const request: MutableRecord = {};
+  for (const readPath of unique(stages.flatMap((stage) => stage.domain_spec?.reads ?? []))) {
+    if (!readPath.startsWith(initialPrefix)) {
+      continue;
+    }
+    const fieldPath = readPath.slice(initialPrefix.length).split('.').filter(Boolean);
+    if (fieldPath.length === 0) {
+      continue;
+    }
+    setNestedSmokeValue(request, fieldPath);
+  }
+
+  if (Object.keys(request).length === 0) {
+    return tsString('start generated smoke');
+  }
+  return `JSON.stringify(${JSON.stringify(request, null, 2)})`;
+}
+
+function setNestedSmokeValue(target: MutableRecord, fieldPath: string[]): void {
+  let cursor: MutableRecord = target;
+  for (let index = 0; index < fieldPath.length; index += 1) {
+    const field = fieldPath[index] as string;
+    const isLeaf = index === fieldPath.length - 1;
+    if (isLeaf) {
+      if (!(field in cursor)) {
+        cursor[field] = sampleSmokeValue(fieldPath);
+      }
+      return;
+    }
+    const existing = cursor[field];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      cursor[field] = {};
+    }
+    cursor = cursor[field] as MutableRecord;
+  }
+}
+
+function sampleSmokeValue(fieldPath: string[]): unknown {
+  const field = (fieldPath.at(-1) ?? 'value').toLowerCase();
+  if (/^(is|has|can|should)_/u.test(field) || /_(flag|enabled|active|approved|requested)$/u.test(field)) {
+    return true;
+  }
+  if (/(cents|amount|total|price|usd|count|quantity|qty|seats|days|age|hours|minutes|score|pct|percent|rate|limit|cap|capacity|used|remaining)/u.test(field)) {
+    return field.includes('cents') ? 12500 : 14;
+  }
+  if (field === 'items' || field.endsWith('_items') || field.endsWith('_list')) {
+    return ['sample-item'];
+  }
+  if (field.includes('email')) {
+    return 'sample@example.com';
+  }
+  if (field.includes('date') && !field.includes('days')) {
+    return '2026-06-29';
+  }
+  if (field.endsWith('_at') || field.includes('iso')) {
+    return '2026-06-29T00:00:00.000Z';
+  }
+  if (field === 'id' || field.endsWith('_id')) {
+    return `${field.replace(/_/gu, '-')}-sample`;
+  }
+  if (field.endsWith('_code') || field === 'code') {
+    return 'sample_code';
+  }
+  return `${field.replace(/_/gu, '-')}-sample`;
 }
 
 function actionsForCompletionPath(actions: TransitionAction[], finalStage: string): TransitionAction[] {

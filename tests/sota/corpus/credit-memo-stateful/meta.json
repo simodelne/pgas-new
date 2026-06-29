@@ -1,0 +1,20 @@
+{
+  "slug": "credit-memo-stateful",
+  "name": "Credit Memo Stateful",
+  "archetype_tags": ["multi-stage", "pure-compute"],
+  "holdout": true,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "normalize_credit", "calculate_credit", "memo_posting", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "normalize_credit": "pure-compute",
+      "calculate_credit": "pure-compute",
+      "memo_posting": "pure-compute"
+    },
+    "body_stages": ["normalize_credit", "calculate_credit", "memo_posting"],
+    "llm_stages": [],
+    "external_adapter_stages": []
+  }
+}
