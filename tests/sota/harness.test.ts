@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadOracle, loadSotaCorpus, requireLiveSynthConfig } from './harness.js';
@@ -104,6 +104,9 @@ describe('SOTA corpus harness', () => {
   });
 
   it('runs a benchmark from a checked-in replay cache without calling the provider', async () => {
+    // tests/sota/generated/ is gitignored scratch and absent on a fresh checkout — ensure it
+    // exists before mkdtemp (was passing locally only because prior runs left the dir behind).
+    mkdirSync(join(process.cwd(), 'tests/sota/generated'), { recursive: true });
     const outDir = mkdtempSync(join(process.cwd(), 'tests/sota/generated/unit-replay-'));
     try {
       const [benchmark] = (await loadSotaCorpus()).filter((item) => item.slug === 'fee-calculator');
