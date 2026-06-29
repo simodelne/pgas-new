@@ -29,6 +29,7 @@ describe.skipIf(!liveEnabled)('live Qwen domain synthesis', () => {
         stage: 'calculate_fee',
         archetype: 'pure-compute',
         cache_hit: false,
+        behavioral_gate: 'passed',
       }));
       expect(Number(result.domain_synthesis_audit?.[0]?.attempts)).toBeGreaterThanOrEqual(1);
 
@@ -68,6 +69,7 @@ describe.skipIf(!liveEnabled)('live Qwen domain synthesis', () => {
           stage: 'fee_modeling',
           archetype: 'pure-compute',
           cache_hit: false,
+          behavioral_gate: 'passed',
           attempts: expect.any(Number),
         }),
         expect.objectContaining({
@@ -75,6 +77,7 @@ describe.skipIf(!liveEnabled)('live Qwen domain synthesis', () => {
           archetype: 'external-adapter',
           adapter_kind: 'in_memory_mock',
           cache_hit: false,
+          behavioral_gate: 'passed',
           attempts: expect.any(Number),
         }),
       ]);
@@ -87,6 +90,57 @@ describe.skipIf(!liveEnabled)('live Qwen domain synthesis', () => {
       emitLiveEvidence('fee_modeling excerpt', excerpt(computeBody));
       emitLiveEvidence('crm_lookup sha256', sha256(externalBody));
       emitLiveEvidence('crm_lookup excerpt', excerpt(externalBody));
+    });
+  });
+
+  it('generates a manifest-bound repo integration adapter while live synthesis remains behavioral-gated', { timeout: 360_000 }, async () => {
+    await withCache(async (cacheDir) => {
+      const artifact = artifactFromDomain(multiArchetypeDomain(), {
+        targetKind: 'existing_repo',
+        integrations: [
+          {
+            name: 'crm',
+            kind: 'http_api',
+            import: '@acme/crm-client',
+            factory: 'createCrmClient',
+            methods: ['lookupAccount'],
+            config_env: ['CRM_BASE_URL', 'CRM_TOKEN'],
+          },
+        ],
+      });
+      const result = await synthesizeDomainLogic(artifact, {
+        cacheDir,
+        providerUrl: process.env.PGAS_OPENAI_BASE_URL,
+        model: process.env.PGAS_OPENAI_MODEL,
+        targetKind: 'existing_repo',
+        integrations: [
+          {
+            name: 'crm',
+            kind: 'http_api',
+            import: '@acme/crm-client',
+            factory: 'createCrmClient',
+            methods: ['lookupAccount'],
+            config_env: ['CRM_BASE_URL', 'CRM_TOKEN'],
+          },
+        ],
+      });
+      const externalBody = expectStageSource(result, 'crm_lookup', 'external-adapter');
+
+      expect(externalBody).toContain("import { createCrmClient } from '@acme/crm-client';");
+      expect(externalBody).toContain('lookupAccount');
+      expect(externalBody).toContain("adapter_kind: 'repo_integration'");
+      expectAstSafeStageBody(externalBody, '@acme/crm-client');
+      expect(result.domain_synthesis_audit).toContainEqual(expect.objectContaining({
+        stage: 'crm_lookup',
+        archetype: 'external-adapter',
+        adapter_kind: 'repo_integration',
+        integration_name: 'crm',
+        behavioral_gate: 'repo_integration_static_call',
+      }));
+
+      emitLiveEvidence('repo integration audit', JSON.stringify(result.domain_synthesis_audit, null, 2));
+      emitLiveEvidence('crm_lookup repo_integration sha256', sha256(externalBody));
+      emitLiveEvidence('crm_lookup repo_integration excerpt', excerpt(externalBody));
     });
   });
 });
@@ -144,9 +198,12 @@ function multiArchetypeDomain(): Record<string, unknown> {
   };
 }
 
-function artifactFromDomain(domain: Record<string, unknown>): SynthesizedArtifact {
+function artifactFromDomain(
+  domain: Record<string, unknown>,
+  options: Parameters<typeof synthesizeProgramSpecFromDomain>[1] = {},
+): SynthesizedArtifact {
   return {
-    ...synthesizeProgramSpecFromDomain(domain),
+    ...synthesizeProgramSpecFromDomain(domain, options),
     created_at: '2026-06-28T00:00:00.000Z',
   };
 }
@@ -182,13 +239,17 @@ function stageKinds(artifact: SynthesizedArtifact): Array<[string, string]> {
   });
 }
 
-function expectAstSafeStageBody(body: string): void {
+function expectAstSafeStageBody(body: string, allowedIntegrationImport?: string): void {
   const source = ts.createSourceFile('stage.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const banned: string[] = [];
+  const allowedImports = new Set(['../contracts.js']);
+  if (allowedIntegrationImport) {
+    allowedImports.add(allowedIntegrationImport);
+  }
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const specifier = node.moduleSpecifier.text;
-      if (specifier !== '../contracts.js') {
+      if (!allowedImports.has(specifier)) {
         banned.push(`import:${specifier}`);
       }
     }

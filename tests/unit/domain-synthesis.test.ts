@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesis.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
+import { loadWiringManifest } from '../../src/pgas-new/wiring-manifest.js';
 
 const validBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
 
@@ -13,6 +14,20 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     result_json: JSON.stringify({ stage: input.stage, status: 'ok' }),
     items_json: JSON.stringify([input.stage]),
     digest: '',
+  };
+}
+`;
+
+const validExternalMockBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+// TODO(real-service-swap): replace the in-memory mock with the real adapter in a future integration.
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, adapter_kind: 'in_memory_mock' }),
+    items_json: JSON.stringify(['mocked']),
+    digest: '',
+    adapter_kind: 'in_memory_mock',
   };
 }
 `;
@@ -32,6 +47,17 @@ function artifact(): SynthesizedArtifact {
       { slug: 'calculate', archetype: 'pure-compute', rationale: 'compute' },
     ],
     body_stage_slugs: ['calculate'],
+  };
+}
+
+function externalArtifact(stage = 'crm_lookup'): SynthesizedArtifact {
+  return {
+    ...artifact(),
+    mode_names: ['intake', stage, 'done'],
+    stage_classification: [
+      { slug: stage, archetype: 'external-adapter', adapter_kind: 'in_memory_mock', rationale: `${stage} calls an external adapter` },
+    ],
+    body_stage_slugs: [stage],
   };
 }
 
@@ -61,11 +87,97 @@ describe('domain logic synthesis', () => {
         expect.objectContaining({
           stage: 'calculate',
           archetype: 'pure-compute',
+          behavioral_gate: 'passed',
           attempts: 2,
           cache_hit: false,
           body_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ]);
+    });
+  });
+
+  it('passes the behavioral gate for a body that returns the expected fixture shape', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => validBody,
+      });
+
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'calculate',
+        behavioral_gate: 'passed',
+        behavioral_fixture: expect.objectContaining({
+          input_stage: 'calculate',
+          expected_result_stage: 'calculate',
+          expected_items_non_empty: true,
+        }),
+      }));
+    });
+  });
+
+  it('feeds behavioral gate failures into repair and accepts the corrected body', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const wrongBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void input;
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: 'wrong-stage', status: 'ok' }),
+    items_json: JSON.stringify(['wrong-stage']),
+    digest: '',
+  };
+}
+`;
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 3,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? wrongBody : validBody;
+        },
+      });
+
+      expect(attempts).toEqual(['initial', expect.stringContaining('behavioral gate failed')]);
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        attempts: 2,
+        behavioral_gate: 'passed',
+      }));
+    });
+  });
+
+  it('hard-fails a repeatedly wrong body on behavioral gate failure', async () => {
+    await withCache(async (cacheDir) => {
+      let attempts = 0;
+      await expect(
+        synthesizeDomainLogic(artifact(), {
+          cacheDir,
+          maxAttempts: 2,
+          providerUrl: 'http://provider.local/v1',
+          model: 'qwen36-27b',
+          generator: async () => {
+            attempts += 1;
+            return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void input;
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: 'wrong-stage', status: 'ok' }),
+    items_json: JSON.stringify([]),
+    digest: '',
+  };
+}
+`;
+          },
+        }),
+      ).rejects.toThrow(/behavioral gate failed.*expected result_json.stage to equal calculate/u);
+      expect(attempts).toBe(2);
     });
   });
 
@@ -156,6 +268,97 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
         archetype: 'external-adapter',
         adapter_kind: 'in_memory_mock',
       }));
+    });
+  });
+
+  it('generates a real repo integration adapter for an existing-repo external stage that matches the manifest', async () => {
+    await withCache(async (cacheDir) => {
+      const manifest = loadWiringManifest(join(process.cwd(), 'tests/fixtures/existing-repo-with-integration'));
+      expect(manifest.ok).toBe(true);
+      let generatorCalls = 0;
+      const result = await synthesizeDomainLogic(externalArtifact('crm_lookup'), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        targetKind: 'existing_repo',
+        integrations: manifest.manifest?.integrations ?? [],
+        generator: async () => {
+          generatorCalls += 1;
+          return validExternalMockBody;
+        },
+      } as Parameters<typeof synthesizeDomainLogic>[1] & Record<string, unknown>);
+
+      const body = result.stage_sources?.crm_lookup ?? '';
+      expect(generatorCalls).toBe(0);
+      expect(body).toContain("import { createCrmClient } from '@fixture/crm-client';");
+      expect(body).toContain('createCrmClient()');
+      expect(body).toContain('lookupAccount');
+      expect(body).toContain("adapter_kind: 'repo_integration'");
+      expect(body).not.toContain('TODO(real-service-swap)');
+      expect(body).not.toContain('in_memory_mock');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'crm_lookup',
+        archetype: 'external-adapter',
+        adapter_kind: 'repo_integration',
+        integration_name: 'crm',
+        integration_import: '@fixture/crm-client',
+      }));
+    });
+  });
+
+  it('keeps an explicit in-memory mock audit gap when an existing repo has no matching integration', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(externalArtifact('crm_lookup'), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        targetKind: 'existing_repo',
+        integrations: [
+          {
+            name: 'billing',
+            kind: 'sdk',
+            import: '@acme/billing-client',
+            methods: ['lookupInvoice'],
+            config_env: ['BILLING_TOKEN'],
+          },
+        ],
+        generator: async () => validExternalMockBody,
+      } as Parameters<typeof synthesizeDomainLogic>[1] & Record<string, unknown>);
+
+      expect(result.stage_sources?.crm_lookup).toContain('TODO(real-service-swap)');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        adapter_kind: 'in_memory_mock',
+        integration_gap: true,
+        audit_note: expect.stringContaining('no matching integration declared'),
+      }));
+    });
+  });
+
+  it('keeps standalone external adapters as in-memory mocks even when a matching integration option is present', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(externalArtifact('crm_lookup'), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        targetKind: 'standalone_repo',
+        integrations: [
+          {
+            name: 'crm',
+            kind: 'http_api',
+            import: '@acme/crm-client',
+            methods: ['lookupAccount'],
+            config_env: ['CRM_TOKEN'],
+          },
+        ],
+        generator: async () => validExternalMockBody,
+      } as Parameters<typeof synthesizeDomainLogic>[1] & Record<string, unknown>);
+
+      expect(result.stage_sources?.crm_lookup).toContain('TODO(real-service-swap)');
+      expect(result.stage_sources?.crm_lookup).not.toContain('@acme/crm-client');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        adapter_kind: 'in_memory_mock',
+      }));
+      expect(result.domain_synthesis_audit?.[0]).not.toHaveProperty('integration_name');
     });
   });
 

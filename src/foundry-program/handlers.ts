@@ -530,7 +530,8 @@ export const handlers: Record<string, ToolHandler> = {
 
   async synthesize_program_spec(payload) {
     const sessionId = sessionIdFromPayload(payload);
-    const synthesized = synthesizeProgramSpecFromDomain(domainFromPayload(payload));
+    const domain = domainFromPayload(payload);
+    const synthesized = synthesizeProgramSpecFromDomain(domain, synthesisOptionsFromDomain(domain));
     putSynthesizedArtifact(sessionId, {
       spec_yaml: synthesized.spec_yaml,
       mode_names: synthesized.mode_names,
@@ -748,12 +749,14 @@ export const handlers: Record<string, ToolHandler> = {
 
   async synthesize_domain_logic(payload) {
     const sessionId = sessionIdFromPayload(payload);
+    const domain = domainFromPayload(payload);
     const synthesized = requireSynthesizedArtifact(sessionId);
     const result = await synthesizeDomainLogic(synthesized, {
       cacheDir: optionalStringPayloadField(payload, 'cache_dir'),
       providerUrl: optionalStringPayloadField(payload, 'provider_url'),
       model: optionalStringPayloadField(payload, 'model'),
       generator: optionalStageBodyGenerator(payload),
+      ...synthesisOptionsFromDomain(domain),
     });
     putSynthesizedArtifact(sessionId, result);
     return {
@@ -1130,6 +1133,21 @@ function parseWiringManifestDomainField(domain: Record<string, unknown>): Wiring
     }
   }
   throw new Error('existing-repo artifact planning requires repo.wiring_manifest_json');
+}
+
+function synthesisOptionsFromDomain(domain: Record<string, unknown>): {
+  targetKind: 'standalone_repo' | 'existing_repo';
+  integrations: WiringManifest['integrations'];
+} {
+  const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
+  if (targetKind !== 'existing_repo') {
+    return { targetKind: 'standalone_repo', integrations: [] };
+  }
+  const manifest = parseWiringManifestDomainField(domain);
+  return {
+    targetKind: 'existing_repo',
+    integrations: manifest.integrations ?? [],
+  };
 }
 
 function domainValue(domain: Record<string, unknown>, path: string): unknown {

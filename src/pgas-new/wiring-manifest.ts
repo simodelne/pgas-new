@@ -10,6 +10,39 @@ const REPO_KINDS = ['existing_repo', 'standalone_repo'] as const;
 const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'] as const;
 const REGISTRATION_STRATEGIES = ['curator_request'] as const;
 const REQUIRED_VERIFICATION_COMMANDS = ['install', 'typecheck', 'test'] as const;
+const INTEGRATION_KINDS = ['http_api', 'db', 'sdk', 'module'] as const;
+const INTEGRATION_NAME = /^[a-z][a-z0-9_-]*$/u;
+const EXPORTED_SYMBOL = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/u;
+const BANNED_INTEGRATION_IMPORTS = new Set([
+  'child_process',
+  'node:child_process',
+  'http',
+  'node:http',
+  'https',
+  'node:https',
+  'net',
+  'node:net',
+  'tls',
+  'node:tls',
+  'dgram',
+  'node:dgram',
+  'fs',
+  'node:fs',
+  'fs/promises',
+  'node:fs/promises',
+]);
+
+export type WiringIntegrationKind = (typeof INTEGRATION_KINDS)[number];
+
+export interface WiringIntegration {
+  name: string;
+  kind: WiringIntegrationKind;
+  import: string;
+  factory?: string;
+  methods: string[];
+  config_env: string[];
+}
 
 export interface WiringManifest {
   schema_version: number;
@@ -36,6 +69,7 @@ export interface WiringManifest {
     github_owner: string;
     github_repo: string;
   };
+  integrations?: WiringIntegration[];
 }
 
 export interface WiringManifestResult {
@@ -74,6 +108,7 @@ export function parseWiringManifest(source: string): WiringManifestResult {
   const registration = requireObject(parsed, 'registration', errors);
   const verification = requireObject(parsed, 'verification', errors);
   const curator = requireObject(parsed, 'curator', errors);
+  validateIntegrations(parsed.integrations, errors);
 
   requireString(repo, 'kind', errors, 'repo.kind');
   requireString(repo, 'package_manager', errors, 'repo.package_manager');
@@ -142,6 +177,82 @@ export function parseWiringManifest(source: string): WiringManifestResult {
   }
 
   return { ok: true, manifest: parsed as unknown as WiringManifest, errors: [] };
+}
+
+function validateIntegrations(value: unknown, errors: string[]): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value)) {
+    errors.push('integrations must be an array when present');
+    return;
+  }
+
+  value.forEach((integration, index) => {
+    const label = `integrations[${index}]`;
+    if (!isRecord(integration)) {
+      errors.push(`${label} must be an object`);
+      return;
+    }
+
+    const name = integration.name;
+    if (typeof name !== 'string' || !INTEGRATION_NAME.test(name)) {
+      errors.push(`${label}.name must be a non-empty logical identifier`);
+    }
+
+    const kind = integration.kind;
+    if (typeof kind !== 'string' || !(INTEGRATION_KINDS as readonly string[]).includes(kind)) {
+      errors.push(`${label}.kind must be one of: ${INTEGRATION_KINDS.join(', ')}`);
+    }
+
+    const importSpecifier = integration.import;
+    if (typeof importSpecifier !== 'string' || importSpecifier.length === 0) {
+      errors.push(`${label}.import must be a non-empty module specifier`);
+    } else if (isBannedImport(importSpecifier) || BANNED_INTEGRATION_IMPORTS.has(importSpecifier)) {
+      errors.push(`${label}.import contains banned import: ${importSpecifier}`);
+    } else if (!isSafeIntegrationImportSpecifier(importSpecifier)) {
+      errors.push(`${label}.import must be a safe module specifier`);
+    }
+
+    if (
+      integration.factory !== undefined &&
+      (typeof integration.factory !== 'string' || !EXPORTED_SYMBOL.test(integration.factory))
+    ) {
+      errors.push(`${label}.factory must be a non-empty exported symbol when present`);
+    }
+
+    const methods = integration.methods;
+    if (!Array.isArray(methods) || methods.length === 0) {
+      errors.push(`${label}.methods must contain at least one exported method name`);
+    } else {
+      methods.forEach((method, methodIndex) => {
+        if (typeof method !== 'string' || !EXPORTED_SYMBOL.test(method)) {
+          errors.push(`${label}.methods[${methodIndex}] must be an exported method name`);
+        }
+      });
+    }
+
+    const configEnv = integration.config_env;
+    if (!Array.isArray(configEnv)) {
+      errors.push(`${label}.config_env must be a string array`);
+    } else {
+      configEnv.forEach((envName, envIndex) => {
+        if (typeof envName !== 'string' || !ENV_NAME.test(envName)) {
+          errors.push(`${label}.config_env[${envIndex}] must be an env var name, not a value`);
+        }
+      });
+    }
+  });
+}
+
+function isSafeIntegrationImportSpecifier(specifier: string): boolean {
+  if (specifier.includes('\0') || specifier.includes('\\')) {
+    return false;
+  }
+  if (specifier.startsWith('/') || specifier.startsWith('../') || specifier.includes('/../')) {
+    return false;
+  }
+  return true;
 }
 
 function requireObject(parent: unknown, key: string, errors: string[], label = key): Record<string, unknown> | undefined {

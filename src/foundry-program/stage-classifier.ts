@@ -4,7 +4,12 @@ export interface ClassifiedStage {
   slug: string;
   archetype: StageArchetype;
   rationale: string;
-  adapter_kind?: 'in_memory_mock';
+  adapter_kind?: 'in_memory_mock' | 'repo_integration';
+  integration_name?: string;
+  integration_import?: string;
+  integration_method?: string;
+  integration_gap?: boolean;
+  audit_note?: string;
 }
 
 interface StageInput {

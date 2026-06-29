@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
+import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
@@ -46,6 +47,11 @@ interface SynthesizedSpec {
   body_stage_slugs: string[];
 }
 
+export interface SynthesizeProgramSpecOptions {
+  targetKind?: 'standalone_repo' | 'existing_repo';
+  integrations?: WiringIntegration[];
+}
+
 type MutableRecord = Record<string, unknown>;
 
 interface TransitionAction {
@@ -54,7 +60,12 @@ interface TransitionAction {
   target: string;
   guardField?: string;
   archetype: StageArchetype;
-  adapter_kind?: 'in_memory_mock';
+  adapter_kind?: 'in_memory_mock' | 'repo_integration';
+  integration_name?: string;
+  integration_import?: string;
+  integration_method?: string;
+  integration_gap?: boolean;
+  audit_note?: string;
 }
 
 interface PlannedTransitionAction {
@@ -69,7 +80,10 @@ const SKELETON_PATH = join(
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
 );
 
-export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>): SynthesizedSpec {
+export function synthesizeProgramSpecFromDomain(
+  domain: Record<string, unknown>,
+  options: SynthesizeProgramSpecOptions = {},
+): SynthesizedSpec {
   const slug = stringDomainField(domain, 'program.slug');
   const name = stringDomainField(domain, 'program.name');
   const purpose = stringDomainField(domain, 'intake.purpose');
@@ -83,10 +97,13 @@ export function synthesizeProgramSpecFromDomain(domain: Record<string, unknown>)
   assertTransitions(transitions);
   assertCompletion(completion);
   transitions = refreshStaleTransitionsForStages(stages, transitions, completion) ?? transitions;
-  const stageClassification = classifyStagesForDomain({
+  const stageClassification = bindRepoIntegrations(
+    classifyStagesForDomain({
     ...domain,
     'intake.stages_json': JSON.stringify(stages),
-  });
+    }),
+    options,
+  );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
 
   const modeNames = stages.map((stage) => stage.slug);
@@ -454,8 +471,59 @@ function decorateTransitionActions(
       ...action,
       archetype: classification?.archetype ?? 'pure-compute',
       ...(classification?.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+      ...(classification?.integration_name ? { integration_name: classification.integration_name } : {}),
+      ...(classification?.integration_import ? { integration_import: classification.integration_import } : {}),
+      ...(classification?.integration_method ? { integration_method: classification.integration_method } : {}),
+      ...(classification?.integration_gap ? { integration_gap: true } : {}),
+      ...(classification?.audit_note ? { audit_note: classification.audit_note } : {}),
     };
   });
+}
+
+function bindRepoIntegrations(
+  stages: ClassifiedStage[],
+  options: SynthesizeProgramSpecOptions,
+): ClassifiedStage[] {
+  const targetKind = options.targetKind ?? 'standalone_repo';
+  const integrations = options.integrations ?? [];
+  return stages.map((stage) => {
+    if (stage.archetype !== 'external-adapter') {
+      return stage;
+    }
+    if (targetKind !== 'existing_repo') {
+      return { ...stage, adapter_kind: 'in_memory_mock' };
+    }
+    const matched = matchIntegration(stage, integrations);
+    if (matched) {
+      const method = matched.methods[0] as string;
+      return {
+        ...stage,
+        adapter_kind: 'repo_integration',
+        integration_name: matched.name,
+        integration_import: matched.import,
+        integration_method: method,
+        rationale: `${stage.rationale} Existing-repo manifest declares integration ${matched.name}; generated adapter must call ${matched.import}.${method}.`,
+      };
+    }
+    return {
+      ...stage,
+      adapter_kind: 'in_memory_mock',
+      integration_gap: true,
+      audit_note: `existing repo external-adapter stage ${stage.slug} has no matching integration declared in .pgas/wiring.yml`,
+      rationale: `${stage.rationale} No matching existing-repo integration was declared, so this remains an explicit in-memory mock gap.`,
+    };
+  });
+}
+
+function matchIntegration(stage: ClassifiedStage, integrations: WiringIntegration[]): WiringIntegration | undefined {
+  const tokens = new Set(
+    [stage.slug, stage.rationale]
+      .join(' ')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/u)
+      .filter(Boolean),
+  );
+  return integrations.find((integration) => tokens.has(integration.name.toLowerCase()));
 }
 
 function actionsBySourceMode(actions: TransitionAction[]): Map<string, TransitionAction[]> {
@@ -578,7 +646,7 @@ function renderHandlersSource(
       resolveStageInput(payload as HandlerPayload, ${tsString(action.source)}),
       createStageRuntime(payload as HandlerPayload),
     );
-    return normalizeStageOutput(output, ${tsString(action.source)}, ${tsString(action.archetype)});
+    return normalizeStageOutput(output, ${tsString(action.source)}, ${tsString(action.archetype)}, ${action.adapter_kind ? tsString(action.adapter_kind) : 'undefined'});
   },`;
   }).join('\n\n');
   const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
@@ -657,6 +725,11 @@ function renderContractsSource(stageClassification: ClassifiedStage[], transitio
         output_path: action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`,
         guard_path: action.guardField,
         adapter_kind: action.adapter_kind,
+        integration_name: action.integration_name,
+        integration_import: action.integration_import,
+        integration_method: action.integration_method,
+        integration_gap: action.integration_gap,
+        audit_note: action.audit_note,
       })),
     null,
     2,
@@ -683,7 +756,7 @@ export interface StageOutput {
   result_json: string;
   items_json: string;
   digest: string;
-  adapter_kind?: 'in_memory_mock';
+  adapter_kind?: 'in_memory_mock' | 'repo_integration';
 }
 
 export const stageClassification = ${classified} as const;
@@ -714,7 +787,12 @@ export function createStageRuntime(payload: HandlerPayload): StageRuntime {
   };
 }
 
-export function normalizeStageOutput(output: unknown, stage: string, archetype: StageArchetype): StageOutput {
+export function normalizeStageOutput(
+  output: unknown,
+  stage: string,
+  archetype: StageArchetype,
+  adapterKind?: StageOutput['adapter_kind'],
+): StageOutput {
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
     throw new Error(\`stage \${stage} returned a non-object output\`);
   }
@@ -727,7 +805,7 @@ export function normalizeStageOutput(output: unknown, stage: string, archetype: 
     digest: digestStageOutput(resultJson, itemsJson),
   };
   if (archetype === 'external-adapter') {
-    normalized.adapter_kind = 'in_memory_mock';
+    normalized.adapter_kind = adapterKind ?? 'in_memory_mock';
   }
   assertNoStubMarkers(normalized, stage);
   return normalized;
@@ -777,7 +855,7 @@ function renderSmokeTestSource(
   }).join('\n');
   const externalAdapterAssertions = pathActions
     .filter((action) => action.archetype === 'external-adapter')
-    .map((action) => `      expect(serialized).toContain(${tsString('in_memory_mock')});`)
+    .map((action) => `      expect(serialized).toContain(${tsString(action.adapter_kind ?? 'in_memory_mock')});`)
     .join('\n');
 
   return `import { describe, expect, it } from 'vitest';

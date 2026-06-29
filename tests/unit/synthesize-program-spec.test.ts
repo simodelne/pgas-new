@@ -23,6 +23,52 @@ const transitions = [
 
 const delegation = { triage: { target: 'human-review', when: 'severity_high' } };
 const completion = { final_stage: 'resolved', guard_field: 'triage.summary_ready' };
+const wiringManifestWithCrm = {
+  schema_version: 1,
+  repo: {
+    kind: 'existing_repo',
+    package_manager: 'npm',
+  },
+  pgas: {
+    server_package: '@simodelne/pgas-server',
+    allowed_imports: [
+      '@simodelne/pgas-server/plugin.js',
+      '@simodelne/pgas-server/create-server.js',
+      '@simodelne/pgas-server/client.js',
+      '@simodelne/pgas-server/channels/index.js',
+      '@simodelne/pgas-server/routes/index.js',
+    ],
+  },
+  paths: {
+    programs_dir: 'programs',
+    audit_dir: 'audit',
+    pgas_new_dir: '.pgas/pgas-new',
+  },
+  registration: {
+    strategy: 'curator_request',
+  },
+  verification: {
+    commands: {
+      install: 'npm install --no-audit --no-fund',
+      typecheck: 'npm run typecheck',
+      test: 'npm test',
+    },
+  },
+  curator: {
+    github_owner: 'simodelne',
+    github_repo: 'simoneos',
+  },
+  integrations: [
+    {
+      name: 'crm',
+      kind: 'http_api',
+      import: '@acme/crm-client',
+      factory: 'createCrmClient',
+      methods: ['lookupAccount'],
+      config_env: ['CRM_BASE_URL', 'CRM_TOKEN'],
+    },
+  ],
+};
 
 function domain(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -116,6 +162,48 @@ describe('synthesize_program_spec handler', () => {
     expect(artifact?.smoke_test_ts).toContain('generated program smoke');
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
+  it('binds matching existing-repo external stages to declared manifest integrations in stored contracts', async () => {
+    const sessionId = 'session-existing-repo-integration-synth';
+    clearSynthesizedArtifact(sessionId);
+
+    await handlers.synthesize_program_spec({
+      sessionId,
+      domain: domain({
+        'repo.target_kind': 'existing_repo',
+        'repo.wiring_manifest_json': JSON.stringify(wiringManifestWithCrm),
+        'intake.purpose': 'Look up an account in the CRM and close the request.',
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          { slug: 'crm_lookup' },
+          { slug: 'resolved', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'crm_lookup', trigger: 'ready', guard_field: 'intake.started' },
+          { from: 'crm_lookup', to: 'resolved', trigger: 'done', guard_field: 'crm_lookup.ready' },
+        ]),
+        'intake.delegation_json': JSON.stringify({
+          crm_lookup: { service: 'crm', operation: 'lookup account' },
+        }),
+        'intake.completion_json': JSON.stringify({ final_stage: 'resolved', guard_field: 'crm_lookup.ready' }),
+      }),
+    });
+
+    const artifact = getSynthesizedArtifact(sessionId);
+    expect(artifact?.stage_classification).toContainEqual(expect.objectContaining({
+      slug: 'crm_lookup',
+      archetype: 'external-adapter',
+      adapter_kind: 'repo_integration',
+      integration_name: 'crm',
+      integration_import: '@acme/crm-client',
+      integration_method: 'lookupAccount',
+    }));
+    expect(artifact?.contracts_ts).toContain('"adapter_kind": "repo_integration"');
+    expect(artifact?.contracts_ts).toContain("adapter_kind?: 'in_memory_mock' | 'repo_integration';");
+    expect(artifact?.handlers_ts).toContain("'repo_integration'");
+    expect(artifact?.smoke_test_ts).toContain('repo_integration');
+    expect(artifact?.smoke_test_ts).not.toContain('in_memory_mock');
   });
 
   it('emits mixed guarded and unguarded transitions and parses them through the engine loader', async () => {
