@@ -1,7 +1,7 @@
 {
   "name": "pgas",
   "description": "PGAS-new foundry for creating TypeScript/Node PGAS programs on current pgas-server surfaces",
-  "version": "3.4.2",
+  "version": "3.5.0",
   "author": {
     "name": "Simone Del Nevo",
     "email": "simone.delnevo@gmail.com"
