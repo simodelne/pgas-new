@@ -98,6 +98,15 @@ describe('artifact planner', () => {
     ]);
   });
 
+  it('marks only explicit existing-repo registration artifacts as update-mode', () => {
+    const plan = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST);
+
+    expect(plan.artifacts.filter((artifact) => artifact.writeMode === 'update').map((artifact) => artifact.path)).toEqual([
+      'qc/e2e-coverage.yml',
+    ]);
+    expect(plan.artifacts.find((artifact) => artifact.path === 'programs/review/specs.yml')?.writeMode).toBeUndefined();
+  });
+
   it('includes SimoneOS user-facing and requested stage artifacts for existing repos', () => {
     const plan = createExistingRepoArtifactPlan({ slug: 'minutes-drafter', name: 'Minutes Drafter' }, MANIFEST, {
       stageSlugs: ['transcript_review', 'section_drafting', 'final_review', 'complete', 'blocked'],

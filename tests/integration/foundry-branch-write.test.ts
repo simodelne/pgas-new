@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import type { WiringManifest } from '../../src/pgas-new/wiring-manifest.js';
@@ -203,6 +204,21 @@ describe('foundry branch_write', () => {
     };
 
     try {
+      const coveragePath = join(targetDir, 'qc/e2e-coverage.yml');
+      mkdirSync(join(targetDir, 'qc'), { recursive: true });
+      writeFileSync(coveragePath, [
+        'version: 1',
+        'user_facing_programs:',
+        '  - review',
+        'programs:',
+        '  review:',
+        '    facts: qc/facts/review.facts.yml',
+        '    e2e-frontend:',
+        '      channels: [frontend]',
+        '      required: true',
+        '',
+      ].join('\n'));
+
       await handlers.synthesize_program_spec({ sessionId: 'existing-branch-write-session', domain });
       const planned = await handlers.plan_artifacts({ sessionId: 'existing-branch-write-session', domain }) as Array<{ path: string; kind: string }>;
       (domain as Record<string, unknown>)['artifact_plan.artifacts'] = planned;
@@ -238,6 +254,20 @@ describe('foundry branch_write', () => {
         expect(existsSync(join(targetDir, path)), `${path} should be written`).toBe(true);
         expect(readFileSync(join(targetDir, path), 'utf8')).toContain('runStage');
       }
+
+      const coverage = load(readFileSync(coveragePath, 'utf8')) as {
+        user_facing_programs: string[];
+        programs: Record<string, { facts?: string; 'e2e-frontend'?: { channels?: string[]; required?: boolean } }>;
+      };
+      expect(coverage.user_facing_programs).toEqual(expect.arrayContaining(['review', 'fee-proposal-drafter']));
+      expect(coverage.programs.review.facts).toBe('qc/facts/review.facts.yml');
+      expect(coverage.programs['fee-proposal-drafter']).toEqual({
+        facts: 'qc/facts/fee-proposal-drafter.facts.yml',
+        'e2e-frontend': {
+          channels: ['frontend'],
+          required: true,
+        },
+      });
     } finally {
       rmSync(targetDir, { recursive: true, force: true });
     }

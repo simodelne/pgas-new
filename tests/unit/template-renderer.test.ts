@@ -243,6 +243,89 @@ describe('template renderer', () => {
     }
   });
 
+  it('updates an existing E2E coverage matrix without create-artifact collisions', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-coverage-'));
+    try {
+      mkdirSync(join(repoRoot, 'qc'), { recursive: true });
+      writeFileSync(join(repoRoot, 'qc/e2e-coverage.yml'), [
+        'version: 1',
+        'user_facing_programs:',
+        '  - review',
+        'programs:',
+        '  review:',
+        '    facts: qc/facts/review.facts.yml',
+        '    e2e-frontend:',
+        '      channels: [frontend]',
+        '      required: true',
+        'cross_cutting:',
+        '  e2e-ui:',
+        '    runner: qc/e2e-ui/runner.ts',
+        '    required: true',
+        '',
+      ].join('\n'));
+
+      const result = renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'fee-proposal-drafter',
+        name: 'Fee Proposal Drafter',
+      });
+      const coveragePath = join(repoRoot, 'qc/e2e-coverage.yml');
+      const coverage = readFileSync(coveragePath, 'utf8');
+      const parsed = load(coverage) as {
+        user_facing_programs: string[];
+        programs: Record<string, { facts?: string; 'e2e-frontend'?: { channels?: string[]; required?: boolean } }>;
+        cross_cutting: Record<string, unknown>;
+      };
+
+      expect(result.written).toContain('qc/e2e-coverage.yml');
+      expect(parsed.user_facing_programs).toContain('review');
+      expect(parsed.user_facing_programs).toContain('fee-proposal-drafter');
+      expect(parsed.programs.review.facts).toBe('qc/facts/review.facts.yml');
+      expect(parsed.programs['fee-proposal-drafter']).toEqual({
+        facts: 'qc/facts/fee-proposal-drafter.facts.yml',
+        'e2e-frontend': {
+          channels: ['frontend'],
+          required: true,
+        },
+      });
+      expect(parsed.cross_cutting).toHaveProperty('e2e-ui');
+
+      for (const path of result.written.filter((path) => path !== 'qc/e2e-coverage.yml')) {
+        rmSync(join(repoRoot, path), { force: true, recursive: true });
+      }
+      renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'fee-proposal-drafter',
+        name: 'Fee Proposal Drafter',
+      });
+      expect(readFileSync(coveragePath, 'utf8')).toBe(coverage);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses existing-repo create-artifact collisions', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-create-collision-'));
+    try {
+      const collisionPath = join(repoRoot, 'programs/audit-trail/specs.yml');
+      const sentinel = 'name: existing-program\n';
+      mkdirSync(join(repoRoot, 'programs/audit-trail'), { recursive: true });
+      writeFileSync(collisionPath, sentinel);
+
+      expect(() => renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'audit-trail',
+        name: 'Audit Trail',
+      })).toThrow(/refusing to overwrite existing attach artifacts:\nprograms\/audit-trail\/specs\.yml/);
+      expect(readFileSync(collisionPath, 'utf8')).toBe(sentinel);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('declares skeleton control-plane session commands, modes, notebook state, and live-test hooks', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-spec-'));
     try {

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dump, load } from 'js-yaml';
 import {
   createExistingRepoArtifactPlan,
   createStandaloneArtifactPlan,
@@ -137,6 +138,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
 
 function assertNoExistingArtifacts(rootDir: string, plan: ArtifactPlan): void {
   const collisions = plan.artifacts
+    .filter((artifact) => (artifact.writeMode ?? 'create') === 'create')
     .map((artifact) => artifact.path)
     .filter((path) => existsSync(join(rootDir, path)));
 
@@ -194,8 +196,14 @@ function renderPlan(options: {
       ? renderDirectSource(source)
       : renderTemplate(source, selectTokens(options.tokens, templatePath.tokens));
     const outPath = join(options.rootDir, artifact.path);
+    const output = renderArtifactWriteContent({
+      artifact,
+      rendered,
+      outPath,
+      tokens: options.tokens,
+    });
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, rendered);
+    writeFileSync(outPath, output);
     written.push(artifact.path);
   }
 
@@ -333,10 +341,7 @@ function templateForExistingUserFacingArtifact(artifact: PlannedArtifact, slug: 
     ].join('\n'));
   }
   if (path === 'qc/e2e-coverage.yml') {
-    return inlineTemplate([
-      'programs: []',
-      '',
-    ].join('\n'));
+    return inlineTemplate(defaultE2eCoverageYaml(slug));
   }
   return undefined;
 }
@@ -405,6 +410,227 @@ function spec(file: string, tokens: readonly string[]): TemplateSpec {
 
 function inlineTemplate(content: string): TemplateSpec {
   return { file: '', tokens: [], content, substitute: false };
+}
+
+function renderArtifactWriteContent(options: {
+  artifact: PlannedArtifact;
+  rendered: string;
+  outPath: string;
+  tokens: Record<string, string>;
+}): string {
+  if ((options.artifact.writeMode ?? 'create') !== 'update') {
+    return options.rendered;
+  }
+
+  if (options.artifact.path === 'qc/e2e-coverage.yml') {
+    const existing = existsSync(options.outPath) ? readFileSync(options.outPath, 'utf8') : options.rendered;
+    return mergeE2eCoverageYaml(existing, options.tokens.SLUG);
+  }
+
+  return options.rendered;
+}
+
+function defaultE2eCoverageYaml(slug: string): string {
+  return renderStructuredE2eCoverageYaml({ version: 1 }, slug);
+}
+
+function mergeE2eCoverageYaml(source: string, slug: string): string {
+  const document = parseE2eCoverageYaml(source);
+  const textMerged = mergeE2eCoverageText(source, document, slug);
+  if (textMerged) {
+    return textMerged;
+  }
+
+  return renderStructuredE2eCoverageYaml(document, slug);
+}
+
+function parseE2eCoverageYaml(source: string): Record<string, unknown> {
+  if (source.trim().length === 0) {
+    return {};
+  }
+
+  const parsed = load(source);
+  if (parsed === null || parsed === undefined) {
+    return {};
+  }
+  if (!isRecord(parsed)) {
+    throw new Error('qc/e2e-coverage.yml must contain a YAML mapping');
+  }
+  return parsed;
+}
+
+function renderStructuredE2eCoverageYaml(document: Record<string, unknown>, slug: string): string {
+  const userFacing = sortedUniqueStrings([...coverageUserFacingPrograms(document.user_facing_programs), slug]);
+  const programs = sortRecord({
+    ...coveragePrograms(document.programs),
+    [slug]: e2eCoverageProgramEntry(slug),
+  });
+  const next = {
+    ...document,
+    user_facing_programs: userFacing,
+    programs,
+  };
+
+  return ensureTrailingNewline(dump(next, { lineWidth: -1, noRefs: true, sortKeys: false }));
+}
+
+function mergeE2eCoverageText(source: string, document: Record<string, unknown>, slug: string): string | undefined {
+  if (!Array.isArray(document.user_facing_programs) || !document.user_facing_programs.every((value) => typeof value === 'string')) {
+    return undefined;
+  }
+  if (!isRecord(document.programs)) {
+    return undefined;
+  }
+
+  let lines = stripOneTrailingNewline(source).split('\n');
+  if (!document.user_facing_programs.includes(slug)) {
+    const merged = insertYamlListItem(lines, 'user_facing_programs', slug);
+    if (!merged) return undefined;
+    lines = merged;
+  }
+  if (!Object.prototype.hasOwnProperty.call(document.programs, slug)) {
+    const merged = insertCoverageProgramEntry(lines, slug);
+    if (!merged) return undefined;
+    lines = merged;
+  }
+
+  return ensureTrailingNewline(lines.join('\n'));
+}
+
+function insertYamlListItem(lines: string[], key: string, value: string): string[] | undefined {
+  const block = findTopLevelBlock(lines, key);
+  if (!block || lines[block.start].trim() !== `${key}:`) {
+    return undefined;
+  }
+
+  const next = [...lines];
+  const entries: Array<{ index: number; value: string }> = [];
+  for (let index = block.start + 1; index < block.end; index += 1) {
+    const match = /^  - ([^\s#][^#]*?)(?:\s+#.*)?$/u.exec(next[index]);
+    if (match?.[1]) {
+      entries.push({ index, value: match[1].trim() });
+    }
+  }
+
+  const firstGreater = entries.find((entry) => entry.value.localeCompare(value) > 0);
+  const insertAt = firstGreater?.index ?? (entries.at(-1)?.index ?? block.start) + 1;
+  next.splice(insertAt, 0, `  - ${value}`);
+  return next;
+}
+
+function insertCoverageProgramEntry(lines: string[], slug: string): string[] | undefined {
+  const block = findTopLevelBlock(lines, 'programs');
+  if (!block || lines[block.start].trim() !== 'programs:') {
+    return undefined;
+  }
+
+  const next = [...lines];
+  const entries: Array<{ index: number; slug: string }> = [];
+  for (let index = block.start + 1; index < block.end; index += 1) {
+    const match = /^  ([a-z0-9]+(?:-[a-z0-9]+)*):\s*(?:#.*)?$/u.exec(next[index]);
+    if (match?.[1]) {
+      entries.push({ index, slug: match[1] });
+    }
+  }
+
+  const firstGreater = entries.find((entry) => entry.slug.localeCompare(slug) > 0);
+  let insertAt = firstGreater?.index ?? block.end;
+  if (!firstGreater) {
+    while (insertAt > block.start + 1) {
+      const previous = next[insertAt - 1].trim();
+      if (previous.length !== 0 && !previous.startsWith('#')) {
+        break;
+      }
+      insertAt -= 1;
+    }
+  }
+
+  next.splice(insertAt, 0, ...coverageProgramEntryLines(slug));
+  return next;
+}
+
+function coverageProgramEntryLines(slug: string): string[] {
+  return [
+    '',
+    `  ${slug}:`,
+    `    facts: qc/facts/${slug}.facts.yml`,
+    '    e2e-frontend:',
+    '      channels: [frontend]',
+    '      required: true',
+  ];
+}
+
+function findTopLevelBlock(lines: string[], key: string): { start: number; end: number } | undefined {
+  const start = lines.findIndex((line) => line.trim() === `${key}:` || line.startsWith(`${key}: `));
+  if (start < 0) {
+    return undefined;
+  }
+
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (isTopLevelYamlKey(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function isTopLevelYamlKey(line: string): boolean {
+  return /^[A-Za-z0-9_-]+:\s*(?:.*)?$/u.test(line);
+}
+
+function coverageUserFacingPrograms(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
+    return value;
+  }
+  throw new Error('qc/e2e-coverage.yml user_facing_programs must be a string array when present');
+}
+
+function coveragePrograms(value: unknown): Record<string, unknown> {
+  if (value === undefined) {
+    return {};
+  }
+  if (Array.isArray(value) && value.length === 0) {
+    return {};
+  }
+  if (isRecord(value)) {
+    return value;
+  }
+  throw new Error('qc/e2e-coverage.yml programs must be a mapping or an empty array');
+}
+
+function e2eCoverageProgramEntry(slug: string): Record<string, unknown> {
+  return {
+    facts: `qc/facts/${slug}.facts.yml`,
+    'e2e-frontend': {
+      channels: ['frontend'],
+      required: true,
+    },
+  };
+}
+
+function sortedUniqueStrings(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
+}
+
+function sortRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function stripOneTrailingNewline(value: string): string {
+  return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
+function ensureTrailingNewline(value: string): string {
+  return value.endsWith('\n') ? value : `${value}\n`;
 }
 
 function templateForSynthesizedArtifact(
