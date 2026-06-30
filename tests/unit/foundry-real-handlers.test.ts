@@ -206,6 +206,35 @@ describe('load_wiring_manifest', () => {
 });
 
 describe('create_curator_request', () => {
+  it('sources repo_root from wiring manifest state when the LLM omits repo_root', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-curator-state-'));
+    try {
+      const result = await handlers.create_curator_request({
+        message: 'Manifest is valid; lodge curator follow-up for SimoneOS registration.',
+        domain: {
+          'program.slug': 'incident-triage',
+          'program.name': 'Incident Triage',
+          'program.target_dir': '/tmp/fallback-target',
+          'repo.wiring_manifest.repo_root': repoRoot,
+          'repo.wiring_manifest_json': JSON.stringify(MANIFEST),
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: 'curator_request_created',
+        path: 'audit/PGAS-NEW-incident-triage.md',
+        title: 'PGAS-New Curator Request: Incident Triage',
+      });
+      const artifact = readFileSync(join(repoRoot, 'audit/PGAS-NEW-incident-triage.md'), 'utf8');
+      expect(artifact).toContain('# PGAS-New Curator Request: Incident Triage');
+      expect(artifact).toContain('Program: Incident Triage (`incident-triage`)');
+      expect(artifact).toContain(`Repository: ${repoRoot}`);
+      expect(artifact).toContain('Manifest is valid; lodge curator follow-up for SimoneOS registration.');
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it('writes a curator request into the manifest audit dir', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-curator-'));
     try {

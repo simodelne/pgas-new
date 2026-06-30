@@ -764,12 +764,27 @@ export const handlers: Record<string, ToolHandler> = {
    * env vars or token files.
    */
   async create_curator_request(payload) {
-    const repoRoot = stringPayloadField(payload, 'repo_root');
-    const slug = optionalStringPayloadField(payload, 'slug') ?? stringDomainField(domainFromPayload(payload), 'program.slug');
-    const title = stringPayloadField(payload, 'title');
-    const body = stringPayloadField(payload, 'body');
-    const manifest = parseWiringManifestDomainField(domainFromPayload(payload));
-    const relativePath = `${trimSlashes(manifest.paths.audit_dir)}/PGAS-NEW-${slug}.md`;
+    const domain = optionalDomainFromPayload(payload);
+    const repoRoot = curatorRequestRepoRoot(payload, domain);
+    const slug = safeArtifactSlug(
+      optionalStringPayloadField(payload, 'slug')
+        ?? (domain ? optionalStringDomainField(domain, 'program.slug') : undefined)
+        ?? basename(resolve(repoRoot)),
+    );
+    const programName = domain
+      ? optionalStringDomainField(domain, 'program.name') ?? humanizeSlug(slug)
+      : humanizeSlug(slug);
+    const title = optionalStringPayloadField(payload, 'title') ?? `PGAS-New Curator Request: ${programName}`;
+    const body = optionalStringPayloadField(payload, 'body')
+      ?? defaultCuratorRequestBody({
+        programName,
+        repoRoot,
+        slug,
+        message: optionalStringPayloadField(payload, 'message'),
+      });
+    const manifest = domain ? parseWiringManifestDomainField(domain) : undefined;
+    const auditDir = manifest?.paths?.audit_dir ?? 'audit';
+    const relativePath = `${trimSlashes(auditDir)}/PGAS-NEW-${slug}.md`;
     const outPath = join(repoRoot, relativePath);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, `# ${title}\n\n${body}\n`);
@@ -1083,6 +1098,40 @@ function optionalDomainFromPayload(payload: Record<string, unknown>): Record<str
     return undefined;
   }
   return domain as Record<string, unknown>;
+}
+
+function curatorRequestRepoRoot(payload: Record<string, unknown>, domain: Record<string, unknown> | undefined): string {
+  const repoRoot = optionalStringPayloadField(payload, 'repo_root')
+    ?? (domain ? optionalStringDomainField(domain, 'repo.wiring_manifest.repo_root') : undefined)
+    ?? (domain ? optionalStringDomainField(domain, 'program.target_dir') : undefined);
+  if (!repoRoot) {
+    throw new Error('create_curator_request requires repo_root in payload, repo.wiring_manifest.repo_root, or program.target_dir');
+  }
+  return repoRoot;
+}
+
+function defaultCuratorRequestBody(options: {
+  programName: string;
+  repoRoot: string;
+  slug: string;
+  message?: string;
+}): string {
+  return [
+    `Program: ${options.programName} (\`${options.slug}\`)`,
+    `Repository: ${options.repoRoot}`,
+    '',
+    `Context: ${options.message ?? 'pgas-new needs curator review before writing to this existing repo.'}`,
+    '',
+    'Requested action: Review the repository wiring and publish any required curator registration.',
+  ].join('\n');
+}
+
+function humanizeSlug(slug: string): string {
+  return slug
+    .split(/[-_]+/u)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ') || 'PGAS Program';
 }
 
 function stringDomainField(domain: Record<string, unknown>, path: string): string {
