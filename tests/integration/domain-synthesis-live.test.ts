@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesis.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
+import { startLocalhostHttpApiStub } from '../fixtures/localhost-http-api.js';
 
 const liveEnabled = process.env.PGAS_LIVE_SYNTH === '1' &&
   !!process.env.PGAS_OPENAI_BASE_URL &&
@@ -95,6 +96,13 @@ describe.skipIf(!liveEnabled)('live Qwen domain synthesis', () => {
 
   it('generates a manifest-bound repo integration adapter while live synthesis remains behavioral-gated', { timeout: 360_000 }, async () => {
     await withCache(async (cacheDir) => {
+      const stub = await startLocalhostHttpApiStub((entry) => ({
+        ok: true,
+        service: 'live-loopback-crm',
+        path: entry.path,
+      }));
+      const previousBaseUrl = process.env.CRM_BASE_URL;
+      process.env.CRM_BASE_URL = stub.baseUrl;
       const artifact = artifactFromDomain(multiArchetypeDomain(), {
         targetKind: 'existing_repo',
         integrations: [
@@ -108,39 +116,51 @@ describe.skipIf(!liveEnabled)('live Qwen domain synthesis', () => {
           },
         ],
       });
-      const result = await synthesizeDomainLogic(artifact, {
-        cacheDir,
-        providerUrl: process.env.PGAS_OPENAI_BASE_URL,
-        model: process.env.PGAS_OPENAI_MODEL,
-        targetKind: 'existing_repo',
-        integrations: [
-          {
-            name: 'crm',
-            kind: 'http_api',
-            import: '@acme/crm-client',
-            factory: 'createCrmClient',
-            methods: ['lookupAccount'],
-            config_env: ['CRM_BASE_URL', 'CRM_TOKEN'],
-          },
-        ],
-      });
-      const externalBody = expectStageSource(result, 'crm_lookup', 'external-adapter');
+      try {
+        const result = await synthesizeDomainLogic(artifact, {
+          cacheDir,
+          providerUrl: process.env.PGAS_OPENAI_BASE_URL,
+          model: process.env.PGAS_OPENAI_MODEL,
+          targetKind: 'existing_repo',
+          integrations: [
+            {
+              name: 'crm',
+              kind: 'http_api',
+              import: '@acme/crm-client',
+              factory: 'createCrmClient',
+              methods: ['lookupAccount'],
+              config_env: ['CRM_BASE_URL', 'CRM_TOKEN'],
+            },
+          ],
+        });
+        const externalBody = expectStageSource(result, 'crm_lookup', 'external-adapter');
 
-      expect(externalBody).toContain("import { createCrmClient } from '@acme/crm-client';");
-      expect(externalBody).toContain('lookupAccount');
-      expect(externalBody).toContain("adapter_kind: 'repo_integration'");
-      expectAstSafeStageBody(externalBody, '@acme/crm-client');
-      expect(result.domain_synthesis_audit).toContainEqual(expect.objectContaining({
-        stage: 'crm_lookup',
-        archetype: 'external-adapter',
-        adapter_kind: 'repo_integration',
-        integration_name: 'crm',
-        behavioral_gate: 'repo_integration_static_call',
-      }));
+        expect(externalBody).toContain("process.env['CRM_BASE_URL']");
+        expect(externalBody).toContain('fetch(endpoint');
+        expect(externalBody).toContain('lookupAccount');
+        expect(externalBody).toContain("adapter_kind: 'repo_integration'");
+        expectAstSafeStageBody(externalBody, undefined, { allowFetch: true });
+        expect(stub.ledger).toHaveLength(1);
+        expect(result.domain_synthesis_audit).toContainEqual(expect.objectContaining({
+          stage: 'crm_lookup',
+          archetype: 'external-adapter',
+          adapter_kind: 'repo_integration',
+          integration_name: 'crm',
+          behavioral_gate: 'repo_integration_loopback_call',
+          real_call_verified: true,
+        }));
 
-      emitLiveEvidence('repo integration audit', JSON.stringify(result.domain_synthesis_audit, null, 2));
-      emitLiveEvidence('crm_lookup repo_integration sha256', sha256(externalBody));
-      emitLiveEvidence('crm_lookup repo_integration excerpt', excerpt(externalBody));
+        emitLiveEvidence('repo integration audit', JSON.stringify(result.domain_synthesis_audit, null, 2));
+        emitLiveEvidence('crm_lookup repo_integration sha256', sha256(externalBody));
+        emitLiveEvidence('crm_lookup repo_integration excerpt', excerpt(externalBody));
+      } finally {
+        if (previousBaseUrl === undefined) {
+          delete process.env.CRM_BASE_URL;
+        } else {
+          process.env.CRM_BASE_URL = previousBaseUrl;
+        }
+        await stub.close();
+      }
     });
   });
 });
@@ -239,7 +259,11 @@ function stageKinds(artifact: SynthesizedArtifact): Array<[string, string]> {
   });
 }
 
-function expectAstSafeStageBody(body: string, allowedIntegrationImport?: string): void {
+function expectAstSafeStageBody(
+  body: string,
+  allowedIntegrationImport?: string,
+  options: { allowFetch?: boolean } = {},
+): void {
   const source = ts.createSourceFile('stage.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const banned: string[] = [];
   const allowedImports = new Set(['../contracts.js']);
@@ -257,7 +281,10 @@ function expectAstSafeStageBody(body: string, allowedIntegrationImport?: string)
       if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         banned.push('dynamic-import');
       }
-      if (ts.isIdentifier(node.expression) && ['eval', 'require', 'fetch'].includes(node.expression.text)) {
+      if (ts.isIdentifier(node.expression) && ['eval', 'require'].includes(node.expression.text)) {
+        banned.push(node.expression.text);
+      }
+      if (ts.isIdentifier(node.expression) && node.expression.text === 'fetch' && !options.allowFetch) {
         banned.push(node.expression.text);
       }
     }

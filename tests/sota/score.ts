@@ -444,7 +444,7 @@ function behavioralGate(artifact: SynthesizedArtifact): SotaGateResult {
   const audit = artifact.domain_synthesis_audit ?? [];
   const failures = audit.filter((entry) => {
     const gate = entry.behavioral_gate;
-    return gate !== 'passed' && gate !== 'repo_integration_static_call';
+    return gate !== 'passed' && gate !== 'repo_integration_loopback_call';
   });
   return failures.length === 0
     ? { status: 'pass', duration_ms: Date.now() - started }

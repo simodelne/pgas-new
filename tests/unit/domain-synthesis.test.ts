@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesis.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import { loadWiringManifest } from '../../src/pgas-new/wiring-manifest.js';
+import { startLocalhostHttpApiStub } from '../fixtures/localhost-http-api.js';
 
 const validBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
 
@@ -860,36 +861,60 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 
   it('generates a real repo integration adapter for an existing-repo external stage that matches the manifest', async () => {
     await withCache(async (cacheDir) => {
-      const manifest = loadWiringManifest(join(process.cwd(), 'tests/fixtures/existing-repo-with-integration'));
-      expect(manifest.ok).toBe(true);
-      let generatorCalls = 0;
-      const result = await synthesizeDomainLogic(externalArtifact('crm_lookup'), {
-        cacheDir,
-        providerUrl: 'http://provider.local/v1',
-        model: 'qwen36-27b',
-        targetKind: 'existing_repo',
-        integrations: manifest.manifest?.integrations ?? [],
-        generator: async () => {
-          generatorCalls += 1;
-          return validExternalMockBody;
-        },
-      } as Parameters<typeof synthesizeDomainLogic>[1] & Record<string, unknown>);
-
-      const body = result.stage_sources?.crm_lookup ?? '';
-      expect(generatorCalls).toBe(0);
-      expect(body).toContain("import { createCrmClient } from '@fixture/crm-client';");
-      expect(body).toContain('createCrmClient()');
-      expect(body).toContain('lookupAccount');
-      expect(body).toContain("adapter_kind: 'repo_integration'");
-      expect(body).not.toContain('TODO(real-service-swap)');
-      expect(body).not.toContain('in_memory_mock');
-      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
-        stage: 'crm_lookup',
-        archetype: 'external-adapter',
-        adapter_kind: 'repo_integration',
-        integration_name: 'crm',
-        integration_import: '@fixture/crm-client',
+      const stub = await startLocalhostHttpApiStub((entry) => ({
+        ok: true,
+        service: 'unit-crm',
+        path: entry.path,
       }));
+      const previousBaseUrl = process.env.CRM_BASE_URL;
+      process.env.CRM_BASE_URL = stub.baseUrl;
+      const manifest = loadWiringManifest(join(process.cwd(), 'tests/fixtures/existing-repo-with-integration'));
+      try {
+        expect(manifest.ok).toBe(true);
+        let generatorCalls = 0;
+        const result = await synthesizeDomainLogic(externalArtifact('crm_lookup'), {
+          cacheDir,
+          providerUrl: 'http://provider.local/v1',
+          model: 'qwen36-27b',
+          targetKind: 'existing_repo',
+          integrations: manifest.manifest?.integrations ?? [],
+          generator: async () => {
+            generatorCalls += 1;
+            return validExternalMockBody;
+          },
+        } as Parameters<typeof synthesizeDomainLogic>[1] & Record<string, unknown>);
+
+        const body = result.stage_sources?.crm_lookup ?? '';
+        expect(generatorCalls).toBe(0);
+        expect(body).toContain("process.env['CRM_BASE_URL']");
+        expect(body).toContain('fetch(endpoint');
+        expect(body).toContain('lookupAccount');
+        expect(body).toContain("adapter_kind: 'repo_integration'");
+        expect(body).not.toContain("import { createCrmClient } from '@fixture/crm-client';");
+        expect(body).not.toContain('TODO(real-service-swap)');
+        expect(body).not.toContain('in_memory_mock');
+        expect(stub.ledger).toHaveLength(1);
+        expect(stub.ledger[0]).toEqual(expect.objectContaining({
+          method: 'POST',
+          path: '/lookupAccount',
+        }));
+        expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+          stage: 'crm_lookup',
+          archetype: 'external-adapter',
+          adapter_kind: 'repo_integration',
+          integration_name: 'crm',
+          integration_import: '@fixture/crm-client',
+          behavioral_gate: 'repo_integration_loopback_call',
+          real_call_verified: true,
+        }));
+      } finally {
+        if (previousBaseUrl === undefined) {
+          delete process.env.CRM_BASE_URL;
+        } else {
+          process.env.CRM_BASE_URL = previousBaseUrl;
+        }
+        await stub.close();
+      }
     });
   });
 

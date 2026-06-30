@@ -6,7 +6,7 @@ import ts from 'typescript';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesizedArtifact } from './synthesizer-store.js';
 
-const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v4';
+const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v5';
 
 export interface StageBodyRequest {
   stage: string;
@@ -57,6 +57,7 @@ interface CacheRecord {
   body_hash: string;
   behavioral_gate?: string;
   behavioral_fixture?: StageBehaviorFixture;
+  real_call_verified?: true;
 }
 
 interface StageBehaviorFixture {
@@ -66,6 +67,9 @@ interface StageBehaviorFixture {
   expected_adapter_kind?: 'in_memory_mock' | 'repo_integration';
   expected_integration?: string;
   expected_method?: string;
+  expected_endpoint?: string;
+  real_call_verified?: true;
+  verified_response_status?: number;
   available_domain_paths?: string[];
   domain_spec_reads?: string[];
   expected_items_templates?: string[];
@@ -105,14 +109,38 @@ export async function synthesizeDomainLogic(
       providerUrl,
     });
     const cachePath = join(cacheDir, `${cacheKey}.json`);
+    const repoIntegration = integrationForClassification(classification, integrations);
+    const domainSpec = domainSpecForStage(artifact, stage);
+    const verificationOptions = {
+      stage,
+      ...(repoIntegration ? {
+        allowedIntegrationImport: repoIntegration.import,
+        integrationName: repoIntegration.name,
+        integrationMethod: repoIntegration.methods[0],
+        integration: repoIntegration,
+      } : {}),
+      ...(domainSpec ? { domainSpec } : {}),
+    };
     const cached = readCache(cachePath);
     if (cached) {
+      let behaviorFields = behaviorAuditFields(cached);
+      if (classification.adapter_kind === 'repo_integration' && repoIntegration?.kind === 'http_api') {
+        const verification = await verifyStageBody(cached.body, classification.archetype, verificationOptions);
+        if (!verification.ok) {
+          throw new Error(`domain synthesis cached repo integration failed runtime verification for stage ${stage}: ${verification.error}`);
+        }
+        behaviorFields = behaviorAuditFields({
+          behavioral_gate: verification.behavioral_gate,
+          behavioral_fixture: verification.behavioral_fixture,
+          real_call_verified: verification.real_call_verified,
+        });
+      }
       stageSources[stage] = cached.body;
       audit.push({
         stage,
         archetype: classification.archetype,
         ...auditFieldsFor(classification),
-        ...behaviorAuditFields(cached),
+        ...behaviorFields,
         attempts: 0,
         cache_hit: true,
         body_hash: cached.body_hash,
@@ -123,24 +151,17 @@ export async function synthesizeDomainLogic(
     let lastError = '';
     let accepted: CacheRecord | undefined;
     let attemptsUsed = 0;
-    const repoIntegration = integrationForClassification(classification, integrations);
     if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
       attemptsUsed = 1;
       const body = renderRepoIntegrationStageBody(stage, repoIntegration);
-      const domainSpec = domainSpecForStage(artifact, stage);
-      const verification = await verifyStageBody(body, classification.archetype, {
-        stage,
-        allowedIntegrationImport: repoIntegration.import,
-        integrationName: repoIntegration.name,
-        integrationMethod: repoIntegration.methods[0],
-        ...(domainSpec ? { domainSpec } : {}),
-      });
+      const verification = await verifyStageBody(body, classification.archetype, verificationOptions);
       if (verification.ok) {
         accepted = {
           body,
           body_hash: sha256(body),
           behavioral_gate: verification.behavioral_gate,
           behavioral_fixture: verification.behavioral_fixture,
+          real_call_verified: verification.real_call_verified,
         };
       } else {
         lastError = verification.error;
@@ -155,7 +176,6 @@ export async function synthesizeDomainLogic(
           prompt,
           ...(lastError ? { repair: { attempt, lastError } } : {}),
         });
-        const domainSpec = domainSpecForStage(artifact, stage);
         const verification = await verifyStageBody(body, classification.archetype, {
           stage,
           ...(domainSpec ? { domainSpec } : {}),
@@ -166,6 +186,7 @@ export async function synthesizeDomainLogic(
             body_hash: sha256(body),
             behavioral_gate: verification.behavioral_gate,
             behavioral_fixture: verification.behavioral_fixture,
+            real_call_verified: verification.real_call_verified,
           };
           break;
         }
@@ -205,10 +226,11 @@ function verifyStageBody(
     allowedIntegrationImport?: string;
     integrationName?: string;
     integrationMethod?: string;
+    integration?: WiringIntegration;
     domainSpec?: StageDomainSpec;
   },
 ): Promise<
-  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture }
+  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
   | { ok: false; error: string }
 > {
   const stubError = scanBodyStubMarkers(body, archetype);
@@ -217,7 +239,11 @@ function verifyStageBody(
   }
 
   const source = ts.createSourceFile('stage.ts', body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const safetyError = scanSafety(source, options);
+  const safetyError = scanSafety(source, {
+    allowedIntegrationImport: options.allowedIntegrationImport,
+    allowFetch: options.integration?.kind === 'http_api',
+    allowedProcessEnv: options.integration?.kind === 'http_api' ? options.integration.config_env : [],
+  });
   if (safetyError) {
     return Promise.resolve({ ok: false, error: safetyError });
   }
@@ -373,12 +399,20 @@ function scanBodyStubMarkers(body: string, archetype: 'pure-compute' | 'external
   return undefined;
 }
 
-function scanSafety(source: ts.SourceFile, options: { allowedIntegrationImport?: string }): string | undefined {
+function scanSafety(
+  source: ts.SourceFile,
+  options: {
+    allowedIntegrationImport?: string;
+    allowFetch?: boolean;
+    allowedProcessEnv?: readonly string[];
+  },
+): string | undefined {
   let error: string | undefined;
   const allowedImports = new Set(['../contracts.js']);
   if (options.allowedIntegrationImport) {
     allowedImports.add(options.allowedIntegrationImport);
   }
+  const allowedProcessEnv = new Set(options.allowedProcessEnv ?? []);
   const visit = (node: ts.Node): void => {
     if (error) return;
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
@@ -397,8 +431,12 @@ function scanSafety(source: ts.SourceFile, options: { allowedIntegrationImport?:
         error = 'banned capability: dynamic import';
         return;
       }
-      if (ts.isIdentifier(node.expression) && ['eval', 'require', 'fetch'].includes(node.expression.text)) {
+      if (ts.isIdentifier(node.expression) && ['eval', 'require'].includes(node.expression.text)) {
         error = `banned capability: ${node.expression.text}`;
+        return;
+      }
+      if (ts.isIdentifier(node.expression) && node.expression.text === 'fetch' && !options.allowFetch) {
+        error = 'banned capability: fetch';
         return;
       }
     }
@@ -406,14 +444,11 @@ function scanSafety(source: ts.SourceFile, options: { allowedIntegrationImport?:
       error = 'banned capability: Function constructor';
       return;
     }
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      ts.isIdentifier(node.expression.expression) &&
-      node.expression.expression.text === 'process' &&
-      node.expression.name.text === 'env'
-    ) {
-      error = 'banned capability: process.env secret read';
+    const envName = processEnvReadName(node);
+    if (envName !== undefined) {
+      if (envName === null || !allowedProcessEnv.has(envName)) {
+        error = 'banned capability: process.env secret read';
+      }
       return;
     }
     ts.forEachChild(node, visit);
@@ -437,6 +472,27 @@ function isBannedStageImport(specifier: string): boolean {
     'dgram',
     'node:dgram',
   ].includes(specifier);
+}
+
+function processEnvReadName(node: ts.Node): string | null | undefined {
+  if (ts.isPropertyAccessExpression(node) && isProcessEnvExpression(node.expression)) {
+    return node.name.text;
+  }
+  if (ts.isElementAccessExpression(node) && isProcessEnvExpression(node.expression)) {
+    const argument = node.argumentExpression;
+    return argument && ts.isStringLiteral(argument) ? argument.text : null;
+  }
+  if (ts.isPropertyAccessExpression(node) && isProcessEnvExpression(node)) {
+    return null;
+  }
+  return undefined;
+}
+
+function isProcessEnvExpression(node: ts.Expression): boolean {
+  return ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'process' &&
+    node.name.text === 'env';
 }
 
 function exportsRunStage(source: ts.SourceFile): boolean {
@@ -702,10 +758,11 @@ function auditFieldsFor(classification: StageClassification): Record<string, unk
   };
 }
 
-function behaviorAuditFields(record: Pick<CacheRecord, 'behavioral_gate' | 'behavioral_fixture'>): Record<string, unknown> {
+function behaviorAuditFields(record: Pick<CacheRecord, 'behavioral_gate' | 'behavioral_fixture' | 'real_call_verified'>): Record<string, unknown> {
   return {
     ...(record.behavioral_gate ? { behavioral_gate: record.behavioral_gate } : {}),
     ...(record.behavioral_fixture ? { behavioral_fixture: record.behavioral_fixture } : {}),
+    ...(record.real_call_verified ? { real_call_verified: true } : {}),
   };
 }
 
@@ -717,25 +774,21 @@ async function runBehavioralGate(
     allowedIntegrationImport?: string;
     integrationName?: string;
     integrationMethod?: string;
+    integration?: WiringIntegration;
     domainSpec?: StageDomainSpec;
   },
 ): Promise<
-  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture }
+  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
   | { ok: false; error: string }
 > {
   if (options.allowedIntegrationImport) {
-    return {
-      ok: true,
-      behavioral_gate: 'repo_integration_static_call',
-      behavioral_fixture: {
-        input_stage: options.stage,
-        expected_result_stage: options.stage,
-        expected_items_non_empty: true,
-        expected_adapter_kind: 'repo_integration',
-        ...(options.integrationName ? { expected_integration: options.integrationName } : {}),
-        ...(options.integrationMethod ? { expected_method: options.integrationMethod } : {}),
-      },
-    };
+    if (options.integration?.kind === 'http_api') {
+      return runRepoIntegrationLoopbackGate(body, archetype, {
+        ...options,
+        integration: options.integration,
+      });
+    }
+    return { ok: false, error: `repo_integration runtime verification requires an http_api integration; got ${options.integration?.kind ?? 'unknown'}` };
   }
 
   try {
@@ -763,7 +816,83 @@ async function runBehavioralGate(
   }
 }
 
-function loadRunStageForBehavior(body: string): (input: unknown, runtime: unknown) => Promise<unknown> | unknown {
+async function runRepoIntegrationLoopbackGate(
+  body: string,
+  archetype: 'pure-compute' | 'external-adapter',
+  options: {
+    stage: string;
+    integration: WiringIntegration;
+    integrationName?: string;
+    integrationMethod?: string;
+    domainSpec?: StageDomainSpec;
+  },
+): Promise<
+  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified: true }
+  | { ok: false; error: string }
+> {
+  const method = options.integrationMethod ?? options.integration.methods[0];
+  const baseUrlEnv = httpApiBaseUrlEnvName(options.integration);
+  const baseUrl = process.env[baseUrlEnv];
+  if (!baseUrl) {
+    return { ok: false, error: `missing config env for http_api loopback verification: ${baseUrlEnv}` };
+  }
+
+  let endpoint: URL;
+  try {
+    endpoint = httpApiEndpoint(baseUrl, method);
+  } catch (error) {
+    return { ok: false, error: `invalid ${baseUrlEnv} for http_api loopback verification: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const loopbackError = assertLoopbackEndpoint(endpoint);
+  if (loopbackError) {
+    return { ok: false, error: loopbackError };
+  }
+
+  try {
+    const runStage = loadRunStageForBehavior(body, { env: { ...process.env } });
+    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec);
+    const output = await withBehaviorTimeout(
+      Promise.resolve(runStage(fixture.input, fixture.runtime)),
+      `repo integration loopback gate failed for stage ${options.stage}: runStage timed out`,
+    );
+    const behaviorError = assertBehavioralOutput(output, options.stage, archetype, options.domainSpec, 'repo_integration');
+    if (behaviorError) {
+      return {
+        ok: false,
+        error: formatBehavioralGateFailure(options.stage, behaviorError, {
+          ...fixture.audit,
+          expected_adapter_kind: 'repo_integration',
+        }),
+      };
+    }
+    const result = parseOutputResult(output);
+    if (!Object.hasOwn(result, 'result')) {
+      return { ok: false, error: `repo integration loopback gate failed for stage ${options.stage}: result_json must include the integration response under result` };
+    }
+    return {
+      ok: true,
+      behavioral_gate: 'repo_integration_loopback_call',
+      real_call_verified: true,
+      behavioral_fixture: {
+        ...fixture.audit,
+        expected_adapter_kind: 'repo_integration',
+        ...(options.integrationName ? { expected_integration: options.integrationName } : {}),
+        ...(method ? { expected_method: method } : {}),
+        expected_endpoint: endpoint.pathname,
+        real_call_verified: true,
+        ...(typeof result.response_status === 'number' ? { verified_response_status: result.response_status } : {}),
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `repo integration loopback gate failed for stage ${options.stage}: ${message}` };
+  }
+}
+
+function loadRunStageForBehavior(
+  body: string,
+  options: { env?: Record<string, string | undefined> } = {},
+): (input: unknown, runtime: unknown) => Promise<unknown> | unknown {
   const transpiled = ts.transpileModule(body, {
     compilerOptions: {
       module: ts.ModuleKind.CommonJS,
@@ -776,6 +905,9 @@ function loadRunStageForBehavior(body: string): (input: unknown, runtime: unknow
   const context = createContext({
     exports: exportsObject,
     module: moduleObject,
+    fetch,
+    process: { env: options.env ?? process.env },
+    URL,
   });
   new Script(transpiled.outputText, { filename: 'stage.behavior.cjs' }).runInContext(context, {
     timeout: 1_000,
@@ -1066,6 +1198,7 @@ function assertBehavioralOutput(
   stage: string,
   archetype: 'pure-compute' | 'external-adapter',
   domainSpec?: StageDomainSpec,
+  expectedExternalAdapterKind: 'in_memory_mock' | 'repo_integration' = 'in_memory_mock',
 ): string | undefined {
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
     return 'runStage returned a non-object output';
@@ -1110,11 +1243,26 @@ function assertBehavioralOutput(
   if (archetype === 'external-adapter') {
     const resultAdapterKind = (result as { adapter_kind?: unknown }).adapter_kind;
     const adapterKind = candidate.adapter_kind ?? resultAdapterKind;
-    if (adapterKind !== 'in_memory_mock') {
-      return `expected external-adapter mock adapter_kind to equal in_memory_mock; got ${String(adapterKind)}`;
+    if (adapterKind !== expectedExternalAdapterKind) {
+      return `expected external-adapter adapter_kind to equal ${expectedExternalAdapterKind}; got ${String(adapterKind)}`;
     }
   }
   return undefined;
+}
+
+function parseOutputResult(output: unknown): Record<string, unknown> {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    throw new Error('stage output must be an object');
+  }
+  const resultJson = (output as { result_json?: unknown }).result_json;
+  if (typeof resultJson !== 'string') {
+    throw new Error('stage output result_json must be a string');
+  }
+  const parsed = JSON.parse(resultJson) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('stage output result_json must encode an object');
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function assertResultJsonSchema(result: unknown, domainSpec?: StageDomainSpec): string | undefined {
@@ -1176,6 +1324,10 @@ function escapeRegExp(value: string): string {
 }
 
 function renderRepoIntegrationStageBody(stage: string, integration: WiringIntegration): string {
+  if (integration.kind === 'http_api') {
+    return renderHttpApiRepoIntegrationStageBody(stage, integration);
+  }
+
   const method = integration.methods[0] as string;
   const envNames = JSON.stringify(integration.config_env);
   const importLine = integration.factory
@@ -1214,6 +1366,87 @@ ${callLines.join('\n')}
 `;
 }
 
+function renderHttpApiRepoIntegrationStageBody(stage: string, integration: WiringIntegration): string {
+  const method = integration.methods[0] as string;
+  const envNames = JSON.stringify(integration.config_env);
+  const baseUrlEnv = httpApiBaseUrlEnvName(integration);
+  const methodPath = `/${method}`;
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  const baseUrl = process.env[${tsString(baseUrlEnv)}];
+  if (!baseUrl) {
+    throw new Error(${tsString(`missing config env: ${baseUrlEnv}`)});
+  }
+  const endpoint = new URL(baseUrl);
+  endpoint.pathname = endpoint.pathname.replace(/\\/+$/u, '') + ${tsString(methodPath)};
+  endpoint.search = '';
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      stage: input.stage,
+      domain: input.domain,
+      requested_at: runtime.now(),
+    }),
+  });
+  const responseText = await response.text();
+  let integrationResult: unknown = null;
+  if (responseText.length > 0) {
+    try {
+      integrationResult = JSON.parse(responseText) as unknown;
+    } catch {
+      integrationResult = responseText;
+    }
+  }
+  if (!response.ok) {
+    throw new Error(${tsString(`http_api integration ${integration.name}.${method} failed`)} + ': HTTP ' + response.status + ' ' + responseText);
+  }
+  return {
+    result_json: JSON.stringify({
+      stage: input.stage,
+      status: 'connected',
+      adapter_kind: 'repo_integration',
+      integration: ${tsString(integration.name)},
+      method: ${tsString(method)},
+      config_env: ${envNames},
+      endpoint: endpoint.pathname,
+      response_status: response.status,
+      result: integrationResult,
+    }),
+    items_json: JSON.stringify([input.stage + ':' + ${tsString(integration.name)} + ':' + ${tsString(method)} + ':http_api']),
+    digest: '',
+    adapter_kind: 'repo_integration',
+  };
+}
+`;
+}
+
+function httpApiBaseUrlEnvName(integration: WiringIntegration): string {
+  const envName = integration.config_env.find((candidate) => candidate.endsWith('_BASE_URL')) ?? integration.config_env[0];
+  if (!envName) {
+    throw new Error(`http_api integration ${integration.name} must declare a base URL config_env name`);
+  }
+  return envName;
+}
+
+function httpApiEndpoint(baseUrl: string, method: string): URL {
+  const endpoint = new URL(baseUrl);
+  endpoint.pathname = endpoint.pathname.replace(/\/+$/u, '') + `/${method}`;
+  endpoint.search = '';
+  return endpoint;
+}
+
+function assertLoopbackEndpoint(endpoint: URL): string | undefined {
+  if (endpoint.protocol !== 'http:') {
+    return `http_api loopback verification requires http:// localhost endpoint; got ${endpoint.protocol}`;
+  }
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname)) {
+    return `http_api loopback verification requires localhost endpoint; got ${endpoint.hostname}`;
+  }
+  return undefined;
+}
+
 function cacheKeyFor(input: { stage: string; contract: string; prompt: string; model: string; providerUrl: string }): string {
   return sha256([
     SYNTHESIS_VERSION,
@@ -1237,6 +1470,7 @@ function readCache(path: string): CacheRecord | undefined {
         body_hash: parsed.body_hash,
         ...(typeof parsed.behavioral_gate === 'string' ? { behavioral_gate: parsed.behavioral_gate } : {}),
         ...(behavioralFixture ? { behavioral_fixture: behavioralFixture } : {}),
+        ...(parsed.real_call_verified ? { real_call_verified: true } : {}),
       }
     : undefined;
 }
@@ -1258,6 +1492,9 @@ function normalizeStageBehaviorFixture(value: StageBehaviorFixture): StageBehavi
     ...(value.expected_adapter_kind ? { expected_adapter_kind: value.expected_adapter_kind } : {}),
     ...(value.expected_integration ? { expected_integration: value.expected_integration } : {}),
     ...(value.expected_method ? { expected_method: value.expected_method } : {}),
+    ...(value.expected_endpoint ? { expected_endpoint: value.expected_endpoint } : {}),
+    ...(value.real_call_verified ? { real_call_verified: true } : {}),
+    ...(typeof value.verified_response_status === 'number' ? { verified_response_status: value.verified_response_status } : {}),
     ...(stringArray(value.available_domain_paths) ? { available_domain_paths: value.available_domain_paths } : {}),
     ...(stringArray(value.domain_spec_reads) ? { domain_spec_reads: value.domain_spec_reads } : {}),
     ...(stringArray(value.expected_items_templates) ? { expected_items_templates: value.expected_items_templates } : {}),
