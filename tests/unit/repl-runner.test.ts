@@ -66,6 +66,48 @@ describe('runRepl', () => {
     }
   });
 
+  it('submits a bracketed pasted multi-line brief as one user_text turn', async () => {
+    const fake = createFakePgasFetch({
+      sseEvents: [
+        {
+          event: 'round_complete',
+          data: { result: { name: 'record_user_note', payload: { message: 'pasted' } } },
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+    const pastedBrief = [
+      'START NEW DESIGN SESSION.',
+      'Target program slug=minutes-drafter.',
+      'Required artifacts: projection.ts, frontend.spec.yml, qc coverage.',
+    ].join('\n');
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write(`\x1b[200~${pastedBrief}\x1b[201~`);
+      const trigger = await fake.waitForRequest('/sessions/session-1/trigger/stream');
+      await stdout.waitFor('pasted');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: 'session-1', exitCode: 0 });
+      expect(trigger).toMatchObject({
+        method: 'POST',
+        path: '/sessions/session-1/trigger/stream',
+        body: { channel: 'user_text', payload: pastedBrief },
+      });
+      expect(fake.requests.filter((request) => request.path === '/sessions/session-1/trigger/stream')).toHaveLength(1);
+      expect(stdout.text()).toContain('bracketed paste');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reads the cached token and uses it as bearer auth when options.token is absent', async () => {
     const originalHome = process.env.HOME;
     const homeDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-token-'));

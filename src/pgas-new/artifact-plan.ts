@@ -13,9 +13,13 @@ export type ArtifactKind =
   | 'registration'
   | 'contract'
   | 'handler'
+  | 'projection'
+  | 'frontend'
+  | 'export'
   | 'stage'
   | 'tool'
   | 'test'
+  | 'qc'
   | 'audit';
 
 export interface ProgramIdentity {
@@ -59,6 +63,7 @@ export interface ArtifactPlan {
 export interface GeneratedArtifactPlanOptions {
   stageSlugs?: string[];
   includeSmokeTest?: boolean;
+  requestedArtifactPaths?: string[];
 }
 
 export function createStandaloneArtifactPlan(
@@ -163,6 +168,59 @@ export function createExistingRepoArtifactPlan(
   const programsDir = trimSlashes(manifest.paths.programs_dir);
   const pgasNewDir = trimSlashes(manifest.paths.pgas_new_dir);
   const auditDir = trimSlashes(manifest.paths.audit_dir);
+  const programPath = `${programsDir}/${slug}`;
+  const coreArtifacts = [
+    artifact('spec', `${programPath}/specs.yml`, 'Declare the attached PGAS program spec.', 'branch_write', [
+      'spec-load',
+    ]),
+    artifact('registration', `${programPath}/registration.ts`, 'Register the attached PGAS program through public plugin.js helpers.', 'branch_write', [
+      'typecheck',
+    ]),
+    ...existingRepoUserFacingArtifacts(programPath, manifest),
+    ...generatedDomainArtifacts(programPath, stageSlugs),
+    artifact('export', `${programPath}/export/html.ts`, 'Provide deterministic HTML document export support for the attached program.', 'branch_write', [
+      'typecheck',
+      'program-deterministic',
+    ]),
+    artifact('export', `${programPath}/export/docx.ts`, 'Provide deterministic DOCX document export support for the attached program.', 'branch_write', [
+      'typecheck',
+      'program-deterministic',
+    ]),
+    artifact('handler', `${programPath}/handlers.ts`, 'Implement stubbed program handlers for repo-owned integration.', 'branch_write', [
+      'program-deterministic',
+    ]),
+    artifact('handler', `${programPath}/handlers/index.ts`, 'Expose attached program handlers from the handler directory.', 'branch_write', [
+      'program-deterministic',
+    ]),
+    artifact('handler', `${programPath}/handlers/_resolver.ts`, 'Resolve handler values from payload overrides or engine-injected domain state.', 'branch_write', [
+      'program-deterministic',
+    ]),
+    artifact('tool', `${programPath}/tools.ts`, 'Declare semantic tool metadata for the attached program.', 'branch_write', [
+      'typecheck',
+    ]),
+    artifact('test', `tests/${slug}-deterministic.test.ts`, 'Verify deterministic behavior and requested workflow stages without live provider calls.', 'static_verify', [
+      'npm-test',
+      'program-deterministic',
+    ]),
+    artifact('qc', `qc/e2e-frontend/${slug}.scenario.yml`, 'Exercise the user-facing frontend projection through the repo QC scenario harness.', 'static_verify', [
+      'qc-e2e-frontend',
+    ]),
+    artifact('qc', `qc/facts/${slug}.facts.yml`, 'Declare deterministic frontend facts and fixtures for the attached program.', 'static_verify', [
+      'qc-facts',
+    ]),
+    artifact('qc', 'qc/e2e-coverage.yml', 'Register or update E2E coverage for the attached program frontend workflow.', 'static_verify', [
+      'qc-coverage',
+    ]),
+    artifact('dossier', `${pgasNewDir}/${slug}/dossier.yml`, 'Persist pgas-new intake and design notes in the target repo.', 'scaffold_plan', [
+      'artifact-plan',
+    ]),
+    artifact('metadata', `${pgasNewDir}/${slug}/artifacts.json`, 'Record generated attached-repo artifacts.', 'scaffold_plan', [
+      'artifact-plan',
+    ]),
+    artifact('audit', `${auditDir}/PGAS-NEW-${slug}.md`, 'Record attach verification, requested artifacts, and curator requests.', 'pr_graduation', [
+      'audit-review',
+    ]),
+  ];
 
   return {
     target: 'existing_repo',
@@ -171,37 +229,28 @@ export function createExistingRepoArtifactPlan(
       strategy: manifest.registration.strategy,
       requested: true,
     },
-    artifacts: [
-      artifact('spec', `${programsDir}/${slug}/specs.yml`, 'Declare the attached PGAS program spec.', 'branch_write', [
-        'spec-load',
-      ]),
-      artifact('registration', `${programsDir}/${slug}/registration.ts`, 'Register the attached PGAS program through public plugin.js helpers.', 'branch_write', [
-        'typecheck',
-      ]),
-      ...generatedDomainArtifacts(`${programsDir}/${slug}`, stageSlugs),
-      artifact('handler', `${programsDir}/${slug}/handlers.ts`, 'Implement stubbed program handlers for repo-owned integration.', 'branch_write', [
-        'program-deterministic',
-      ]),
-      artifact('handler', `${programsDir}/${slug}/handlers/index.ts`, 'Expose attached program handlers from the handler directory.', 'branch_write', [
-        'program-deterministic',
-      ]),
-      artifact('handler', `${programsDir}/${slug}/handlers/_resolver.ts`, 'Resolve handler values from payload overrides or engine-injected domain state.', 'branch_write', [
-        'program-deterministic',
-      ]),
-      artifact('tool', `${programsDir}/${slug}/tools.ts`, 'Declare semantic tool metadata for the attached program.', 'branch_write', [
-        'typecheck',
-      ]),
-      artifact('dossier', `${pgasNewDir}/${slug}/dossier.yml`, 'Persist pgas-new intake and design notes in the target repo.', 'scaffold_plan', [
-        'artifact-plan',
-      ]),
-      artifact('metadata', `${pgasNewDir}/${slug}/artifacts.json`, 'Record generated attached-repo artifacts.', 'scaffold_plan', [
-        'artifact-plan',
-      ]),
-      artifact('audit', `${auditDir}/PGAS-NEW-${slug}.md`, 'Record attach verification and curator requests.', 'pr_graduation', [
-        'audit-review',
-      ]),
-    ],
+    artifacts: uniqueArtifacts([
+      ...coreArtifacts,
+      ...requestedArtifacts(options.requestedArtifactPaths ?? [], coreArtifacts),
+    ]),
   };
+}
+
+function existingRepoUserFacingArtifacts(programPath: string, manifest: WiringManifest): PlannedArtifact[] {
+  if (manifest.registration.strategy !== 'curator_request') {
+    return [];
+  }
+
+  return [
+    artifact('projection', `${programPath}/projection.ts`, 'Expose the attached program state as a user-facing SimoneOS projection.', 'branch_write', [
+      'typecheck',
+      'frontend-projection',
+    ]),
+    artifact('frontend', `${programPath}/frontend.spec.yml`, 'Declare the user-facing SimoneOS frontend surface for the attached program.', 'branch_write', [
+      'frontend-spec',
+      'typecheck',
+    ]),
+  ];
 }
 
 function generatedDomainArtifacts(programPath: string, stageSlugs: string[]): PlannedArtifact[] {
@@ -239,6 +288,73 @@ function artifact(
     mode_introduced,
     verification,
   };
+}
+
+function requestedArtifacts(paths: string[], existingArtifacts: PlannedArtifact[]): PlannedArtifact[] {
+  const existingPaths = new Set(existingArtifacts.map((artifact) => artifact.path));
+  return safeRequestedArtifactPaths(paths)
+    .filter((path) => !existingPaths.has(path))
+    .map((path) =>
+      artifact(
+        kindForRequestedArtifact(path),
+        path,
+        'Preserve explicit user-required artifact from intake, notebook, or scaffold-plan rejection feedback.',
+        modeForRequestedArtifact(path),
+        verificationForRequestedArtifact(path),
+      ),
+    );
+}
+
+function safeRequestedArtifactPaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const safePaths: string[] = [];
+  for (const rawPath of paths) {
+    const path = trimSlashes(rawPath.trim());
+    if (path.length === 0) continue;
+    if (!isSafeRepoRelativePath(path)) {
+      throw new Error(`requested artifact path must be a safe repo-relative path: ${rawPath}`);
+    }
+    if (seen.has(path)) continue;
+    seen.add(path);
+    safePaths.push(path);
+  }
+  return safePaths;
+}
+
+function uniqueArtifacts(artifacts: PlannedArtifact[]): PlannedArtifact[] {
+  const seen = new Set<string>();
+  return artifacts.filter((artifact) => {
+    if (seen.has(artifact.path)) return false;
+    seen.add(artifact.path);
+    return true;
+  });
+}
+
+function kindForRequestedArtifact(path: string): ArtifactKind {
+  if (path.includes('/projection.') || path.endsWith('/projection.ts')) return 'projection';
+  if (path.includes('frontend')) return 'frontend';
+  if (path.includes('/export/') || path.includes('docx') || path.includes('html')) return 'export';
+  if (path.startsWith('qc/')) return 'qc';
+  if (path.startsWith('tests/')) return 'test';
+  if (path.includes('/stages/')) return 'stage';
+  if (path.startsWith('audit/')) return 'audit';
+  return 'metadata';
+}
+
+function modeForRequestedArtifact(path: string): PgasNewMode {
+  if (path.startsWith('qc/') || path.startsWith('tests/')) return 'static_verify';
+  if (path.startsWith('audit/')) return 'pr_graduation';
+  if (path.startsWith('.pgas/')) return 'scaffold_plan';
+  if (path.includes('/stages/') || path.endsWith('/contracts.ts')) return 'domain_synthesis';
+  return 'branch_write';
+}
+
+function verificationForRequestedArtifact(path: string): string[] {
+  if (path.startsWith('qc/')) return ['qc'];
+  if (path.startsWith('tests/')) return ['npm-test'];
+  if (path.endsWith('.ts') || path.endsWith('.tsx')) return ['typecheck'];
+  if (path.startsWith('audit/')) return ['audit-review'];
+  return ['artifact-plan'];
 }
 
 function trimSlashes(path: string): string {

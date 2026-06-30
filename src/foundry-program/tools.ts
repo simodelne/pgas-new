@@ -35,6 +35,7 @@ const semanticTools = [
   'design_architecture',
   'plan_artifacts',
   'approve_artifact_plan',
+  'revise_artifact_plan',
   'write_scaffold_artifacts',
   'npm_install',
   'npm_typecheck',

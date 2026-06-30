@@ -18,6 +18,10 @@ const STEP_LABELS: Record<string, string> = {
 const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'approve', 'exit', 'help', 'history', 'quit', 'reject', 'status']);
 const CONTROL_IDLE_POLL_INTERVAL_MS = 250;
 const CONTROL_IDLE_TIMEOUT_MS = 120_000;
+const BRACKETED_PASTE_START = '\x1b[200~';
+const BRACKETED_PASTE_END = '\x1b[201~';
+const ENABLE_BRACKETED_PASTE = '\x1b[?2004h';
+const DISABLE_BRACKETED_PASTE = '\x1b[?2004l';
 
 export interface UserConfirmationPayload {
   decision: 'approve' | 'reject';
@@ -63,6 +67,10 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
   let inputBusy = false;
   let textBusy = false;
   let exiting = false;
+  let bracketedPasteActive = false;
+  let bracketedPasteBuffer = '';
+  let bracketedPasteLineSuppressions = 0;
+  let bracketedPasteModeEnabled = false;
   const pendingInputs: string[] = [];
   let resolveExit!: (info: ReplExitInfo) => void;
   const exitPromise = new Promise<ReplExitInfo>((resolve) => {
@@ -78,6 +86,11 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     }
     activeSpinner?.stop();
     activeSpinner = null;
+    stdin.off('data', handleBracketedPasteData);
+    if (bracketedPasteModeEnabled) {
+      stdout.write(DISABLE_BRACKETED_PASTE);
+      bracketedPasteModeEnabled = false;
+    }
     rl.close();
     renderer.renderGoodbye(state.sessionId, state.mode);
     resolveExit({ reason, sessionId: state.sessionId, finalMode: state.mode, exitCode });
@@ -97,11 +110,27 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     return { reason: 'error', sessionId: null, finalMode: null, exitCode: 1 };
   }
 
+  if (tty) {
+    stdout.write(ENABLE_BRACKETED_PASTE);
+    bracketedPasteModeEnabled = true;
+  }
   renderer.renderStep(`Connected to ${apiBase} · program ${program}`);
   updatePrompt();
+  stdin.prependListener('data', handleBracketedPasteData);
 
   rl.on('line', (line: string) => {
-    const input = line.trim();
+    if (bracketedPasteLineSuppressions > 0) {
+      bracketedPasteLineSuppressions -= 1;
+      return;
+    }
+    if (bracketedPasteActive || line.includes(BRACKETED_PASTE_START) || line.includes(BRACKETED_PASTE_END)) {
+      return;
+    }
+
+    submitInput(line.trim());
+  });
+
+  function submitInput(input: string): void {
     if (!input) {
       updatePrompt();
       return;
@@ -115,7 +144,47 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     }
 
     void dispatchInput(input);
-  });
+  }
+
+  function handleBracketedPasteData(chunk: Buffer | string): void {
+    const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+    if (!bracketedPasteActive && !text.includes(BRACKETED_PASTE_START)) {
+      return;
+    }
+
+    consumeBracketedPasteText(text);
+  }
+
+  function consumeBracketedPasteText(text: string): void {
+    let rest = text;
+    while (rest.length > 0) {
+      if (!bracketedPasteActive) {
+        const startIndex = rest.indexOf(BRACKETED_PASTE_START);
+        if (startIndex < 0) return;
+        bracketedPasteActive = true;
+        bracketedPasteBuffer = '';
+        rest = rest.slice(startIndex + BRACKETED_PASTE_START.length);
+      }
+
+      const endIndex = rest.indexOf(BRACKETED_PASTE_END);
+      if (endIndex < 0) {
+        bracketedPasteBuffer += rest;
+        return;
+      }
+
+      bracketedPasteBuffer += rest.slice(0, endIndex);
+      bracketedPasteLineSuppressions += countReadlineLinesForBracketedPaste(bracketedPasteBuffer);
+      const pastedInput = normalizeBracketedPaste(bracketedPasteBuffer);
+      bracketedPasteActive = false;
+      bracketedPasteBuffer = '';
+      if (pastedInput.length > 0) {
+        submitInput(pastedInput);
+      } else {
+        updatePrompt();
+      }
+      rest = rest.slice(endIndex + BRACKETED_PASTE_END.length);
+    }
+  }
 
   rl.on('SIGINT', () => {
     void finish('sigint');
@@ -321,6 +390,12 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
 
     if (payload.decision === 'approve') {
       await invokeSessionControl(resolveApproveControlForMode(state.mode));
+      return;
+    }
+
+    await refreshLiveState();
+    if (state.mode === 'scaffold_plan') {
+      await invokeSessionControl('revise_artifact_plan', payload.instruction ? { instruction: payload.instruction } : undefined);
       return;
     }
 
@@ -556,6 +631,19 @@ function buildUserConfirmationPayload(
 function parseRejectQuestionNumber(instruction: string | undefined): number | null {
   const match = /\bq([1-6])\b/iu.exec(instruction ?? '');
   return match ? Number(match[1]) : null;
+}
+
+function normalizeBracketedPaste(value: string): string {
+  return value.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n').trim();
+}
+
+function countReadlineLinesForBracketedPaste(value: string): number {
+  const normalized = value.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n');
+  if (normalized.length === 0) {
+    return 1;
+  }
+  const newlineCount = (normalized.match(/\n/gu) ?? []).length;
+  return normalized.endsWith('\n') ? newlineCount : newlineCount + 1;
 }
 
 /**

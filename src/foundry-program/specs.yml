@@ -133,7 +133,7 @@ modes:
       - target: scaffold_plan
         guard: { kind: FieldTruthy, path: program.synthesis_complete }
   scaffold_plan:
-    vocabulary: [approve_artifact_plan, plan_artifacts, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [approve_artifact_plan, revise_artifact_plan, plan_artifacts, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_confirmation, system_mode_entry, widget_output, artifact_plan_output]
     preconditions:
       plan_artifacts:
@@ -148,6 +148,13 @@ modes:
         - { kind: FieldFalsy, path: artifact_plan.approved }
         - { kind: TriggerType, triggerSet: [user_confirmation] }
         - { kind: FieldEquals, path: inputs.user_decision.decision, value: approve }
+      revise_artifact_plan:
+        - { kind: FieldTruthy, path: repo.write_authorized }
+        - { kind: FieldTruthy, path: program.synthesis_complete }
+        - { kind: FieldEquals, path: artifact_plan.status, value: draft }
+        - { kind: FieldFalsy, path: artifact_plan.approved }
+        - { kind: TriggerType, triggerSet: [user_confirmation] }
+        - { kind: FieldEquals, path: inputs.user_decision.decision, value: reject }
     transitions:
       - target: domain_synthesis
         guard: { kind: FieldEquals, path: artifact_plan.status, value: approved }
@@ -278,7 +285,7 @@ projection:
     include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
     exclude: []
   scaffold_plan:
-    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized]
+    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized, notebook.entries, notebook.pins]
     exclude: []
   domain_synthesis:
     include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, domain_synthesis.audit]
@@ -415,6 +422,10 @@ prompts:
     - On system_mode_entry with no artifact_plan.status, call plan_artifacts.
     - On user_confirmation decision='approve' with artifact_plan.status='draft',
       call approve_artifact_plan. Do NOT call plan_artifacts on approval.
+    - On user_confirmation decision='reject' with artifact_plan.status='draft',
+      call revise_artifact_plan. Do NOT call approve_artifact_plan on rejection.
+      The revision instruction in inputs.user_decision.instruction is mandatory
+      feedback to preserve in the regenerated artifact list.
   domain_synthesis: "Run synthesize_domain_logic once after artifact-plan approval. This fills accepted stage bodies in transit before branch_write."
   branch_write: "Write only planned artifacts after domain_synthesis has accepted all generated bodies."
   static_verify: "Run static verification and record evidence."
@@ -726,6 +737,20 @@ action_map:
       - { op: MSet, path: artifact_plan.approved, value: true }
       - { op: MSet, path: artifact_plan.write_authorized, value: true }
     channel: widget_output
+  revise_artifact_plan:
+    description: |
+      USER-DRIVEN: Fires when the user types /reject in scaffold_plan to
+      revise the drafted artifact plan. This is the ONLY tool to call in
+      scaffold_plan when receiving inputs.user_decision.decision='reject'.
+      Re-runs deterministic artifact planning, preserves user-required
+      artifacts from intake/notebook/rejection feedback, and keeps the plan
+      unapproved until a later /approve.
+    result_path: artifact_plan.artifacts
+    mutations:
+      - { op: MSet, path: artifact_plan.status, value: draft }
+      - { op: MSet, path: artifact_plan.approved, value: false }
+      - { op: MSet, path: artifact_plan.write_authorized, value: false }
+    channel: artifact_plan_output
   synthesize_domain_logic:
     description: |
       Run per-stage domain-logic synthesis against the frozen generated
@@ -938,7 +963,7 @@ guidance:
     - "Echo the artifact-plan list (paths + purposes) to the user as plain text and instruct them to type /approve or /reject."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation decision='approve' with artifact_plan.status='draft' and artifact_plan.approved false, call approve_artifact_plan. Do NOT call plan_artifacts on an approval trigger. Then the transition to domain_synthesis fires."
-    - "On reject/edit: don't call approve_artifact_plan; ask which artifact the user wants changed; re-emit."
+    - "On user_confirmation decision=reject with artifact_plan.status='draft' and artifact_plan.approved false, call revise_artifact_plan. Do NOT call approve_artifact_plan on a rejection. The revised artifact plan must preserve explicit user-required paths from inputs.user_decision.instruction, notebook notes, and the intake dossier, then stay in scaffold_plan for a later /approve."
   domain_synthesis:
     - "On system_mode_entry after artifact_plan.status='approved', call synthesize_domain_logic exactly once. This runs per-stage generate/verify/repair against the frozen contracts and hard-fails instead of producing stubs."
     - "Do not call write_scaffold_artifacts from this mode. Wait for program.domain_synthesis_complete to transition to branch_write."
