@@ -1,0 +1,12 @@
+{
+  "program.slug": "usage-invoice-calculator",
+  "program.name": "Usage Invoice Calculator",
+  "program.target_dir": "/tmp/pgas-sota-usage-invoice-calculator",
+  "program.design_path": "design",
+  "intake.purpose": "Calculate a deterministic monthly usage invoice from plan and event volume.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"calculate_invoice\",\"domain_spec\":{\"reads\":[\"inputs.initial_user_text.plan\",\"inputs.initial_user_text.usage_events\",\"runtime.now\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"plan\":\"string\",\"usage_events\":\"number\",\"included_events\":\"number\",\"overage_events\":\"number\",\"base_cents\":\"number\",\"overage_rate_cents\":\"number\",\"overage_cents\":\"number\",\"total_cents\":\"number\",\"currency\":\"USD\",\"billed_at\":\"ISO timestamp string\"},\"items_json\":[\"plan:<plan>\",\"overage_events:<overage_events>\",\"total_cents:<total_cents>\"]},\"rules\":[\"Parse input.domain[\\\"inputs.initial_user_text\\\"] as JSON.\",\"Use pricing by plan: starter has base_cents 2500, included_events 1000, overage_rate_cents 3; growth has base_cents 8000, included_events 5000, overage_rate_cents 2; scale has base_cents 20000, included_events 20000, overage_rate_cents 1.\",\"overage_events = Math.max(0, usage_events - included_events).\",\"overage_cents = overage_events * overage_rate_cents.\",\"total_cents = base_cents + overage_cents.\",\"currency is USD and billed_at is runtime.now().\"],\"invariants\":[\"result_json.stage must equal calculate_invoice.\",\"plan and usage_events must be echoed from the parsed request.\",\"items_json must be exactly [\\\"plan:<plan>\\\", \\\"overage_events:<overage_events>\\\", \\\"total_cents:<total_cents>\\\"] using computed values.\"]}},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"calculate_invoice\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"calculate_invoice\",\"to\":\"complete\",\"trigger\":\"calculated\",\"guard_field\":\"calculate_invoice.ready\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"calculate_invoice.ready\"}"
+}

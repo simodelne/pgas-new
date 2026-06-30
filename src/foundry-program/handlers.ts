@@ -543,6 +543,7 @@ export const handlers: Record<string, ToolHandler> = {
       smoke_test_ts: synthesized.smoke_test_ts,
       stage_classification: synthesized.stage_classification,
       body_stage_slugs: synthesized.body_stage_slugs,
+      synthesis_context: synthesized.synthesis_context,
       created_at: new Date().toISOString(),
     });
     return {

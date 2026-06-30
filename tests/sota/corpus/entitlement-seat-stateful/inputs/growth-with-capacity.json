@@ -1,0 +1,13 @@
+{
+  "id": "growth-with-capacity",
+  "prompt": "{\"account_id\":\"acct-2002\",\"current_seats\":50,\"requested_seats\":72}",
+  "domain": {
+    "account_id": "acct-2002",
+    "current_seats": 50,
+    "requested_seats": 72
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T09:30:00.000Z",
+    "random": 0.6
+  }
+}

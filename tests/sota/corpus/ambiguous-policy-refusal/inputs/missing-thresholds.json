@@ -1,0 +1,12 @@
+{
+  "id": "missing-thresholds",
+  "prompt": "{\"request\":\"approve invoices when they look reasonable\",\"known_policy\":\"manager may approve some invoices\"}",
+  "domain": {
+    "request": "approve invoices when they look reasonable",
+    "known_policy": "manager may approve some invoices"
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T05:00:00.000Z",
+    "random": 0.5
+  }
+}

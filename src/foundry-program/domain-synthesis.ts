@@ -6,7 +6,7 @@ import ts from 'typescript';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesizedArtifact } from './synthesizer-store.js';
 
-const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v1';
+const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v4';
 
 export interface StageBodyRequest {
   stage: string;
@@ -45,6 +45,13 @@ interface StageClassification {
   audit_note?: string;
 }
 
+interface StageDomainSpec {
+  reads: string[];
+  produces: Record<string, unknown>;
+  rules: string[];
+  invariants: string[];
+}
+
 interface CacheRecord {
   body: string;
   body_hash: string;
@@ -59,6 +66,9 @@ interface StageBehaviorFixture {
   expected_adapter_kind?: 'in_memory_mock' | 'repo_integration';
   expected_integration?: string;
   expected_method?: string;
+  available_domain_paths?: string[];
+  domain_spec_reads?: string[];
+  expected_items_templates?: string[];
 }
 
 export async function synthesizeDomainLogic(
@@ -117,11 +127,13 @@ export async function synthesizeDomainLogic(
     if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
       attemptsUsed = 1;
       const body = renderRepoIntegrationStageBody(stage, repoIntegration);
+      const domainSpec = domainSpecForStage(artifact, stage);
       const verification = await verifyStageBody(body, classification.archetype, {
         stage,
         allowedIntegrationImport: repoIntegration.import,
         integrationName: repoIntegration.name,
         integrationMethod: repoIntegration.methods[0],
+        ...(domainSpec ? { domainSpec } : {}),
       });
       if (verification.ok) {
         accepted = {
@@ -143,7 +155,11 @@ export async function synthesizeDomainLogic(
           prompt,
           ...(lastError ? { repair: { attempt, lastError } } : {}),
         });
-        const verification = await verifyStageBody(body, classification.archetype, { stage });
+        const domainSpec = domainSpecForStage(artifact, stage);
+        const verification = await verifyStageBody(body, classification.archetype, {
+          stage,
+          ...(domainSpec ? { domainSpec } : {}),
+        });
         if (verification.ok) {
           accepted = {
             body,
@@ -189,6 +205,7 @@ function verifyStageBody(
     allowedIntegrationImport?: string;
     integrationName?: string;
     integrationMethod?: string;
+    domainSpec?: StageDomainSpec;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture }
@@ -225,7 +242,110 @@ function verifyStageBody(
     });
   }
 
+  const typecheckError = typecheckStageBody(body, options);
+  if (typecheckError) {
+    return Promise.resolve({ ok: false, error: typecheckError });
+  }
+
   return runBehavioralGate(body, archetype, options);
+}
+
+function typecheckStageBody(
+  body: string,
+  options: { allowedIntegrationImport?: string },
+): string | undefined {
+  if (options.allowedIntegrationImport) {
+    return undefined;
+  }
+
+  const stageFile = '/virtual/pgas/stages/stage.ts';
+  const contractsFile = '/virtual/pgas/contracts.ts';
+  const compilerOptions: ts.CompilerOptions = {
+    noEmit: true,
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    skipLibCheck: true,
+  };
+  const contractsSource = `export interface StageDomainSpec {
+  reads: readonly string[];
+  produces: Record<string, unknown>;
+  rules: readonly string[];
+  invariants: readonly string[];
+}
+
+export interface StageInput {
+  stage: string;
+  payload: Record<string, unknown>;
+  domain: Record<string, unknown>;
+  domain_spec: StageDomainSpec;
+}
+
+export interface StageRuntime {
+  now(): string;
+  random(): number;
+  llm(prompt: string): Promise<string>;
+}
+
+export interface StageOutput {
+  result_json: string;
+  items_json: string;
+  digest: string;
+  adapter_kind?: 'in_memory_mock' | 'repo_integration';
+}
+`;
+
+  const baseHost = ts.createCompilerHost(compilerOptions, true);
+  const host: ts.CompilerHost = {
+    ...baseHost,
+    fileExists: (fileName) =>
+      fileName === stageFile ||
+      fileName === contractsFile ||
+      baseHost.fileExists(fileName),
+    readFile: (fileName) => {
+      if (fileName === stageFile) return body;
+      if (fileName === contractsFile) return contractsSource;
+      return baseHost.readFile(fileName);
+    },
+    getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+      if (fileName === stageFile) {
+        return ts.createSourceFile(fileName, body, languageVersion, true, ts.ScriptKind.TS);
+      }
+      if (fileName === contractsFile) {
+        return ts.createSourceFile(fileName, contractsSource, languageVersion, true, ts.ScriptKind.TS);
+      }
+      return baseHost.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
+    },
+    resolveModuleNames: (moduleNames) => moduleNames.map((moduleName) => {
+      if (moduleName === '../contracts.js') {
+        return {
+          resolvedFileName: contractsFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      return undefined;
+    }),
+  };
+  const program = ts.createProgram([stageFile], compilerOptions, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program).filter((diagnostic) =>
+    diagnostic.file?.fileName === stageFile ||
+    diagnostic.file?.fileName === contractsFile ||
+    diagnostic.file === undefined,
+  );
+  return diagnostics.length > 0
+    ? diagnostics.map((diagnostic) => formatDiagnostic(diagnostic)).join('\n')
+    : undefined;
+}
+
+function formatDiagnostic(diagnostic: ts.Diagnostic): string {
+  const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+  if (!diagnostic.file || diagnostic.start === undefined) {
+    return message;
+  }
+  const location = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+  return `${diagnostic.file.fileName}:${location.line + 1}:${location.character + 1}: ${message}`;
 }
 
 function scanBodyStubMarkers(body: string, archetype: 'pure-compute' | 'external-adapter'): string | undefined {
@@ -373,25 +493,116 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
 }
 
 function promptForStage(stage: string, classification: StageClassification, artifact: SynthesizedArtifact): string {
+  const context = contextForStage(stage, classification, artifact);
+  const entryPath = `inputs.${context.entry_channel}`;
+  const initialEntryPath = context.initial_entry_path;
+  const domainSpecLines = context.domain_spec
+    ? [
+        'Author-provided domain spec for this stage is normative.',
+        'Implement these rules exactly; do not infer alternate business logic.',
+        'Treat domain_spec.produces.result_json as the exact result_json object schema and insertion order; emit those top-level keys only.',
+        'When domain_spec.produces.items_json is an array, treat it as the exact ordered item template list; emit that many strings and no extras.',
+        'If request data is missing for a required read, surface that gap in result_json rather than fabricating values.',
+        'Stage domain spec:',
+        JSON.stringify(context.domain_spec, null, 2),
+      ]
+    : [];
   return [
     `Generate src/programs/<slug>/stages/${stage}.ts for a PGAS generated program.`,
     `Stage archetype: ${classification.archetype}.`,
     classification.archetype === 'external-adapter'
       ? externalAdapterPromptLine(classification)
       : 'Implement deterministic local pure-compute logic.',
+    'Stage synthesis context:',
+    JSON.stringify(context, null, 2),
+    ...domainSpecLines,
     'Do not include comments or any stub marker words: TODO, placeholder, stage_action_stub, not implemented.',
     "Use exactly one import line: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
     'Do not import handlers, resolver helpers, Node built-ins, runtime packages, or any other module.',
     'Export exactly: async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput>.',
     'Return JSON strings result_json and items_json; do not compute digest yourself.',
-    'For pure-compute stages, build a complete deterministic object from input.stage, runtime.now(), and simple facts from input.domain. If no domain fact is relevant, still return a meaningful non-empty object with status, summary, severity, owner_queue, next_action, and summary_ready fields.',
-    'For items_json, return a non-empty JSON array of concise strings derived from the result object.',
+    'Use strict TypeScript: include StageInput, StageOutput, and StageRuntime in the contract import; assign unknown object values to Record<string, unknown> before indexing.',
+    'Runtime data access contract:',
+    `The original entry-channel request is stored as a stable string at input.domain['${initialEntryPath}']; read that path for user request facts.`,
+    `input.domain['${entryPath}'] is the latest trigger text and may be a continuation such as "continue"; do not use it as the source of original request facts when the stable path is present.`,
+    "Parse JSON-looking user requests into typed facts before computing.",
+    'When parsed request facts contain numeric fields whose names describe a calculation, compute from those fields directly instead of inventing base fees, complexity multipliers, or random constants.',
+    'Use common named-field arithmetic: hours multiplied by hourly rates produce subtotals; discount_pct is a percentage applied to a subtotal; budget fields are comparison thresholds, not fee inputs.',
+    'When parsed request facts contain identifiers, echo those identifiers; do not replace them with synthetic IDs from runtime.random().',
+    "Prior deterministic stage outputs are stored as objects at input.domain['<stage>.output']; parse their result_json and items_json strings before using them.",
+    "Prior LLM reasoning stage outputs are stored as strings at input.domain['<stage>.result_json'] and input.domain['<stage>.items_json']; parse them before using them.",
+    'Do not treat input.payload.__stage_runtime as business input; use runtime.now() and runtime.random() through StageRuntime only.',
+    'Shape result_json from the mandate, stage slug, input facts, and prior stage outputs. Preserve concrete field names from the request and prior results when they are meaningful.',
+    'If the domain spec declares produces.result_json, construct result_json with exactly those declared top-level keys, in that declared order, and no extra top-level keys.',
+    'Do not use a generic status/summary/details template when the mandate names concrete fields.',
+    'Keep final business fields at the top level; do not wrap all important facts under generic inputs, details, or calculation objects.',
+    'Keep key computed facts at the top level of result_json so later stages can consume them without guessing nested structures.',
+    'For pure-compute stages, build a complete deterministic object from input.stage, runtime.now(), parsed request facts, and prior stage outputs. If no domain fact is relevant, still return a meaningful non-empty object with status, summary, severity, owner_queue, next_action, and summary_ready fields.',
+    'For items_json, return a non-empty JSON array of concise lower-case key:value strings derived from the result object; when the domain spec names item formats, use those exact formats without extra spaces.',
+    'If the domain spec declares produces.items_json as an array, construct items_json with exactly those item templates, in order, and no additional items.',
     'Do not use eval, dynamic import, child_process, shell, fetch/raw network, process.env, or secret reads.',
     'Untrusted generated spec context:',
     artifact.spec_yaml,
     'Frozen contract:',
     artifact.contracts_ts,
   ].join('\n');
+}
+
+function domainSpecForStage(artifact: SynthesizedArtifact, stage: string): StageDomainSpec | undefined {
+  return artifact.synthesis_context?.stages.find((item) => item.slug === stage)?.domain_spec;
+}
+
+function contextForStage(
+  stage: string,
+  classification: StageClassification,
+  artifact: SynthesizedArtifact,
+): Record<string, unknown> & { entry_channel: string; initial_entry_path: string; domain_spec?: StageDomainSpec } {
+  const synthesisContext = artifact.synthesis_context;
+  const orderedStages = synthesisContext?.stages.map((item) => item.slug) ?? artifact.mode_names;
+  const currentStage = synthesisContext?.stages.find((item) => item.slug === stage);
+  const stageIndex = orderedStages.indexOf(stage);
+  const previousStages = stageIndex > 0 ? orderedStages.slice(0, stageIndex) : [];
+  const laterStages = stageIndex >= 0 ? orderedStages.slice(stageIndex + 1) : [];
+  const transitions = synthesisContext?.transitions ?? [];
+  const domainSpec = currentStage?.domain_spec;
+  return {
+    program_slug: synthesisContext?.program_slug ?? unknownProgramSlug(artifact.spec_yaml),
+    program_name: synthesisContext?.program_name ?? 'generated program',
+    purpose: synthesisContext?.purpose ?? unknownPurpose(artifact.spec_yaml),
+    entry_channel: synthesisContext?.entry_channel ?? inferEntryChannel(artifact.spec_yaml),
+    initial_entry_path: initialInputPath(synthesisContext?.entry_channel ?? inferEntryChannel(artifact.spec_yaml)),
+    stage,
+    archetype: classification.archetype,
+    ...(classification.rationale ? { stage_rationale: classification.rationale } : {}),
+    ...(classification.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+    ...(domainSpec ? { domain_spec: domainSpec } : {}),
+    previous_stages: previousStages,
+    next_stages: laterStages,
+    incoming_transitions: transitions.filter((transition) => transition.to === stage),
+    outgoing_transitions: transitions.filter((transition) => transition.from === stage),
+    delegation: synthesisContext?.delegation ?? {},
+    completion: synthesisContext?.completion ?? null,
+  };
+}
+
+function inferEntryChannel(specYaml: string): string {
+  const match = specYaml.match(/\ningestion:\n\s+([a-zA-Z0-9_]+):\n\s+- inputs\.\1/u);
+  return match?.[1] ?? 'user_text';
+}
+
+function initialInputPath(entryChannel: string): string {
+  const normalized = entryChannel.trim().replace(/[^a-zA-Z0-9_]+/gu, '_').replace(/^_+|_+$/gu, '');
+  return `inputs.initial_${normalized.length > 0 ? normalized : 'user_text'}`;
+}
+
+function unknownProgramSlug(specYaml: string): string {
+  const match = specYaml.match(/^name:\s*([^\n]+)/u);
+  return match?.[1]?.trim() ?? 'generated-program';
+}
+
+function unknownPurpose(specYaml: string): string {
+  const match = specYaml.match(/preamble:\s*\|-\n\s+Program:\s*([^\n]+)/u);
+  return match?.[1]?.trim() ?? 'Generated PGAS program.';
 }
 
 function externalAdapterPromptLine(classification: StageClassification): string {
@@ -506,6 +717,7 @@ async function runBehavioralGate(
     allowedIntegrationImport?: string;
     integrationName?: string;
     integrationMethod?: string;
+    domainSpec?: StageDomainSpec;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture }
@@ -528,14 +740,17 @@ async function runBehavioralGate(
 
   try {
     const runStage = loadRunStageForBehavior(body);
-    const fixture = behaviorFixtureFor(options.stage, archetype);
+    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec);
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `behavioral gate failed for stage ${options.stage}: runStage timed out`,
     );
-    const behaviorError = assertBehavioralOutput(output, options.stage, archetype);
+    const behaviorError = assertBehavioralOutput(output, options.stage, archetype, options.domainSpec);
     if (behaviorError) {
-      return { ok: false, error: `behavioral gate failed for stage ${options.stage}: ${behaviorError}` };
+      return {
+        ok: false,
+        error: formatBehavioralGateFailure(options.stage, behaviorError, fixture.audit),
+      };
     }
     return {
       ok: true,
@@ -576,12 +791,23 @@ function loadRunStageForBehavior(body: string): (input: unknown, runtime: unknow
 function behaviorFixtureFor(
   stage: string,
   archetype: 'pure-compute' | 'external-adapter',
+  domainSpec?: StageDomainSpec,
 ): {
   input: Record<string, unknown>;
   runtime: Record<string, unknown>;
   audit: StageBehaviorFixture;
 } {
   const expectedAdapterKind = archetype === 'external-adapter' ? { expected_adapter_kind: 'in_memory_mock' as const } : {};
+  const requestFacts = seedInitialRequestFacts(domainSpec);
+  const domain = {
+    'inputs.initial_user_text': JSON.stringify(requestFacts),
+    'inputs.user_text': 'continue',
+    'account.id': 'acct-behavior-001',
+    'record.id': 'record-behavior-001',
+    'owner.queue': 'operations',
+    ...seedPriorStageOutputs(domainSpec),
+  };
+  const itemTemplates = domainSpec?.produces.items_json;
   return {
     input: {
       stage,
@@ -591,11 +817,7 @@ function behaviorFixtureFor(
           random: 0.25,
         },
       },
-      domain: {
-        'account.id': 'acct-behavior-001',
-        'record.id': 'record-behavior-001',
-        'owner.queue': 'operations',
-      },
+      domain,
     },
     runtime: {
       now: () => '2026-06-28T00:00:00.000Z',
@@ -609,8 +831,218 @@ function behaviorFixtureFor(
       expected_result_stage: stage,
       expected_items_non_empty: true,
       ...expectedAdapterKind,
+      available_domain_paths: Object.keys(domain).sort(),
+      ...(domainSpec?.reads ? { domain_spec_reads: [...domainSpec.reads] } : {}),
+      ...(Array.isArray(itemTemplates) && itemTemplates.every((item) => typeof item === 'string')
+        ? { expected_items_templates: [...itemTemplates] }
+        : {}),
     },
   };
+}
+
+function seedInitialRequestFacts(domainSpec?: StageDomainSpec): Record<string, unknown> {
+  const facts: Record<string, unknown> = {
+    plan: 'pro',
+    seats: 2,
+    region: 'us',
+    account_id: 'acct-behavior-001',
+    requested_seats: 5,
+    base_hours: 2,
+    hourly_rate_usd: 100,
+    discount_pct: 10,
+    budget_usd: 250,
+    severity: 'high',
+    customer_tier: 'enterprise',
+    failed_logins: 6,
+    data_exposure: true,
+    request: 'approve request',
+    known_policy: 'manager may approve some requests',
+  };
+  for (const read of domainSpec?.reads ?? []) {
+    const fieldPath = initialInputReadFieldPath(read);
+    if (fieldPath) {
+      setNestedRecord(facts, fieldPath, sampleBehaviorValue(fieldPath));
+    }
+  }
+  return facts;
+}
+
+function seedPriorStageOutputs(domainSpec?: StageDomainSpec): Record<string, unknown> {
+  const seeded: Record<string, unknown> = {
+    'crm_lookup.output': stageOutputFixture('crm_lookup', {
+      stage: 'crm_lookup',
+      account_id: 'acct-behavior-001',
+      tier: 'gold',
+      active_contract: true,
+      adapter_kind: 'in_memory_mock',
+    }, ['account:acct-behavior-001', 'tier:gold'], 'in_memory_mock'),
+    'estimate_fee.output': stageOutputFixture('estimate_fee', {
+      stage: 'estimate_fee',
+      base_hours: 2,
+      hourly_rate_usd: 100,
+      subtotal_usd: 200,
+    }, ['subtotal_usd:200']),
+    'apply_discount.output': stageOutputFixture('apply_discount', {
+      stage: 'apply_discount',
+      previous_total_usd: 200,
+      discount_pct: 10,
+      discounted_total_usd: 180,
+    }, ['discounted_total_usd:180']),
+    'score_risk.output': stageOutputFixture('score_risk', {
+      stage: 'score_risk',
+      risk_score: 100,
+      severity: 'high',
+      factors: ['severity', 'customer_tier', 'failed_logins', 'data_exposure'],
+    }, ['risk_score:100', 'severity:high']),
+  };
+
+  for (const read of domainSpec?.reads ?? []) {
+    const deterministic = read.match(/^([a-zA-Z0-9_]+)\.output\.result_json(?:\.(.+))?$/u);
+    if (deterministic?.[1] && deterministic[2]) {
+      const outputPath = `${deterministic[1]}.output`;
+      const output = isRecord(seeded[outputPath])
+        ? { ...(seeded[outputPath] as Record<string, unknown>) }
+        : stageOutputFixture(deterministic[1], { stage: deterministic[1] }, [`stage:${deterministic[1]}`]);
+      const result = parseRecordJson(output.result_json);
+      setNestedRecord(result, deterministic[2], sampleBehaviorValue(deterministic[2]));
+      output.result_json = JSON.stringify(result);
+      output.items_json = JSON.stringify(itemsForResult(result));
+      seeded[outputPath] = output;
+      continue;
+    }
+
+    const llmReasoning = read.match(/^([a-zA-Z0-9_]+)\.result_json(?:\.(.+))?$/u);
+    if (llmReasoning?.[1] && llmReasoning[2]) {
+      const resultPath = `${llmReasoning[1]}.result_json`;
+      const result = parseRecordJson(seeded[resultPath]);
+      if (!Object.hasOwn(result, 'stage')) {
+        result.stage = llmReasoning[1];
+      }
+      setNestedRecord(result, llmReasoning[2], sampleBehaviorValue(llmReasoning[2]));
+      seeded[resultPath] = JSON.stringify(result);
+      seeded[`${llmReasoning[1]}.items_json`] = JSON.stringify(itemsForResult(result));
+    }
+  }
+
+  return seeded;
+}
+
+function initialInputReadFieldPath(read: string): string | undefined {
+  const match = read.match(/^inputs\.initial_[a-zA-Z0-9_]+(?:\.(.+))?$/u);
+  return match?.[1];
+}
+
+function stageOutputFixture(
+  stage: string,
+  result: Record<string, unknown>,
+  items: string[],
+  adapterKind?: 'in_memory_mock' | 'repo_integration',
+): Record<string, unknown> {
+  return {
+    result_json: JSON.stringify({ stage, ...result }),
+    items_json: JSON.stringify(items),
+    digest: '',
+    ...(adapterKind ? { adapter_kind: adapterKind } : {}),
+  };
+}
+
+function sampleBehaviorValue(fieldPath: string): unknown {
+  const field = fieldPath.split('.').at(-1)?.toLowerCase() ?? fieldPath.toLowerCase();
+  if (field === 'order_id') return 'ORD-BEHAVIOR-001';
+  if (field === 'account_id') return 'acct-behavior-001';
+  if (field === 'sku') return 'sku-behavior-001';
+  if (field === 'plan') return 'pro';
+  if (field === 'region') return 'us';
+  if (field === 'severity') return 'high';
+  if (field === 'customer_tier') return 'enterprise';
+  if (field === 'tier') return 'gold';
+  if (field === 'policy_code') return 'partial_refund_window';
+  if (field === 'posting_type') return 'refund';
+  if (field === 'basis') return 'discounted_total_within_budget';
+  if (field === 'reason') return 'stock_available';
+  if (field === 'currency') return 'USD';
+  if (field === 'refund_requested' || field === 'approved' || field === 'eligible' || field === 'reserved' || field === 'active_contract' || field.startsWith('is_') || field.startsWith('has_')) {
+    return true;
+  }
+  if (field === 'delivered_days_ago') return 42;
+  if (field === 'refund_pct') return 50;
+  if (field === 'discount_pct') return 10;
+  if (field === 'original_amount_cents') return 12500;
+  if (field === 'refund_cents' || field === 'amount_cents') return 6250;
+  if (field === 'subtotal_usd' || field === 'previous_total_usd') return 200;
+  if (field === 'discounted_total_usd') return 180;
+  if (field === 'budget_usd') return 250;
+  if (field === 'base_hours') return 2;
+  if (field === 'hourly_rate_usd') return 100;
+  if (field === 'risk_score') return 100;
+  if (field === 'requested_units') return 4;
+  if (field === 'available_units') return 10;
+  if (field === 'reserved_units') return 4;
+  if (field === 'backorder_units') return 0;
+  if (field === 'failed_logins') return 6;
+  if (/(?:amount|budget|count|days|events|hours|minutes|pct|rate|score|seats|total|units|usd|cents)$/u.test(field)) {
+    return 1;
+  }
+  return `${field.replace(/_/gu, '-')}-behavior`;
+}
+
+function setNestedRecord(target: Record<string, unknown>, fieldPath: string, value: unknown): void {
+  const parts = fieldPath.split('.').filter(Boolean);
+  if (parts.length === 0) {
+    return;
+  }
+  let cursor = target;
+  for (const part of parts.slice(0, -1)) {
+    const next = cursor[part];
+    if (!isRecord(next)) {
+      cursor[part] = {};
+    }
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  cursor[parts[parts.length - 1] as string] = value;
+}
+
+function parseRecordJson(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'string') {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function itemsForResult(result: Record<string, unknown>): string[] {
+  const entries = Object.entries(result).filter(([key]) => key !== 'stage');
+  return entries.length > 0
+    ? entries.map(([key, value]) => `${key}:${String(value)}`)
+    : [`stage:${String(result.stage ?? 'unknown')}`];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function formatBehavioralGateFailure(stage: string, behaviorError: string, fixture: StageBehaviorFixture): string {
+  const lines = [
+    `behavioral gate failed for stage ${stage}: ${behaviorError}`,
+  ];
+  if (fixture.domain_spec_reads && fixture.domain_spec_reads.length > 0) {
+    lines.push(`domain_spec.reads: ${JSON.stringify(fixture.domain_spec_reads)}`);
+  }
+  if (fixture.expected_items_templates && fixture.expected_items_templates.length > 0) {
+    lines.push(`domain_spec.produces.items_json: ${JSON.stringify(fixture.expected_items_templates)}`);
+  }
+  if (fixture.available_domain_paths && fixture.available_domain_paths.length > 0) {
+    lines.push(`Available behavioral fixture domain paths: ${JSON.stringify(fixture.available_domain_paths)}`);
+  }
+  lines.push(
+    "Stateful repair hint: read request JSON from input.domain['inputs.initial_user_text']; for deterministic prior output reads like prior_stage.output.result_json.field, read input.domain['prior_stage.output'].result_json and JSON.parse it before using field.",
+    'For items_json, emit one string per domain_spec.produces.items_json template even when a computed value is 0 or false; do not return an empty array for declared item templates.',
+  );
+  return lines.join('\n');
 }
 
 async function withBehaviorTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
@@ -633,6 +1065,7 @@ function assertBehavioralOutput(
   output: unknown,
   stage: string,
   archetype: 'pure-compute' | 'external-adapter',
+  domainSpec?: StageDomainSpec,
 ): string | undefined {
   if (!output || typeof output !== 'object' || Array.isArray(output)) {
     return 'runStage returned a non-object output';
@@ -663,8 +1096,16 @@ function assertBehavioralOutput(
   if ((result as { stage?: unknown }).stage !== stage) {
     return `expected result_json.stage to equal ${stage}; got ${String((result as { stage?: unknown }).stage)}`;
   }
+  const schemaError = assertResultJsonSchema(result, domainSpec);
+  if (schemaError) {
+    return schemaError;
+  }
   if (!Array.isArray(items) || items.length === 0) {
     return 'expected items_json to encode a non-empty array';
+  }
+  const itemSchemaError = assertItemsJsonSchema(items, domainSpec);
+  if (itemSchemaError) {
+    return itemSchemaError;
   }
   if (archetype === 'external-adapter') {
     const resultAdapterKind = (result as { adapter_kind?: unknown }).adapter_kind;
@@ -674,6 +1115,64 @@ function assertBehavioralOutput(
     }
   }
   return undefined;
+}
+
+function assertResultJsonSchema(result: unknown, domainSpec?: StageDomainSpec): string | undefined {
+  const schema = domainSpec?.produces.result_json;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return undefined;
+  }
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return 'result_json must encode an object';
+  }
+  const expectedKeys = Object.keys(schema);
+  if (expectedKeys.length === 0) {
+    return undefined;
+  }
+  const actualKeys = Object.keys(result as Record<string, unknown>);
+  if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    return `expected result_json keys to exactly match domain_spec.produces.result_json in order ${JSON.stringify(expectedKeys)}; got ${JSON.stringify(actualKeys)}`;
+  }
+  return undefined;
+}
+
+function assertItemsJsonSchema(items: unknown[], domainSpec?: StageDomainSpec): string | undefined {
+  const schema = domainSpec?.produces.items_json;
+  if (!Array.isArray(schema) || schema.length === 0 || !schema.every((item) => typeof item === 'string')) {
+    return undefined;
+  }
+  if (items.length !== schema.length) {
+    return `expected items_json to contain exactly ${schema.length} items from domain_spec.produces.items_json; got ${items.length}`;
+  }
+  for (let index = 0; index < schema.length; index += 1) {
+    const item = items[index];
+    if (typeof item !== 'string') {
+      return `expected items_json[${index}] to be a string`;
+    }
+    const template = schema[index] as string;
+    const matcher = itemTemplateMatcher(template);
+    if (!matcher.test(item)) {
+      return `expected items_json[${index}] to match domain_spec template ${JSON.stringify(template)}; got ${JSON.stringify(item)}`;
+    }
+  }
+  return undefined;
+}
+
+function itemTemplateMatcher(template: string): RegExp {
+  const parts: string[] = [];
+  let cursor = 0;
+  const placeholder = /<[^>]+>/gu;
+  for (let match = placeholder.exec(template); match; match = placeholder.exec(template)) {
+    parts.push(escapeRegExp(template.slice(cursor, match.index)));
+    parts.push('.+');
+    cursor = match.index + match[0].length;
+  }
+  parts.push(escapeRegExp(template.slice(cursor)));
+  return new RegExp(`^${parts.join('')}$`, 'u');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function renderRepoIntegrationStageBody(stage: string, integration: WiringIntegration): string {
@@ -729,12 +1228,15 @@ function cacheKeyFor(input: { stage: string; contract: string; prompt: string; m
 function readCache(path: string): CacheRecord | undefined {
   if (!existsSync(path)) return undefined;
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<CacheRecord>;
+  const behavioralFixture = isStageBehaviorFixture(parsed.behavioral_fixture)
+    ? normalizeStageBehaviorFixture(parsed.behavioral_fixture)
+    : undefined;
   return typeof parsed.body === 'string' && typeof parsed.body_hash === 'string'
     ? {
         body: parsed.body,
         body_hash: parsed.body_hash,
         ...(typeof parsed.behavioral_gate === 'string' ? { behavioral_gate: parsed.behavioral_gate } : {}),
-        ...(isStageBehaviorFixture(parsed.behavioral_fixture) ? { behavioral_fixture: parsed.behavioral_fixture } : {}),
+        ...(behavioralFixture ? { behavioral_fixture: behavioralFixture } : {}),
       }
     : undefined;
 }
@@ -746,6 +1248,24 @@ function isStageBehaviorFixture(value: unknown): value is StageBehaviorFixture {
     typeof (value as { input_stage?: unknown }).input_stage === 'string' &&
     typeof (value as { expected_result_stage?: unknown }).expected_result_stage === 'string' &&
     (value as { expected_items_non_empty?: unknown }).expected_items_non_empty === true;
+}
+
+function normalizeStageBehaviorFixture(value: StageBehaviorFixture): StageBehaviorFixture {
+  return {
+    input_stage: value.input_stage,
+    expected_result_stage: value.expected_result_stage,
+    expected_items_non_empty: true,
+    ...(value.expected_adapter_kind ? { expected_adapter_kind: value.expected_adapter_kind } : {}),
+    ...(value.expected_integration ? { expected_integration: value.expected_integration } : {}),
+    ...(value.expected_method ? { expected_method: value.expected_method } : {}),
+    ...(stringArray(value.available_domain_paths) ? { available_domain_paths: value.available_domain_paths } : {}),
+    ...(stringArray(value.domain_spec_reads) ? { domain_spec_reads: value.domain_spec_reads } : {}),
+    ...(stringArray(value.expected_items_templates) ? { expected_items_templates: value.expected_items_templates } : {}),
+  };
+}
+
+function stringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 function extractCode(content: string): string {

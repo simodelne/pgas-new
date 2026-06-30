@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "run_id": "close-gap-refund-smoke",
+  "created_at": "2026-06-29T18:52:57.954Z",
+  "model_id": "qwen36-27b",
+  "provider_url": "http://100.100.74.6:8000/v1",
+  "prompt_hash": "835c121c45e5dc68f450e03576b358781d940a13c0ab61dc1a5722715524c308",
+  "baseline_scorecard": "/home/simone/pgas-new/tests/sota/scorecard/baseline-v3.5.0.json",
+  "aggregate": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "pass_at_1": 1,
+    "task_success_rate": 1,
+    "attempts_total": 0,
+    "latency_ms": 2512,
+    "holdout": {
+      "total": 1,
+      "passed": 1,
+      "task_success_rate": 1
+    },
+    "dev": {
+      "total": 0,
+      "passed": 0,
+      "task_success_rate": 0
+    },
+    "failure_taxonomy": {}
+  },
+  "benchmarks": [
+    {
+      "slug": "refund-ledger-stateful",
+      "holdout": true,
+      "archetype_tags": [
+        "multi-stage",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1044,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1265,
+          "stdout_excerpt": "\n RUN  v4.1.9 /home/simone/pgas-new/tests/sota/generated/close-gap-refund-smoke/pgas-sota-refund-ledger-stateful-GQivJ1\n\n{\"level\":30,\"time\":1782759180125,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1782759180127,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1782759180127,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1782759180146,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/home/simone/pgas-new/tests/sota/generated/close-gap-refund-smoke/pgas-sota-refund-ledger-stateful-GQivJ1/session-logs\"},\"programs\":[\"refund-ledger-stateful\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1782759180231,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1782759180244,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  18:52:59\n   Duration  819ms (transform 82ms, setup 0ms, import 474ms, tests 188ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 176
+        }
+      },
+      "attempts_total": 0,
+      "stage_attempts": {
+        "normalize_refund": 0,
+        "apply_refund_policy": 0,
+        "ledger_posting": 0
+      },
+      "cache_hits": {
+        "normalize_refund": true,
+        "apply_refund_policy": true,
+        "ledger_posting": true
+      },
+      "latency_ms": 2512,
+      "body_hashes": {
+        "normalize_refund": "c7011068d9ce0bd418e0af2b8bd8c7b91e6e3f8a62358cd729031c7b27edc275",
+        "apply_refund_policy": "e2b703934dd7ee1046db5bb2d4ec238370ecee980351cf5cea6c319ee539c03a",
+        "ledger_posting": "c776c6939315dc5b54b7c76d99cbf04717f70039fd3d912ddb29eba6e43876c1"
+      },
+      "prompt_hash": "9ac6865cc43f6c3af5a18cb6379c6155df305126c7fd37a2aff216f98e14b465",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; stateful refund ledger logic is correct and consistent.",
+        "latency_ms": 1938
+      }
+    }
+  ],
+  "baseline_vs_v3_5_0": {
+    "baseline_task_success_rate": 0,
+    "current_task_success_rate": 1,
+    "delta_task_success_rate": 1,
+    "regressions": []
+  }
+}

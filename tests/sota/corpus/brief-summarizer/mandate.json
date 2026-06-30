@@ -1,0 +1,12 @@
+{
+  "program.slug": "brief-summarizer",
+  "program.name": "Brief Summarizer",
+  "program.target_dir": "/tmp/pgas-sota-brief-summarizer",
+  "program.design_path": "design",
+  "intake.purpose": "Summarize a natural-language project brief into decision-ready structured output.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"brief_summary\",\"domain_spec\":{\"reads\":[\"inputs.initial_user_text\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"audience\":\"string\",\"deadline\":\"YYYY-MM-DD string\",\"constraint\":\"string\",\"decision\":\"string\"},\"items_json\":[\"audience:<audience>\",\"deadline:<deadline>\",\"constraint:<constraint>\"]},\"rules\":[\"Extract audience, deadline, constraint, and decision from the brief text.\",\"The decision should describe the requested launch or preparation action.\",\"Preserve explicit constraints verbatim when practical.\",\"Do not invent billing scope or billing changes when the brief excludes them.\"],\"invariants\":[\"result_json.stage must equal brief_summary.\",\"audience, deadline, constraint, and decision must be top-level fields.\",\"items_json must include audience:<audience>, deadline:<deadline>, and constraint:<constraint>.\"]}},{\"slug\":\"complete\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"brief_summary\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"brief_summary\",\"to\":\"complete\",\"trigger\":\"summarized\",\"guard_field\":\"brief_summary.done\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"complete\",\"guard_field\":\"brief_summary.done\"}"
+}

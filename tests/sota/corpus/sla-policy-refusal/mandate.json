@@ -1,0 +1,12 @@
+{
+  "program.slug": "sla-policy-refusal",
+  "program.name": "SLA Policy Refusal",
+  "program.target_dir": "/tmp/pgas-sota-sla-policy-refusal",
+  "program.design_path": "design",
+  "intake.purpose": "Refuse to route an incident when the mandate lacks the SLA policy fields required for a deterministic owner and response target.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"surface_gap\",\"domain_spec\":{\"reads\":[\"inputs.initial_user_text.request\",\"inputs.initial_user_text.known_policy\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"status\":\"refused\",\"gap_type\":\"string\",\"missing_fields\":\"string[]\",\"next_action\":\"string\"},\"items_json\":\"string[]\"},\"rules\":[\"Parse input.domain[\\\"inputs.initial_user_text\\\"] as JSON.\",\"A deterministic incident routing decision requires severity_matrix, queue_mapping, and response_minutes.\",\"If any required SLA policy field is absent from the request or known_policy, refuse to route the incident.\",\"missing_fields must contain exactly the required SLA policy fields that are absent: severity_matrix, queue_mapping, response_minutes.\",\"status must be refused, gap_type must be missing_sla_policy, and next_action must be request_sla_policy.\"],\"invariants\":[\"result_json.stage must equal surface_gap.\",\"Do not produce owner_queue, response_due, approved, denied, or escalation target fields.\",\"items_json must list missing:<field> entries for each missing SLA policy field.\"]}},{\"slug\":\"refused\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"surface_gap\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"surface_gap\",\"to\":\"refused\",\"trigger\":\"gap_surfaced\",\"guard_field\":\"surface_gap.ready\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"refused\",\"guard_field\":\"surface_gap.ready\"}"
+}

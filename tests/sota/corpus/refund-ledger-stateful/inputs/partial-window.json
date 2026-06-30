@@ -1,0 +1,14 @@
+{
+  "id": "partial-window",
+  "prompt": "{\"order_id\":\"ORD-2207\",\"original_amount_cents\":12500,\"delivered_days_ago\":42,\"refund_requested\":true}",
+  "domain": {
+    "order_id": "ORD-2207",
+    "original_amount_cents": 12500,
+    "delivered_days_ago": 42,
+    "refund_requested": true
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T06:00:00.000Z",
+    "random": 0.4
+  }
+}

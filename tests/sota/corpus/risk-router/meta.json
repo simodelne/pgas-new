@@ -1,0 +1,19 @@
+{
+  "slug": "risk-router",
+  "name": "Risk Router",
+  "archetype_tags": ["pure-compute"],
+  "holdout": false,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "score_risk", "route_queue", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "score_risk": "pure-compute",
+      "route_queue": "pure-compute"
+    },
+    "body_stages": ["score_risk", "route_queue"],
+    "llm_stages": [],
+    "external_adapter_stages": []
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "slug": "fee-calculator",
+  "name": "Fee Calculator",
+  "archetype_tags": ["pure-compute"],
+  "holdout": false,
+  "repair_budget": 4,
+  "expected_topology": {
+    "entry_channel": "user_text",
+    "stages": ["intake", "calculate_fee", "complete"],
+    "final_stage": "complete",
+    "stage_archetypes": {
+      "calculate_fee": "pure-compute"
+    },
+    "body_stages": ["calculate_fee"],
+    "llm_stages": [],
+    "external_adapter_stages": []
+  }
+}

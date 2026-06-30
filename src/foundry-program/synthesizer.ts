@@ -7,6 +7,7 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
+import type { SynthesisContext } from './synthesizer-store.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
@@ -17,9 +18,17 @@ interface Stage {
   slug: string;
   is_bootstrap?: boolean;
   is_terminal?: boolean;
+  domain_spec?: StageDomainSpec;
 }
 
 type StageInput = Stage | string;
+
+interface StageDomainSpec {
+  reads: string[];
+  produces: Record<string, unknown>;
+  rules: string[];
+  invariants: string[];
+}
 
 interface IntakeTransition {
   from: string;
@@ -45,6 +54,7 @@ interface SynthesizedSpec {
   smoke_test_ts: string;
   stage_classification: ClassifiedStage[];
   body_stage_slugs: string[];
+  synthesis_context: SynthesisContext;
 }
 
 export interface SynthesizeProgramSpecOptions {
@@ -88,6 +98,7 @@ export function synthesizeProgramSpecFromDomain(
   const name = stringDomainField(domain, 'program.name');
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = stringDomainField(domain, 'intake.entry_channel');
+  const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseJsonDomainField<StageInput[]>(domain, 'intake.stages_json'));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
@@ -105,6 +116,11 @@ export function synthesizeProgramSpecFromDomain(
     options,
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
+  const stageDomainSpecBySlug = new Map(
+    stages
+      .filter((stage): stage is Stage & { domain_spec: StageDomainSpec } => !!stage.domain_spec)
+      .map((stage) => [stage.slug, stage.domain_spec]),
+  );
 
   const modeNames = stages.map((stage) => stage.slug);
   const firstMode = modeNames[0] as string;
@@ -140,6 +156,7 @@ export function synthesizeProgramSpecFromDomain(
   spec.preamble = `Program: ${name}. ${purpose}\n\nThis spec was synthesized mechanically by pgas-new.`;
   spec.initial = firstMode;
   spec.terminal = terminalModes;
+  spec.features = unique([...(Array.isArray(spec.features) ? spec.features as string[] : []), 'reactions']);
 
   const sourceModes = recordField(spec, 'modes');
   const synthesizedModes: MutableRecord = {};
@@ -175,16 +192,25 @@ export function synthesizeProgramSpecFromDomain(
   const intermediateGuardFields = unique(
     intermediateModes.flatMap((modeName) => guardFieldsByMode.get(modeName) ?? []),
   );
+  const accumulatedOutputFieldsBefore = (modeName: string): string[] => {
+    const modeIndex = modeNames.indexOf(modeName);
+    if (modeIndex < 0) {
+      return [];
+    }
+    return intermediateModes
+      .filter((candidate) => modeNames.indexOf(candidate) < modeIndex)
+      .flatMap((candidate) => outputProjectionFields(candidate, stageClassificationBySlug));
+  };
 
   const projection: MutableRecord = {
     [firstMode]: {
-      include: unique([`inputs.${entryChannel}`, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
+      include: unique([`inputs.${entryChannel}`, initialEntryPath, 'notebook.entries', 'notebook.pins', startedField, ...(guardFieldsByMode.get(firstMode) ?? [])]),
       exclude: [],
     },
   };
   for (const modeName of terminalModes) {
     projection[modeName] = {
-      include: unique([...intermediateGuardFields, ...intermediateJsonFields]),
+      include: unique([initialEntryPath, ...intermediateGuardFields, ...intermediateJsonFields]),
       exclude: [],
     };
   }
@@ -192,9 +218,11 @@ export function synthesizeProgramSpecFromDomain(
     projection[modeName] = {
       include: unique([
         `inputs.${entryChannel}`,
+        initialEntryPath,
         'notebook.entries',
         'notebook.pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
+        ...accumulatedOutputFieldsBefore(modeName),
         ...outputProjectionFields(modeName, stageClassificationBySlug),
       ]),
       exclude: [],
@@ -211,13 +239,21 @@ export function synthesizeProgramSpecFromDomain(
       : `Terminal sink mode after ${name} cannot progress further.`;
   }
   for (const modeName of intermediateModes) {
-    prompts[modeName] = `Perform the ${modeName} stage for ${name}.`;
+    prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName));
   }
   spec.prompts = prompts;
 
   spec.ingestion = {
     [entryChannel]: [`inputs.${entryChannel}`],
     system_mode_entry: ['inputs.mode_entry'],
+  };
+
+  spec.reactions = {
+    capture_initial_entry_input: {
+      event: 'AfterIngestion',
+      watch: [`inputs.${entryChannel}`],
+      write_scope: [initialEntryPath],
+    },
   };
 
   spec.channels = {
@@ -233,7 +269,7 @@ export function synthesizeProgramSpecFromDomain(
     delete actionMap.begin_work;
   }
   for (const action of transitionActions) {
-    actionMap[action.name] = actionMapEntryFor(action, firstMode);
+    actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source));
   }
 
   const schema = recordField(spec, 'schema');
@@ -242,6 +278,7 @@ export function synthesizeProgramSpecFromDomain(
   delete schema['work.example_result_json'];
   delete schema['work.example_items_json'];
   schema[`inputs.${entryChannel}`] = 'string';
+  schema[initialEntryPath] = 'string';
   schema[startedField] = 'boolean';
   for (const field of unique([...guardFieldsByMode.values()].flat())) {
     schema[field] = 'boolean';
@@ -262,7 +299,7 @@ export function synthesizeProgramSpecFromDomain(
     }
   }
 
-  spec.guidance = guidanceFor(intermediateModes, delegation);
+  spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -276,23 +313,37 @@ export function synthesizeProgramSpecFromDomain(
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
-    contracts_ts: renderContractsSource(stageClassification, transitionActions),
+    contracts_ts: renderContractsSource(stages, stageClassification, transitionActions),
     handlers_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: true,
       resolverImport: './handlers/_resolver.js',
       contractsImport: './contracts.js',
       stageImportPrefix: './stages',
+      initialEntryPath,
+      entryPath: `inputs.${entryChannel}`,
     }),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
       resolverImport: './_resolver.js',
       contractsImport: '../contracts.js',
       stageImportPrefix: '../stages',
+      initialEntryPath,
+      entryPath: `inputs.${entryChannel}`,
     }),
     tools_ts: renderToolsSource(slug, transitionActions),
-    smoke_test_ts: renderSmokeTestSource(slug, name, transitionActions, completion),
+    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
+    synthesis_context: {
+      program_slug: slug,
+      program_name: name,
+      purpose,
+      entry_channel: entryChannel,
+      stages,
+      transitions,
+      delegation,
+      completion,
+    },
   };
 }
 
@@ -541,9 +592,12 @@ function outputProjectionFields(modeName: string, stageClassificationBySlug: Map
     : [`${modeName}.output`];
 }
 
-function actionMapEntryFor(action: TransitionAction, firstMode: string): MutableRecord {
+function actionMapEntryFor(action: TransitionAction, firstMode: string, domainSpec?: StageDomainSpec): MutableRecord {
   const isBootstrap = action.source === firstMode;
   const isResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
+  const domainSpecDescription = domainSpec
+    ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpec)}`
+    : '';
   const mutations = [
     ...(action.guardField ? [{ op: 'MSet', path: action.guardField, value: true }] : []),
     ...(isBootstrap || isResultPathStage ? [] : [
@@ -556,12 +610,12 @@ function actionMapEntryFor(action: TransitionAction, firstMode: string): Mutable
     description: isBootstrap
       ? `Start ${action.source} and advance exactly one hop to ${action.target}.`
       : action.archetype === 'llm-reasoning'
-        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.`
-        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.`,
+        ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`
+        : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`,
     ...(isBootstrap || isResultPathStage ? {} : {
       arg_descriptions: {
-        result_json: `JSON string result for the ${action.source} LLM reasoning stage.`,
-        items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.`,
+        result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
+        items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
       },
     }),
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
@@ -617,6 +671,8 @@ function renderHandlersSource(
     resolverImport: string;
     contractsImport: string;
     stageImportPrefix: string;
+    initialEntryPath: string;
+    entryPath: string;
   },
 ): string {
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
@@ -624,6 +680,23 @@ function renderHandlersSource(
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
     .join('\n');
+  const contractsImport = bodyActions.length > 0
+    ? `import { createStageRuntime, normalizeStageOutput, resolveStageInput } from ${tsString(options.contractsImport)};`
+    : '';
+  const sessionControlHandlers = [
+    'session_new',
+    'session_abort_current',
+    'session_status',
+    'session_history',
+    'session_resume',
+    'session_help',
+  ].map((action) => `  async ${action}(payload) {
+    return {
+      kind: 'session_control',
+      control: ${tsString(action)},
+      payload,
+    };
+  },`).join('\n\n');
   const actionHandlers = stageActions.map((action) => {
     if (action.archetype === 'llm-reasoning') {
       return `  async ${action.name}(payload) {
@@ -651,12 +724,12 @@ function renderHandlersSource(
   }).join('\n\n');
   const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\n// The generated scaffold has no foundry-driven reactions by default. Consumer\n// programs can add reactions by populating this map.\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map();`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }],\n]);`
     : '';
 
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
-import { createStageRuntime, normalizeStageOutput, resolveStageInput } from ${tsString(options.contractsImport)};
+${contractsImport}
 ${stageImports ? `${stageImports}\n` : ''}
 
 // Generated by pgas-new from the approved stage topology. Deterministic stage
@@ -677,7 +750,9 @@ export const handlers: Record<string, ToolHandler> = {
       kind: 'note_recorded',
       note,
     };
-  }${actionHandlers ? `,\n\n${actionHandlers}` : ''}
+  },
+
+${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}
 };${reactionExport}
 `;
 }
@@ -712,8 +787,13 @@ export function register${toPascalCase(slug)}Tools(_registry: ToolRegistry): voi
 `;
 }
 
-function renderContractsSource(stageClassification: ClassifiedStage[], transitionActions: TransitionAction[]): string {
+function renderContractsSource(
+  stages: Stage[],
+  stageClassification: ClassifiedStage[],
+  transitionActions: TransitionAction[],
+): string {
   const classified = JSON.stringify(stageClassification, null, 2);
+  const domainSpecs = JSON.stringify(domainSpecsByStage(stages), null, 2);
   const actionContracts = JSON.stringify(
     transitionActions
       .filter((action) => action.name !== 'begin_work')
@@ -740,10 +820,18 @@ import type { HandlerPayload } from './handlers/_resolver.js';
 
 export type StageArchetype = 'pure-compute' | 'llm-reasoning' | 'external-adapter';
 
+export interface StageDomainSpec {
+  reads: readonly string[];
+  produces: Record<string, unknown>;
+  rules: readonly string[];
+  invariants: readonly string[];
+}
+
 export interface StageInput {
   stage: string;
   payload: HandlerPayload;
   domain: Record<string, unknown>;
+  domain_spec: StageDomainSpec;
 }
 
 export interface StageRuntime {
@@ -761,13 +849,15 @@ export interface StageOutput {
 
 export const stageClassification = ${classified} as const;
 
+export const stageDomainSpecs = ${domainSpecs} as Record<string, StageDomainSpec>;
+
 export const stageActionContracts = ${actionContracts} as const;
 
 export function resolveStageInput(payload: HandlerPayload, stage: string): StageInput {
   const domain = payload.domain && typeof payload.domain === 'object' && !Array.isArray(payload.domain)
     ? payload.domain as Record<string, unknown>
     : {};
-  return { stage, payload, domain };
+  return { stage, payload, domain, domain_spec: stageDomainSpecs[stage] ?? emptyStageDomainSpec };
 }
 
 export function createStageRuntime(payload: HandlerPayload): StageRuntime {
@@ -834,16 +924,26 @@ function assertNoStubMarkers(output: StageOutput, stage: string): void {
     }
   }
 }
+
+const emptyStageDomainSpec: StageDomainSpec = {
+  reads: [],
+  produces: {},
+  rules: [],
+  invariants: [],
+};
 `;
 }
 
 function renderSmokeTestSource(
   slug: string,
   name: string,
+  entryChannel: string,
+  stages: Stage[],
   transitionActions: TransitionAction[],
   completion: Completion,
 ): string {
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
+  const initialTrigger = smokeInitialTriggerExpression(stages, entryChannel);
   const responses = pathActions.map((action) => {
     if (action.archetype === 'llm-reasoning') {
       return `        effect(${tsString(action.name)}, {
@@ -866,14 +966,14 @@ describe('generated program smoke', () => {
   it('runs ${name} through the deterministic completion path without stub output', async () => {
     const harness = await createTestHarness(create${toPascalCase(slug)}ProgramEntry(), {
       programName: ${tsString(slug)},
-      defaultChannel: 'user_text',
+      defaultChannel: ${tsString(entryChannel)},
       authorResponses: [
 ${responses}
       ],
     });
 
     try {
-      await harness.trigger('start generated smoke');
+      await harness.trigger(${initialTrigger});
 ${pathActions.slice(1).map(() => "      await harness.trigger('continue generated smoke');").join('\n')}
       const snapshot = await harness.snapshot();
       expect(snapshot.mode).toBe(${tsString(completion.final_stage)});
@@ -890,6 +990,75 @@ function effect(name: string, payload: Record<string, unknown>): TestHarnessAuth
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
 }
 `;
+}
+
+function smokeInitialTriggerExpression(stages: Stage[], entryChannel: string): string {
+  const initialRoot = initialInputPath(entryChannel);
+  const initialPrefix = `${initialRoot}.`;
+  const request: MutableRecord = {};
+  for (const readPath of unique(stages.flatMap((stage) => stage.domain_spec?.reads ?? []))) {
+    if (!readPath.startsWith(initialPrefix)) {
+      continue;
+    }
+    const fieldPath = readPath.slice(initialPrefix.length).split('.').filter(Boolean);
+    if (fieldPath.length === 0) {
+      continue;
+    }
+    setNestedSmokeValue(request, fieldPath);
+  }
+
+  if (Object.keys(request).length === 0) {
+    return tsString('start generated smoke');
+  }
+  return `JSON.stringify(${JSON.stringify(request, null, 2)})`;
+}
+
+function setNestedSmokeValue(target: MutableRecord, fieldPath: string[]): void {
+  let cursor: MutableRecord = target;
+  for (let index = 0; index < fieldPath.length; index += 1) {
+    const field = fieldPath[index] as string;
+    const isLeaf = index === fieldPath.length - 1;
+    if (isLeaf) {
+      if (!(field in cursor)) {
+        cursor[field] = sampleSmokeValue(fieldPath);
+      }
+      return;
+    }
+    const existing = cursor[field];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      cursor[field] = {};
+    }
+    cursor = cursor[field] as MutableRecord;
+  }
+}
+
+function sampleSmokeValue(fieldPath: string[]): unknown {
+  const field = (fieldPath.at(-1) ?? 'value').toLowerCase();
+  if (/^(is|has|can|should)_/u.test(field) || /_(flag|enabled|active|approved|requested)$/u.test(field)) {
+    return true;
+  }
+  if (/(cents|amount|total|price|usd|count|quantity|qty|seats|days|age|hours|minutes|score|pct|percent|rate|limit|cap|capacity|used|remaining)/u.test(field)) {
+    return field.includes('cents') ? 12500 : 14;
+  }
+  if (field === 'items' || field.endsWith('_items') || field.endsWith('_list')) {
+    return ['sample-item'];
+  }
+  if (field.includes('email')) {
+    return 'sample@example.com';
+  }
+  if (field.includes('date') && !field.includes('days')) {
+    return '2026-06-29';
+  }
+  if (field.endsWith('_at') || field.includes('iso')) {
+    return '2026-06-29T00:00:00.000Z';
+  }
+  if (field === 'id' || field.endsWith('_id')) {
+    return `${field.replace(/_/gu, '-')}-sample`;
+  }
+  if (field.endsWith('_code') || field === 'code') {
+    return 'sample_code';
+  }
+  return `${field.replace(/_/gu, '-')}-sample`;
 }
 
 function actionsForCompletionPath(actions: TransitionAction[], finalStage: string): TransitionAction[] {
@@ -952,18 +1121,46 @@ function normalizeGuardField(field: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function guidanceFor(modeNames: string[], delegation: Record<string, unknown>): Record<string, string[]> {
-  const guidance = [
+function promptForStage(modeName: string, programName: string, domainSpec?: StageDomainSpec): string {
+  const base = `Perform the ${modeName} stage for ${programName}.`;
+  if (!domainSpec) return base;
+  return [
+    base,
+    `Author-provided domain spec for ${modeName} is normative; implement it exactly and do not infer alternate business logic.`,
+    JSON.stringify(domainSpec),
+  ].join('\n');
+}
+
+function guidanceFor(
+  modeNames: string[],
+  delegation: Record<string, unknown>,
+  stageDomainSpecBySlug: Map<string, StageDomainSpec>,
+): Record<string, string[]> {
+  const baseGuidance = [
     'Use the synthesized JSON-string scalar fields for structured handler results.',
   ];
   if (Object.keys(delegation).length > 0) {
-    guidance.push(`delegation intake captured for this program: ${JSON.stringify(delegation)}.`);
+    baseGuidance.push(`delegation intake captured for this program: ${JSON.stringify(delegation)}.`);
   }
-  return Object.fromEntries(modeNames.map((modeName) => [modeName, guidance]));
+  return Object.fromEntries(modeNames.map((modeName) => {
+    const domainSpec = stageDomainSpecBySlug.get(modeName);
+    const stageGuidance = domainSpec
+      ? [
+          ...baseGuidance,
+          `Author-provided domain spec for ${modeName}: ${JSON.stringify(domainSpec)}.`,
+          'Domain spec rules and invariants are mandatory; do not substitute guessed defaults.',
+        ]
+      : baseGuidance;
+    return [modeName, stageGuidance];
+  }));
 }
 
 function channelsForBootstrap(entryChannel: string): string[] {
   return unique([entryChannel, 'system_mode_entry', 'widget_output']);
+}
+
+function initialInputPath(entryChannel: string): string {
+  return `inputs.initial_${safeIdentifier(entryChannel)}`;
 }
 
 function validateSynthesizedSpec(specYaml: string): void {
@@ -988,6 +1185,9 @@ function assertStages(stages: Stage[]): void {
     if (!stage || typeof stage.slug !== 'string' || stage.slug.length === 0) {
       throw new Error('each stage must declare a non-empty slug');
     }
+    if (stage.domain_spec) {
+      assertDomainSpec(stage.domain_spec, stage.slug);
+    }
   }
 }
 
@@ -996,7 +1196,12 @@ function normalizeStages(stages: StageInput[]): Stage[] {
     throw new Error('intake.stages_json must decode to an array');
   }
   return stages.map((stage, index) => {
-    if (typeof stage !== 'string') return stage;
+    if (typeof stage !== 'string') {
+      return {
+        ...stage,
+        ...(stage.domain_spec ? { domain_spec: normalizeDomainSpec(stage.domain_spec, stage.slug) } : {}),
+      };
+    }
     const slug = stage.trim();
     return {
       slug,
@@ -1004,6 +1209,56 @@ function normalizeStages(stages: StageInput[]): Stage[] {
       ...(index === stages.length - 1 ? { is_terminal: true } : {}),
     };
   });
+}
+
+function domainSpecsByStage(stages: Stage[]): Record<string, StageDomainSpec> {
+  return Object.fromEntries(
+    stages
+      .filter((stage): stage is Stage & { domain_spec: StageDomainSpec } => !!stage.domain_spec)
+      .map((stage) => [stage.slug, stage.domain_spec]),
+  );
+}
+
+function normalizeDomainSpec(value: unknown, stageSlug: string): StageDomainSpec {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`stage ${stageSlug} domain_spec must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const spec = {
+    reads: stringArrayField(record, 'reads', stageSlug),
+    produces: objectField(record, 'produces', stageSlug),
+    rules: stringArrayField(record, 'rules', stageSlug),
+    invariants: stringArrayField(record, 'invariants', stageSlug),
+  };
+  assertDomainSpec(spec, stageSlug);
+  return spec;
+}
+
+function assertDomainSpec(value: StageDomainSpec, stageSlug: string): void {
+  stringArrayField(value as unknown as Record<string, unknown>, 'reads', stageSlug);
+  objectField(value as unknown as Record<string, unknown>, 'produces', stageSlug);
+  stringArrayField(value as unknown as Record<string, unknown>, 'rules', stageSlug);
+  stringArrayField(value as unknown as Record<string, unknown>, 'invariants', stageSlug);
+}
+
+function stringArrayField(record: Record<string, unknown>, field: keyof StageDomainSpec, stageSlug: string): string[] {
+  const value = record[field];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((item) => typeof item === 'string' && item.trim().length > 0)
+  ) {
+    throw new Error(`stage ${stageSlug} domain_spec.${field} must be a non-empty string array`);
+  }
+  return value.map((item) => item.trim());
+}
+
+function objectField(record: Record<string, unknown>, field: keyof StageDomainSpec, stageSlug: string): Record<string, unknown> {
+  const value = record[field];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`stage ${stageSlug} domain_spec.${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function assertTransitions(transitions: IntakeTransition[]): void {

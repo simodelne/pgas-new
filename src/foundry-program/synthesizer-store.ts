@@ -1,3 +1,32 @@
+export interface SynthesisContext {
+  program_slug: string;
+  program_name: string;
+  purpose: string;
+  entry_channel: string;
+  stages: Array<{
+    slug: string;
+    is_bootstrap?: boolean;
+    is_terminal?: boolean;
+    domain_spec?: {
+      reads: string[];
+      produces: Record<string, unknown>;
+      rules: string[];
+      invariants: string[];
+    };
+  }>;
+  transitions: Array<{
+    from: string;
+    to: string;
+    trigger?: string;
+    guard_field?: string;
+  }>;
+  delegation: Record<string, unknown>;
+  completion: {
+    final_stage: string;
+    guard_field: string;
+  };
+}
+
 export interface SynthesizedArtifact {
   spec_yaml: string;
   mode_names: string[];
@@ -10,6 +39,7 @@ export interface SynthesizedArtifact {
   smoke_test_ts: string;
   stage_classification: unknown[];
   body_stage_slugs: string[];
+  synthesis_context?: SynthesisContext;
   stage_sources?: Record<string, string>;
   domain_synthesis_audit?: Array<Record<string, unknown>>;
 }

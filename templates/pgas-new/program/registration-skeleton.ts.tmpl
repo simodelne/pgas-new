@@ -4,7 +4,7 @@ import {
   loadSpecWithPatterns,
   type ProgramEntry,
 } from '@simodelne/pgas-server/plugin.js';
-import { handlers } from './handlers.js';
+import { handlers, reactionHandlers } from './handlers.js';
 import { register{{PASCAL_NAME}}Tools } from './tools.js';
 
 export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
@@ -15,6 +15,7 @@ export function create{{PASCAL_NAME}}ProgramEntry(): ProgramEntry {
 
   return {
     spec,
+    reactionHandlers,
     createAdapters: (ctx) => {
       const adapters = createProgramAdapters(spec, ctx, handlers);
       if (spec.tools) {

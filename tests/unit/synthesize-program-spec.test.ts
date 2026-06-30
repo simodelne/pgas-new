@@ -5,6 +5,7 @@ import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
+import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import {
   clearSynthesizedArtifact,
   getSynthesizedArtifact,
@@ -115,6 +116,7 @@ describe('synthesize_program_spec handler', () => {
       initial: string;
       terminal: string[];
       modes: Record<string, { channels?: string[]; transitions?: Array<{ target: string; guard?: { path?: string } }>; vocabulary?: string[] }>;
+      projection: Record<string, { include: string[]; exclude: string[] }>;
       schema: Record<string, string>;
       action_map: Record<string, {
         channel?: string;
@@ -122,6 +124,7 @@ describe('synthesize_program_spec handler', () => {
         mutations: Array<{ path: string; value?: unknown; from_arg?: string }>;
       }>;
       proceed_to: Record<string, string>;
+      reactions: Record<string, { event: string; watch: string[]; write_scope: string[] }>;
       guidance: Record<string, string[]>;
     };
 
@@ -138,10 +141,17 @@ describe('synthesize_program_spec handler', () => {
     ]);
     expect(parsed.schema).toMatchObject({
       'intake.started': 'boolean',
+      'inputs.initial_user_text': 'string',
       'triage.summary_ready': 'boolean',
       'triage.output': 'object',
       'triage.output.result_json': 'string',
       'triage.output.items_json': 'string',
+    });
+    expect(parsed.projection.triage.include).toContain('inputs.initial_user_text');
+    expect(parsed.reactions.capture_initial_entry_input).toEqual({
+      event: 'AfterIngestion',
+      watch: ['inputs.user_text'],
+      write_scope: ['inputs.initial_user_text'],
     });
     expect(parsed.modes.triage.vocabulary).toEqual(expect.arrayContaining(['complete_triage']));
     expect(parsed.modes.triage.vocabulary).not.toContain('example_action');
@@ -158,10 +168,212 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.guidance.triage.join('\n')).toContain('delegation');
     expect(artifact?.contracts_ts).toContain('triage');
     expect(artifact?.handlers_ts).toContain('runTriage');
+    expect(artifact?.handlers_ts).toContain('capture_initial_entry_input');
+    expect(artifact?.handlers_ts).toContain('inputs.initial_user_text');
+    expect(artifact?.handlers_ts).toContain('async session_status(payload)');
+    expect(artifact?.handlers_ts).toContain("control: 'session_status'");
     expect(artifact?.handlers_ts).not.toContain('stage_action_stub');
     expect(artifact?.smoke_test_ts).toContain('generated program smoke');
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+  });
+
+  it('does not import synthesized stage contracts for an LLM-only program with no generated stage bodies', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'brief-summarizer',
+      'program.name': 'Brief Summarizer',
+      'program.target_dir': '/tmp/brief-summarizer',
+      'program.design_path': 'design',
+      'intake.purpose': 'Summarize a natural-language project brief into structured output.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'brief_summary' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'brief_summary', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'brief_summary', to: 'complete', trigger: 'summarized', guard_field: 'brief_summary.done' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'brief_summary.done' }),
+    });
+
+    expect(artifact.body_stage_slugs).toEqual([]);
+    expect(artifact.handlers_ts).not.toContain('./contracts.js');
+    expect(artifact.handlers_index_ts).not.toContain('../contracts.js');
+    expect(artifact.handlers_ts).toContain('async complete_brief_summary(payload)');
+  });
+
+  it('carries stage domain specs into runtime prompts for LLM reasoning stages', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'brief-summarizer',
+      'program.name': 'Brief Summarizer',
+      'program.target_dir': '/tmp/brief-summarizer',
+      'program.design_path': 'design',
+      'intake.purpose': 'Summarize a natural-language project brief into structured output.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        {
+          slug: 'brief_summary',
+          domain_spec: {
+            reads: ['inputs.initial_user_text'],
+            produces: {
+              result_json: {
+                stage: 'string',
+                audience: 'string',
+                deadline: 'string',
+                constraint: 'string',
+                decision: 'string',
+              },
+              items_json: 'string[]',
+            },
+            rules: ['Extract audience, deadline, constraint, and decision from the brief text.'],
+            invariants: ['Do not invent billing changes when the brief excludes them.'],
+          },
+        },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'brief_summary', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'brief_summary', to: 'complete', trigger: 'summarized', guard_field: 'brief_summary.done' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'brief_summary.done' }),
+    });
+
+    const parsed = load(artifact.spec_yaml) as {
+      prompts: Record<string, string>;
+      guidance: Record<string, string[]>;
+      action_map: Record<string, { arg_descriptions?: Record<string, string> }>;
+    };
+    expect(parsed.prompts.brief_summary).toContain('Author-provided domain spec for brief_summary');
+    expect(parsed.prompts.brief_summary).toContain('Extract audience, deadline, constraint, and decision');
+    expect(parsed.guidance.brief_summary.join('\n')).toContain('Do not invent billing changes');
+    expect(parsed.action_map.complete_brief_summary.arg_descriptions?.result_json).toContain('audience');
+  });
+
+  it('projects prior stage outputs into every later stateful stage', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'refund-ledger-stateful-test',
+      'program.name': 'Refund Ledger Stateful Test',
+      'program.target_dir': '/tmp/refund-ledger-stateful-test',
+      'program.design_path': 'design',
+      'intake.purpose': 'Normalize a refund, apply policy, and post the resulting ledger entry.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'normalize_refund' },
+        { slug: 'apply_refund_policy' },
+        { slug: 'ledger_posting' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'normalize_refund', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'normalize_refund', to: 'apply_refund_policy', trigger: 'normalized', guard_field: 'normalize_refund.ready' },
+        { from: 'apply_refund_policy', to: 'ledger_posting', trigger: 'policy_applied', guard_field: 'apply_refund_policy.ready' },
+        { from: 'ledger_posting', to: 'complete', trigger: 'posted', guard_field: 'ledger_posting.ready' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'ledger_posting.ready' }),
+    });
+
+    const parsed = load(artifact.spec_yaml) as {
+      projection: Record<string, { include: string[] }>;
+    };
+
+    expect(parsed.projection.normalize_refund.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+    ]));
+    expect(parsed.projection.apply_refund_policy.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+      'apply_refund_policy.output',
+    ]));
+    expect(parsed.projection.ledger_posting.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+      'apply_refund_policy.output',
+      'ledger_posting.output',
+    ]));
+    expect(parsed.projection.complete.include).toEqual(expect.arrayContaining([
+      'inputs.initial_user_text',
+      'normalize_refund.output',
+      'apply_refund_policy.output',
+      'ledger_posting.output',
+    ]));
+  });
+
+  it('seeds generated smoke input from initial input fields read by stateful domain specs', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      'program.slug': 'stateful-smoke-input-test',
+      'program.name': 'Stateful Smoke Input Test',
+      'program.target_dir': '/tmp/stateful-smoke-input-test',
+      'program.design_path': 'design',
+      'intake.purpose': 'Normalize an input, apply a policy, and complete.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        {
+          slug: 'normalize_request',
+          domain_spec: {
+            reads: [
+              'inputs.initial_user_text.order_id',
+              'inputs.initial_user_text.original_amount_cents',
+              'inputs.initial_user_text.refund_requested',
+            ],
+            produces: {
+              result_json: {
+                stage: 'string',
+                order_id: 'string',
+                original_amount_cents: 'number',
+                refund_requested: 'boolean',
+              },
+              items_json: 'string[]',
+            },
+            rules: ['Parse the original entry-channel JSON request before normalizing.'],
+            invariants: ['result_json.stage must equal normalize_request.'],
+          },
+        },
+        {
+          slug: 'apply_policy',
+          domain_spec: {
+            reads: [
+              'normalize_request.output.result_json.order_id',
+              'inputs.initial_user_text.delivered_days_ago',
+            ],
+            produces: {
+              result_json: {
+                stage: 'string',
+                order_id: 'string',
+                delivered_days_ago: 'number',
+              },
+              items_json: 'string[]',
+            },
+            rules: ['Read both prior stage output and the original entry-channel JSON request.'],
+            invariants: ['order_id must be preserved from normalize_request.'],
+          },
+        },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'normalize_request', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'normalize_request', to: 'apply_policy', trigger: 'normalized', guard_field: 'normalize_request.ready' },
+        { from: 'apply_policy', to: 'complete', trigger: 'done', guard_field: 'apply_policy.ready' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'apply_policy.ready' }),
+    });
+
+    expect(artifact.smoke_test_ts).toContain('await harness.trigger(JSON.stringify({');
+    expect(artifact.smoke_test_ts).toContain('order_id');
+    expect(artifact.smoke_test_ts).toContain('original_amount_cents');
+    expect(artifact.smoke_test_ts).toContain('refund_requested');
+    expect(artifact.smoke_test_ts).toContain('delivered_days_ago');
+    expect(artifact.smoke_test_ts).toContain('"delivered_days_ago": 14');
+    expect(artifact.smoke_test_ts).not.toContain("await harness.trigger('start generated smoke');");
   });
 
   it('binds matching existing-repo external stages to declared manifest integrations in stored contracts', async () => {
@@ -204,6 +416,65 @@ describe('synthesize_program_spec handler', () => {
     expect(artifact?.handlers_ts).toContain("'repo_integration'");
     expect(artifact?.smoke_test_ts).toContain('repo_integration');
     expect(artifact?.smoke_test_ts).not.toContain('in_memory_mock');
+  });
+
+  it('carries author-provided stage domain specs into stored synthesis context and contracts', async () => {
+    const sessionId = 'session-stage-domain-spec-contract';
+    clearSynthesizedArtifact(sessionId);
+
+    await handlers.synthesize_program_spec({
+      sessionId,
+      domain: domain({
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          {
+            slug: 'calculate_fee',
+            domain_spec: {
+              reads: ['inputs.initial_user_text.plan', 'inputs.initial_user_text.seats'],
+              produces: {
+                result_json: {
+                  stage: 'string',
+                  plan: 'string',
+                  total_fee: 'number',
+                },
+                items_json: 'string[]',
+              },
+              rules: [
+                'Parse the entry-channel JSON request before computing.',
+                'total_fee = per_seat_rate * seats.',
+              ],
+              invariants: [
+                'result_json.stage must equal calculate_fee.',
+                'items_json must include the plan identifier.',
+              ],
+            },
+          },
+          { slug: 'resolved', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'calculate_fee', trigger: 'ready', guard_field: 'intake.started' },
+          { from: 'calculate_fee', to: 'resolved', trigger: 'done', guard_field: 'calculate_fee.ready' },
+        ]),
+        'intake.completion_json': JSON.stringify({
+          final_stage: 'resolved',
+          guard_field: 'calculate_fee.ready',
+        }),
+      }),
+    });
+
+    const artifact = getSynthesizedArtifact(sessionId);
+    expect(artifact?.synthesis_context?.stages[1]).toMatchObject({
+      slug: 'calculate_fee',
+      domain_spec: {
+        reads: ['inputs.initial_user_text.plan', 'inputs.initial_user_text.seats'],
+        rules: expect.arrayContaining(['total_fee = per_seat_rate * seats.']),
+      },
+    });
+    expect(artifact?.contracts_ts).toContain('export interface StageDomainSpec');
+    expect(artifact?.contracts_ts).toContain('domain_spec: StageDomainSpec');
+    expect(artifact?.contracts_ts).toContain('export const stageDomainSpecs');
+    expect(artifact?.contracts_ts).toContain('"calculate_fee"');
+    expect(artifact?.contracts_ts).toContain('total_fee = per_seat_rate * seats.');
   });
 
   it('emits mixed guarded and unguarded transitions and parses them through the engine loader', async () => {

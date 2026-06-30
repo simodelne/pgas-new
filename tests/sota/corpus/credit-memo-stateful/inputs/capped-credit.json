@@ -1,0 +1,15 @@
+{
+  "id": "capped-credit",
+  "prompt": "{\"invoice_id\":\"INV-8841\",\"subtotal_cents\":9000,\"defect_units\":5,\"unit_credit_cents\":2500,\"requested_credit\":true}",
+  "domain": {
+    "invoice_id": "INV-8841",
+    "subtotal_cents": 9000,
+    "defect_units": 5,
+    "unit_credit_cents": 2500,
+    "requested_credit": true
+  },
+  "runtime": {
+    "now_iso": "2026-06-29T08:00:00.000Z",
+    "random": 0.35
+  }
+}

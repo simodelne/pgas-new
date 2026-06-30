@@ -1,0 +1,12 @@
+{
+  "program.slug": "ambiguous-policy-refusal",
+  "program.name": "Ambiguous Policy Refusal",
+  "program.target_dir": "/tmp/pgas-sota-ambiguous-policy-refusal",
+  "program.design_path": "design",
+  "intake.purpose": "Given an under-specified policy mandate, refuse to fabricate an approval decision and surface the missing policy fields.",
+  "intake.entry_channel": "user_text",
+  "intake.stages_json": "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"surface_gap\",\"domain_spec\":{\"reads\":[\"inputs.initial_user_text.request\",\"inputs.initial_user_text.known_policy\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"status\":\"refused\",\"gap_type\":\"string\",\"missing_fields\":\"string[]\",\"next_action\":\"string\"},\"items_json\":\"string[]\"},\"rules\":[\"Parse input.domain[\\\"inputs.initial_user_text\\\"] as JSON.\",\"A policy approval decision requires approval_threshold, authorized_actor, and fallback_queue.\",\"If any required policy field is absent from the request or known_policy, refuse to make an approval decision.\",\"missing_fields must contain exactly the required policy fields that are absent: approval_threshold, authorized_actor, fallback_queue.\",\"status must be refused, gap_type must be under_specified_mandate, and next_action must be request_clarification.\"],\"invariants\":[\"result_json.stage must equal surface_gap.\",\"Do not produce approved, denied, approver, threshold value, or queue assignment fields.\",\"items_json must list missing:<field> entries for each missing policy field.\"]}},{\"slug\":\"refused\",\"is_terminal\":true}]",
+  "intake.transitions_json": "[{\"from\":\"intake\",\"to\":\"surface_gap\",\"trigger\":\"started\",\"guard_field\":\"intake.started\"},{\"from\":\"surface_gap\",\"to\":\"refused\",\"trigger\":\"gap_surfaced\",\"guard_field\":\"surface_gap.ready\"}]",
+  "intake.delegation_json": "{\"enabled\":false}",
+  "intake.completion_json": "{\"final_stage\":\"refused\",\"guard_field\":\"surface_gap.ready\"}"
+}
