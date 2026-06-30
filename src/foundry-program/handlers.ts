@@ -893,7 +893,7 @@ export const handlers: Record<string, ToolHandler> = {
    */
   async git_rebase_latest(payload) {
     const cwd = safeCwd(payload);
-    const targetBranch = stringPayloadField(payload, 'target_branch');
+    const targetBranch = optionalStringPayloadField(payload, 'target_branch') ?? 'main';
     await runCommand('git', ['fetch', 'origin'], cwd, 300_000);
     try {
       await runCommand('git', ['rebase', `origin/${targetBranch}`], cwd, 300_000);
@@ -908,7 +908,7 @@ export const handlers: Record<string, ToolHandler> = {
       }
       throw error;
     }
-    return { kind: 'git_rebase_latest', status: 'success', evidence_id: evidenceId('rebase') };
+    return { kind: 'git_rebase_latest', status: 'passed', evidence_id: evidenceId('rebase') };
   },
 
   /**
@@ -1198,8 +1198,8 @@ function requireAcceptedStageSources(artifact: SynthesizedArtifact): Record<stri
 }
 
 function safeCwd(payload: Record<string, unknown>): string {
-  const cwd = resolve(stringPayloadField(payload, 'cwd'));
   const targetDir = resolve(stringDomainField(domainFromPayload(payload), 'program.target_dir'));
+  const cwd = resolve(optionalStringPayloadField(payload, 'cwd') ?? targetDir);
   if (cwd !== targetDir && !cwd.startsWith(`${targetDir}${sep}`)) {
     throw new Error(`cwd must be inside program.target_dir (${targetDir}); got ${cwd}`);
   }

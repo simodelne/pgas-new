@@ -50,6 +50,17 @@ describe('npm_install', () => {
     expect(spawnMock).toHaveBeenCalledWith('npm', ['install', '--no-audit', '--no-fund'], expect.objectContaining({ cwd: '/tmp/out' }));
   });
 
+  it('defaults command cwd to program.target_dir for live native tool calls', async () => {
+    spawnMock.mockImplementationOnce(() => fakeChild({ stdout: 'installed\n' }));
+
+    await expect(handlers.npm_install(payload({}))).resolves.toMatchObject({
+      kind: 'command_result',
+      command: 'npm install --no-audit --no-fund',
+      status: 'passed',
+    });
+    expect(spawnMock).toHaveBeenCalledWith('npm', ['install', '--no-audit', '--no-fund'], expect.objectContaining({ cwd: '/tmp/out' }));
+  });
+
   it('rejects cwd traversal', async () => {
     await expect(handlers.npm_install(payload({ cwd: '/tmp/other' }))).rejects.toThrow(/cwd must be inside program.target_dir/);
   });
@@ -106,7 +117,20 @@ describe('git_status and git_rebase_latest', () => {
 
     await expect(handlers.git_rebase_latest(payload({ cwd: '/tmp/out', target_branch: 'main' }))).resolves.toMatchObject({
       kind: 'git_rebase_latest',
-      status: 'success',
+      status: 'passed',
+    });
+    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', 'origin/main'], expect.any(Object));
+  });
+
+  it('defaults rebase cwd and target branch for the standalone graduation path', async () => {
+    spawnMock
+      .mockImplementationOnce(() => fakeChild({ stdout: 'fetched\n' }))
+      .mockImplementationOnce(() => fakeChild({ stdout: 'rebased\n' }));
+
+    await expect(handlers.git_rebase_latest(payload({}))).resolves.toMatchObject({
+      kind: 'git_rebase_latest',
+      status: 'passed',
     });
     expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin'], expect.any(Object));
     expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', 'origin/main'], expect.any(Object));
