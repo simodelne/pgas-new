@@ -155,6 +155,73 @@ describe('foundry repo_targeting continuation flow', () => {
     }
   });
 
+  it('blocks curator request after a valid manifest and repairs to existing-repo authorization', async () => {
+    const targetDir = trackedTempRoot('pgas-new-valid-manifest-repair-');
+    mkdirSync(join(targetDir, '.pgas'), { recursive: true });
+    writeFileSync(join(targetDir, '.pgas/wiring.yml'), manifestYaml());
+    const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
+      programName: 'pgas-new',
+      defaultChannel: 'user_text',
+      authorResponses: [
+        effect('record_program_target', {
+          slug: 'incident-triage',
+          name: 'Incident Triage',
+          target_dir: targetDir,
+        }),
+        effect('choose_design_path', { choice: 'default' }),
+        effect('apply_default_skeleton', {}),
+        effect('confirm_design', { approved: true }),
+        effect('select_repo_target', { target_kind: 'existing_repo' }),
+        effect('load_wiring_manifest', { repo_root: targetDir }),
+        effect('create_curator_request', {
+          message: `Creating curator request for incident-triage in existing repo ${targetDir}.`,
+        }),
+        effect('authorize_existing_repo_target', {}),
+        effect('synthesize_program_spec', {}),
+        effect('plan_artifacts', {}),
+      ],
+    });
+
+    try {
+      await harness.trigger('Attach incident triage to this existing repo.');
+      await harness.trigger('Use the default skeleton.');
+      await harness.trigger('Apply the default.');
+      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
+
+      const snapshot = await waitForSnapshot(
+        harness,
+        (candidate) => candidate.mode === 'scaffold_plan' && candidate.domain['artifact_plan.status'] === 'draft',
+        'valid manifest curator-request repair to artifact planning',
+      );
+      const rounds = terminalRounds(snapshot.rounds);
+      const names = rounds.map((round) => round.name);
+
+      expect(names).toEqual(
+        expect.arrayContaining([
+          'load_wiring_manifest',
+          'authorize_existing_repo_target',
+          'synthesize_program_spec',
+          'plan_artifacts',
+        ]),
+      );
+      expect(names).not.toContain('create_curator_request');
+      expect(snapshot.mode).toBe('scaffold_plan');
+      expect(snapshot.domain['repo.write_authorized']).toBe(true);
+      expect(snapshot.domain['repo.wiring_manifest.status']).toBe('valid');
+      expect(snapshot.domain['repo.curator_request_lodged']).not.toBe(true);
+      expect(repairAttempts(snapshot.rounds)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            failedGate: 'GKPrecondition',
+            failedPredicate: expect.objectContaining({ path: 'repo.write_authorized' }),
+          }),
+        ]),
+      );
+    } finally {
+      await harness.close();
+    }
+  });
+
   it('auto-continues standalone target selection into standalone authorization', async () => {
     const harness = await createTestHarness(createPgasNewFoundryProgramEntry(), {
       programName: 'pgas-new',
@@ -241,6 +308,16 @@ function terminalRounds(rounds: unknown[]): Array<{ name: string; proposedMode?:
       proposedMode: typeof proposedMode === 'string' ? proposedMode : undefined,
       trigger: typeof trigger === 'string' ? trigger : undefined,
     }];
+  });
+}
+
+function repairAttempts(rounds: unknown[]): Array<{ failedGate?: string; failedPredicate?: { path?: string } }> {
+  return rounds.flatMap((round) => {
+    if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+    const protocol = (round as { protocol?: unknown }).protocol;
+    if (!protocol || typeof protocol !== 'object' || Array.isArray(protocol)) return [];
+    const attempts = (protocol as { repairAttempts?: unknown }).repairAttempts;
+    return Array.isArray(attempts) ? attempts as Array<{ failedGate?: string; failedPredicate?: { path?: string } }> : [];
   });
 }
 

@@ -116,6 +116,9 @@ modes:
         - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
         - { kind: FieldEquals, path: repo.wiring_manifest.status, value: valid }
         - { kind: FieldEquals, path: repo.wiring_manifest.path, value: .pgas/wiring.yml }
+      create_curator_request:
+        - { kind: FieldEquals, path: repo.target_kind, value: existing_repo }
+        - { kind: FieldFalsy, path: repo.write_authorized }
     transitions:
       - target: architecture_design
         guard: { kind: FieldTruthy, path: repo.write_authorized }
@@ -393,11 +396,17 @@ prompts:
       `.pgas/wiring.yml`, call `load_wiring_manifest` with
       `{ "repo_root": "<program.target_dir>" }`. After it succeeds, call
       `authorize_existing_repo_target`.
+      A valid manifest authorizes the existing-repo path even if its
+      registration strategy is `curator_request`; do not call
+      `create_curator_request` for a valid manifest.
     - If `repo.target_kind` is already `standalone_repo`, call
       `authorize_standalone_target`.
     - If `repo.target_kind` is already `existing_repo`, call
       `load_wiring_manifest` first unless `repo.wiring_manifest.status` is
       already `valid`; then call `authorize_existing_repo_target`.
+    - Call `create_curator_request` only when wiring is missing, invalid, or
+      otherwise blocked. Do not treat the manifest's registration strategy as
+      a reason to create a curator request after validation succeeds.
     - If the target kind or target directory is unclear, ask the user to
       clarify whether this is a standalone repo or an existing-repo attach
       before any write authorization.
@@ -702,6 +711,12 @@ action_map:
     channel: widget_output
   create_curator_request:
     description: "Prepare a repo curator request."
+    arg_descriptions:
+      message: "Additional optional context to include in the curator request body."
+      repo_root: "Optional override for the repository root; normally read from repo.wiring_manifest.repo_root or program.target_dir."
+      slug: "Optional program slug override for the curator request artifact name."
+      title: "Optional curator request title. Defaults from program.name or program.slug."
+      body: "Optional curator request body. Defaults from program identity, repo root, and message."
     mutations: [{ op: MSet, path: repo.curator_request_lodged, value: true }]
     channel: widget_output
   design_architecture:
@@ -957,6 +972,7 @@ guidance:
     - "This mode is mandatory between confirm_design and architecture_design; do not skip it."
     - "If program.target_dir is set and the target is standalone/no .pgas/wiring.yml is known, call authorize_standalone_target. That action sets repo.target_kind='standalone_repo' and repo.write_authorized=true."
     - "If program.target_dir points to an existing repo with .pgas/wiring.yml, call load_wiring_manifest with repo_root=program.target_dir, then call authorize_existing_repo_target after the manifest status is valid."
+    - "A VALID .pgas/wiring.yml routes to authorize_existing_repo_target/proceed even when registration.strategy is curator_request. create_curator_request is only for missing/invalid wiring or an explicit repo blocker."
     - "Only leave repo_targeting after repo.write_authorized is true; the transition to architecture_design is guarded on that field."
   scaffold_plan:
     - "Only call plan_artifacts on system_mode_entry to produce the artifact plan from the synthesized spec in in-process transit after repo.write_authorized and program.synthesis_complete are true and artifact_plan.status is still unset. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."

@@ -933,7 +933,10 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         preconditions?: Record<string, Array<{ kind: string; path: string; value?: unknown; triggerSet?: string[] }>>;
         transitions?: Array<{ target: string; guard?: { kind: string; path: string; value?: unknown } }>;
       }>;
-      action_map: Record<string, { mutations?: Array<{ path: string; value?: unknown; from_arg?: string }> }>;
+      action_map: Record<string, {
+        arg_descriptions?: Record<string, string>;
+        mutations?: Array<{ path: string; value?: unknown; from_arg?: string }>;
+      }>;
       proceed_to: Record<string, string>;
       schema: Record<string, string>;
       control_plane: { controls: Record<string, unknown> };
@@ -973,6 +976,12 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       expect.arrayContaining([
         { kind: 'FieldEquals', path: 'repo.wiring_manifest.status', value: 'valid' },
         { kind: 'FieldEquals', path: 'repo.wiring_manifest.path', value: '.pgas/wiring.yml' },
+      ]),
+    );
+    expect(parsed.modes.repo_targeting.preconditions?.create_curator_request).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldEquals', path: 'repo.target_kind', value: 'existing_repo' },
+        { kind: 'FieldFalsy', path: 'repo.write_authorized' },
       ]),
     );
     expect(parsed.modes.scaffold_plan.preconditions?.approve_artifact_plan).toEqual(
@@ -1043,6 +1052,12 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         expect.objectContaining({ path: 'repo.write_authorized', value: true }),
       ]),
     );
+    expect(parsed.action_map.create_curator_request.arg_descriptions).toMatchObject({
+      message: expect.stringContaining('optional context'),
+      repo_root: expect.stringContaining('Optional override'),
+      title: expect.stringContaining('Optional'),
+      body: expect.stringContaining('Optional'),
+    });
     expect(parsed.action_map.run_static_verification.mutations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ path: 'graduation.static_verification', from_arg: 'status' }),
