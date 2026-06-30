@@ -34,6 +34,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
 export interface RenderExistingRepoOptions extends ProgramIdentity {
   repoRoot: string;
   manifest: WiringManifest;
+  stageSlugs?: string[];
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
@@ -120,7 +121,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
   const plan = createExistingRepoArtifactPlan(
     { slug: options.slug, name: options.name },
     options.manifest,
-    { stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}) },
+    { stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}) },
   );
   assertSupportedTemplate(options.template);
 
@@ -210,6 +211,10 @@ function templateForExistingArtifact(
   if (synthesizedTemplate) {
     return synthesizedTemplate;
   }
+  const existingStageTemplate = templateForExistingStageArtifact(artifact, slug);
+  if (existingStageTemplate) {
+    return existingStageTemplate;
+  }
   const handlerDirectoryTemplate = templateForHandlerDirectoryArtifact(artifact, slug);
   if (handlerDirectoryTemplate) {
     return handlerDirectoryTemplate;
@@ -246,6 +251,16 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
   }
 
   return templateForStandalonePath(artifact.path, slug);
+}
+
+function templateForExistingStageArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
+  const stageMatch = artifact.path.match(new RegExp(`/${slug}/stages/([^/]+)\\.ts$`, 'u'));
+  const stage = stageMatch?.[1];
+  if (artifact.kind !== 'stage' || !stage) {
+    return undefined;
+  }
+
+  return inlineTemplate(renderMinimalStageSource(stage));
 }
 
 function templateForExistingUserFacingArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
@@ -436,6 +451,19 @@ function templateForHandlerDirectoryArtifact(artifact: PlannedArtifact, slug: st
     return spec('program/handlers-resolver.ts.tmpl', []);
   }
   return undefined;
+}
+
+function renderMinimalStageSource(stage: string): string {
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  return {
+    result_json: JSON.stringify({ stage: input.stage, status: ${JSON.stringify(`${stage}_ready`)}, at: runtime.now() }),
+    items_json: JSON.stringify([${JSON.stringify(`${stage}:ready`)}]),
+    digest: '',
+  };
+}
+`;
 }
 
 

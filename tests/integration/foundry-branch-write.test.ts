@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { handlers } from '../../src/foundry-program/handlers.js';
+import type { WiringManifest } from '../../src/pgas-new/wiring-manifest.js';
 
 const stages = [
   { slug: 'intake', is_bootstrap: true },
@@ -26,6 +27,38 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
   };
 }
 `;
+
+const existingRepoManifest: WiringManifest = {
+  schema_version: 1,
+  repo: { kind: 'existing_repo', package_manager: 'npm' },
+  pgas: {
+    server_package: '@simodelne/pgas-server',
+    allowed_imports: [
+      '@simodelne/pgas-server/plugin.js',
+      '@simodelne/pgas-server/create-server.js',
+      '@simodelne/pgas-server/client.js',
+      '@simodelne/pgas-server/channels/index.js',
+      '@simodelne/pgas-server/routes/index.js',
+    ],
+  },
+  paths: {
+    programs_dir: 'programs',
+    audit_dir: 'audit',
+    pgas_new_dir: '.pgas/pgas-new',
+  },
+  registration: { strategy: 'curator_request' },
+  verification: {
+    commands: {
+      install: 'npm install --no-audit --no-fund',
+      typecheck: 'npm run build',
+      test: 'npm test',
+    },
+  },
+  curator: {
+    github_owner: 'simodelne',
+    github_repo: 'fee-proposal',
+  },
+};
 
 describe('foundry branch_write', () => {
   it('writes the synthesized standalone scaffold to disk', { timeout: 120_000 }, async () => {
@@ -139,6 +172,77 @@ describe('foundry branch_write', () => {
     }
   });
 
+  it('writes every planned existing-repo stage artifact from the approved plan', { timeout: 120_000 }, async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-existing-branch-write-'));
+    const stageList = [
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'scope_definition' },
+      { slug: 'draft_assembly' },
+      { slug: 'partner_review' },
+      { slug: 'complete', is_terminal: true },
+      { slug: 'blocked', is_terminal: true },
+    ];
+    const domain = {
+      'program.slug': 'fee-proposal-drafter',
+      'program.name': 'Fee Proposal Drafter',
+      'program.target_dir': targetDir,
+      'intake.purpose': 'Draft fee proposals through scoped assembly and partner review.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify(stageList),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'scope_definition', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'scope_definition', to: 'draft_assembly', trigger: 'scoped', guard_field: 'scope_definition.ready' },
+        { from: 'draft_assembly', to: 'partner_review', trigger: 'drafted', guard_field: 'draft_assembly.ready' },
+        { from: 'partner_review', to: 'complete', trigger: 'approved', guard_field: 'partner_review.approved' },
+        { from: 'scope_definition', to: 'blocked', trigger: 'blocked', guard_field: 'scope_definition.blocked' },
+      ]),
+      'intake.delegation_json': JSON.stringify({}),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'partner_review.done' }),
+      'repo.target_kind': 'existing_repo',
+      'repo.wiring_manifest_json': JSON.stringify(existingRepoManifest),
+    };
+
+    try {
+      await handlers.synthesize_program_spec({ sessionId: 'existing-branch-write-session', domain });
+      const planned = await handlers.plan_artifacts({ sessionId: 'existing-branch-write-session', domain }) as Array<{ path: string; kind: string }>;
+      (domain as Record<string, unknown>)['artifact_plan.artifacts'] = planned;
+      const plannedPaths = planned.map((artifact) => artifact.path);
+      const plannedStagePaths = planned
+        .filter((artifact) => artifact.kind === 'stage')
+        .map((artifact) => artifact.path);
+
+      await handlers.synthesize_domain_logic({
+        sessionId: 'existing-branch-write-session',
+        domain,
+        cache_dir: join(targetDir, '.domain-synthesis-cache'),
+        __domain_synthesis_generator: async (request: { stage: string }) => stageBodyFor(request.stage),
+      });
+
+      const result = await handlers.write_scaffold_artifacts({ sessionId: 'existing-branch-write-session', domain }) as {
+        generated_paths: string[];
+      };
+      const writtenPaths = result.generated_paths;
+
+      expect(plannedStagePaths).toEqual([
+        'programs/fee-proposal-drafter/stages/intake.ts',
+        'programs/fee-proposal-drafter/stages/scope_definition.ts',
+        'programs/fee-proposal-drafter/stages/draft_assembly.ts',
+        'programs/fee-proposal-drafter/stages/partner_review.ts',
+        'programs/fee-proposal-drafter/stages/complete.ts',
+        'programs/fee-proposal-drafter/stages/blocked.ts',
+      ]);
+      expect(writtenPaths).toEqual(plannedPaths);
+      expect(plannedPaths.filter((path) => !writtenPaths.includes(path))).toEqual([]);
+
+      for (const path of plannedStagePaths) {
+        expect(existsSync(join(targetDir, path)), `${path} should be written`).toBe(true);
+        expect(readFileSync(join(targetDir, path), 'utf8')).toContain('runStage');
+      }
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails clearly when branch_write transit state is missing', async () => {
     await expect(
       handlers.write_scaffold_artifacts({
@@ -152,3 +256,16 @@ describe('foundry branch_write', () => {
     ).rejects.toThrow(/synthesized spec not in transit for session missing-branch-write-session; re-run synthesize_program_spec/);
   });
 });
+
+function stageBodyFor(stage: string): string {
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  return {
+    result_json: JSON.stringify({ stage: input.stage, status: ${JSON.stringify(`${stage}-ready`)}, at: runtime.now() }),
+    items_json: JSON.stringify([${JSON.stringify(`${stage}:ready`)}]),
+    digest: '',
+  };
+}
+`;
+}
