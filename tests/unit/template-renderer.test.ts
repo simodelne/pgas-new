@@ -362,6 +362,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       action_map: Record<string, {
         description: string;
         channel: string;
+        result_path?: string;
         arg_descriptions?: Record<string, string>;
         mutations: Array<{ op: string; path: string; from_arg?: string; value?: unknown }>;
       }>;
@@ -391,6 +392,7 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(foundryRegistration).toContain('registerPgasNewTools');
     expect(foundryRegistration).toContain('reactionHandlers');
     expect(foundryTools).toContain("'record_q1_purpose'");
+    expect(foundryTools).toContain("'revise_artifact_plan'");
 
     expect(parsed.modes.intake_intelligence.vocabulary).toEqual(
       expect.arrayContaining([
@@ -419,6 +421,9 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(parsed.modes.architecture_design.transitions).toEqual([
       { target: 'scaffold_plan', guard: { kind: 'FieldTruthy', path: 'program.synthesis_complete' } },
     ]);
+    expect(parsed.modes.scaffold_plan.vocabulary).toEqual(
+      expect.arrayContaining(['approve_artifact_plan', 'revise_artifact_plan', 'plan_artifacts']),
+    );
     expect(parsed.modes.intake_intelligence.channels).toEqual(expect.arrayContaining(['user_confirmation']));
     expect(parsed.modes.intake_intelligence.transitions).toEqual(
       expect.arrayContaining([
@@ -615,6 +620,24 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
         { kind: 'TriggerType', triggerSet: ['system_mode_entry'] },
       ]),
     );
+    expect(parsed.modes.scaffold_plan.preconditions?.revise_artifact_plan).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'repo.write_authorized' },
+        { kind: 'FieldTruthy', path: 'program.synthesis_complete' },
+        { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'draft' },
+        { kind: 'TriggerType', triggerSet: ['user_confirmation'] },
+        { kind: 'FieldEquals', path: 'inputs.user_decision.decision', value: 'reject' },
+      ]),
+    );
+    expect(parsed.action_map.revise_artifact_plan).toMatchObject({
+      channel: 'artifact_plan_output',
+      result_path: 'artifact_plan.artifacts',
+    });
+    expect(parsed.action_map.revise_artifact_plan.mutations).toEqual([
+      { op: 'MSet', path: 'artifact_plan.status', value: 'draft' },
+      { op: 'MSet', path: 'artifact_plan.approved', value: false },
+      { op: 'MSet', path: 'artifact_plan.write_authorized', value: false },
+    ]);
     expect(parsed.modes.domain_synthesis.preconditions?.synthesize_domain_logic).toEqual(
       expect.arrayContaining([
         { kind: 'FieldEquals', path: 'artifact_plan.status', value: 'approved' },
@@ -710,6 +733,8 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     );
     expect(parsed.guidance.scaffold_plan.join('\n')).toContain('synthesized spec in in-process transit');
     expect(parsed.guidance.scaffold_plan.join('\n')).toContain('call synthesize_program_spec again');
+    expect(parsed.guidance.scaffold_plan.join('\n')).toContain('decision=reject');
+    expect(parsed.guidance.scaffold_plan.join('\n')).toContain('revise_artifact_plan');
     expect(parsed.guidance.domain_synthesis.join('\n')).toContain('synthesize_domain_logic');
     expect(parsed.guidance.repo_targeting.join('\n')).toContain('mandatory between confirm_design and architecture_design');
     expect(parsed.guidance.repo_targeting.join('\n')).toContain('call authorize_standalone_target');

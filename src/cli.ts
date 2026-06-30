@@ -784,6 +784,8 @@ function helpText(): string {
     '  render-attach --repo <repo> --slug <slug> --name <name> [--template pgas-new-foundry] [--mandate <text>]',
     '  curator-request --repo <repo> --slug <slug> --name <name> [--github-owner <owner> --github-repo <repo>]',
     '  session new|abort|status|history|resume|help',
+    '',
+    'REPL paste: terminal bracketed paste is buffered and submitted as one user turn.',
   ].join('\n');
 }
 

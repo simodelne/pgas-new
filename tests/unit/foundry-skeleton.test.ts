@@ -102,13 +102,14 @@ describe('foundry generic program skeleton engine loader', () => {
 });
 
 describe('foundry scaffold_plan tool ordering', () => {
-  it('offers approve_artifact_plan before plan_artifacts to bias /approve tool selection', () => {
+  it('offers approve and reject controls before the one-shot auto-plan action', () => {
     const spec = load(readFileSync(FOUNDRY_SPEC, 'utf8')) as {
       modes: Record<string, { vocabulary?: string[] }>;
     };
 
-    expect(spec.modes.scaffold_plan.vocabulary?.slice(0, 2)).toEqual([
+    expect(spec.modes.scaffold_plan.vocabulary?.slice(0, 3)).toEqual([
       'approve_artifact_plan',
+      'revise_artifact_plan',
       'plan_artifacts',
     ]);
   });

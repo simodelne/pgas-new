@@ -7,6 +7,7 @@ import { renderMissingWiringRequest } from '../pgas-new/curator-request.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import {
   WIRING_MANIFEST_PATH,
+  isSafeRepoRelativePath,
   loadWiringManifest as readWiringManifest,
   type WiringManifest,
 } from '../pgas-new/wiring-manifest.js';
@@ -701,23 +702,11 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   async plan_artifacts(payload) {
-    const sessionId = sessionIdFromPayload(payload);
-    const domain = domainFromPayload(payload);
-    const synthesized = requireSynthesizedArtifact(sessionId);
-    const program = {
-      slug: stringDomainField(domain, 'program.slug'),
-      name: stringDomainField(domain, 'program.name'),
-    };
-    const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
-    const plan = targetKind === 'existing_repo'
-      ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain), {
-          stageSlugs: synthesized.body_stage_slugs,
-        })
-      : createStandaloneArtifactPlan(program, {
-          stageSlugs: synthesized.body_stage_slugs,
-        });
+    return planArtifactsFromPayload(payload);
+  },
 
-    return plan.artifacts;
+  async revise_artifact_plan(payload) {
+    return planArtifactsFromPayload(payload);
   },
 
   async approve_artifact_plan(payload) {
@@ -1107,6 +1096,94 @@ function stringDomainField(domain: Record<string, unknown>, path: string): strin
 function optionalStringDomainField(domain: Record<string, unknown>, path: string): string | undefined {
   const value = domainValue(domain, path);
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function planArtifactsFromPayload(payload: Record<string, unknown>) {
+  const sessionId = sessionIdFromPayload(payload);
+  const domain = domainFromPayload(payload);
+  const synthesized = requireSynthesizedArtifact(sessionId);
+  const program = {
+    slug: stringDomainField(domain, 'program.slug'),
+    name: stringDomainField(domain, 'program.name'),
+  };
+  const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
+  const plan = targetKind === 'existing_repo'
+    ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain), {
+        stageSlugs: existingRepoStageSlugs(synthesized),
+        requestedArtifactPaths: requestedArtifactPathsFromDomain(domain),
+      })
+    : createStandaloneArtifactPlan(program, {
+        stageSlugs: synthesized.body_stage_slugs,
+      });
+
+  return plan.artifacts;
+}
+
+function existingRepoStageSlugs(synthesized: SynthesizedArtifact): string[] {
+  const contextStages = synthesized.synthesis_context?.stages.map((stage) => stage.slug).filter((stage) => stage.length > 0);
+  if (contextStages && contextStages.length > 0) {
+    return contextStages;
+  }
+  if (synthesized.mode_names.length > 0) {
+    return synthesized.mode_names;
+  }
+  return synthesized.body_stage_slugs;
+}
+
+function requestedArtifactPathsFromDomain(domain: Record<string, unknown>): string[] {
+  return uniqueStrings(stringsFromDomain(domain).flatMap(extractRequestedArtifactPaths));
+}
+
+function stringsFromDomain(domain: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  for (const path of [
+    'inputs.user_decision.instruction',
+    'inputs.user_text',
+    'intake.purpose',
+  ]) {
+    const value = optionalStringDomainField(domain, path);
+    if (value) values.push(value);
+  }
+  collectStrings(domainValue(domain, 'notebook.entries'), values);
+  collectStrings(domainValue(domain, 'notebook.pins'), values);
+  return values;
+}
+
+function collectStrings(value: unknown, out: string[]): void {
+  if (typeof value === 'string') {
+    out.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectStrings(item, out);
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      collectStrings(item, out);
+    }
+  }
+}
+
+function extractRequestedArtifactPaths(text: string): string[] {
+  const paths: string[] = [];
+  const artifactPathPattern = /(?:^|[\s`'"])([A-Za-z0-9._/-]+\.(?:ts|tsx|yml|yaml|json|md|html|docx))(?:[\s.,;:)\]'"`]|$)/gu;
+  for (const match of text.matchAll(artifactPathPattern)) {
+    const path = match[1];
+    if (path && isSafeRepoRelativePath(path)) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
 }
 
 function parseWiringManifestDomainField(domain: Record<string, unknown>): WiringManifest {

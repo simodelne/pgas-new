@@ -44,6 +44,10 @@ describe('pgas-new CLI', () => {
       exitCode: 0,
       stdout: expect.stringContaining('render-standalone'),
     });
+    await expect(runCli(['help'])).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: expect.stringContaining('bracketed paste'),
+    });
   });
 
   it('prints version contract information', async () => {

@@ -54,6 +54,56 @@ describe('REPL controls', () => {
     }
   });
 
+  it('routes scaffold_plan /reject through revise_artifact_plan with the rejection instruction', async () => {
+    const fake = createFakePgasFetch({
+      sessionEnvelope: {
+        sessionId: 'session-1',
+        program: 'pgas-new',
+        status: 'Running',
+        state: {
+          mode: 'scaffold_plan',
+          running: false,
+          currentRoundNumber: 12,
+          rounds: Array.from({ length: 12 }, (_, index) => ({ number: index })),
+        },
+      },
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write('start session\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
+      await stdout.waitFor('ready');
+      stdin.write('/status\n');
+      await stdout.waitFor('mode: scaffold_plan');
+
+      stdin.write('/reject include frontend projection and QC coverage\n');
+      const control = await fake.waitForRequest('/controls/pgas-new/revise_artifact_plan');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result.exitCode).toBe(0);
+      expect(control).toMatchObject({
+        method: 'POST',
+        path: '/controls/pgas-new/revise_artifact_plan',
+        body: {
+          sessionId: 'session-1',
+          channel: 'http',
+          args: { instruction: 'include frontend projection and QC coverage' },
+        },
+      });
+      expect(fake.requests.some((request) => request.path.includes('/reject_design_and_revise_'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('rejects /reject controls that do not name a Q1-Q6 revision target', async () => {
     const fake = createFakePgasFetch();
     vi.stubGlobal('fetch', fake.fetch);
@@ -528,6 +578,9 @@ function createFakePgasFetch(options: {
       return json({ ok: true });
     }
     if (request.method === 'POST' && url.pathname === '/controls/pgas-new/approve_artifact_plan') {
+      return json({ ok: true, sessionId: 'session-1' });
+    }
+    if (request.method === 'POST' && url.pathname === '/controls/pgas-new/revise_artifact_plan') {
       return json({ ok: true, sessionId: 'session-1' });
     }
     if (request.method === 'POST' && url.pathname.startsWith('/controls/pgas-new/reject_design_and_revise_q')) {

@@ -2,7 +2,7 @@ import type { Writable } from 'node:stream';
 import type { ActionResult } from './types.js';
 
 export const REPL_CONTROL_HINT =
-  '/approve  /reject  /abort  /new  /status  /history  /resume  /help  /exit';
+  '/approve  /reject  /abort  /new  /status  /history  /resume  /help  /exit  · bracketed paste submits one turn';
 
 export interface ReplRenderer {
   renderAction(result: ActionResult): void;
@@ -56,7 +56,7 @@ export function createReplRenderer(stdout: Writable, options: { tty?: boolean } 
     renderBanner(displayName: string, version: string): void {
       const title = `${displayName.toUpperCase()}`;
       const subtitle = `PGAS REPL · program design foundry · v${version}`;
-      const hint = colors.dim('type a message to start · /help for commands · /exit to quit');
+      const hint = colors.dim('type a message to start · bracketed paste = one turn · /help for commands · /exit to quit');
       writeln('');
       writeln(`  ${colors.bold(colors.cyan(title))}  ${colors.dim('—')}  ${subtitle}`);
       writeln(`  ${hint}`);

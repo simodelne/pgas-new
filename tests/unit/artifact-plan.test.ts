@@ -80,14 +80,48 @@ describe('artifact planner', () => {
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       'programs/review/specs.yml',
       'programs/review/registration.ts',
+      'programs/review/projection.ts',
+      'programs/review/frontend.spec.yml',
+      'programs/review/export/html.ts',
+      'programs/review/export/docx.ts',
       'programs/review/handlers.ts',
       'programs/review/handlers/index.ts',
       'programs/review/handlers/_resolver.ts',
       'programs/review/tools.ts',
+      'tests/review-deterministic.test.ts',
+      'qc/e2e-frontend/review.scenario.yml',
+      'qc/facts/review.facts.yml',
+      'qc/e2e-coverage.yml',
       '.pgas/pgas-new/review/dossier.yml',
       '.pgas/pgas-new/review/artifacts.json',
       'audit/PGAS-NEW-review.md',
     ]);
+  });
+
+  it('includes SimoneOS user-facing and requested stage artifacts for existing repos', () => {
+    const plan = createExistingRepoArtifactPlan({ slug: 'minutes-drafter', name: 'Minutes Drafter' }, MANIFEST, {
+      stageSlugs: ['transcript_review', 'section_drafting', 'final_review', 'complete', 'blocked'],
+    });
+
+    const paths = plan.artifacts.map((artifact) => artifact.path);
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'programs/minutes-drafter/projection.ts',
+        'programs/minutes-drafter/frontend.spec.yml',
+        'programs/minutes-drafter/stages/transcript_review.ts',
+        'programs/minutes-drafter/stages/section_drafting.ts',
+        'programs/minutes-drafter/stages/final_review.ts',
+        'programs/minutes-drafter/stages/complete.ts',
+        'programs/minutes-drafter/stages/blocked.ts',
+        'programs/minutes-drafter/export/html.ts',
+        'programs/minutes-drafter/export/docx.ts',
+        'tests/minutes-drafter-deterministic.test.ts',
+        'qc/e2e-frontend/minutes-drafter.scenario.yml',
+        'qc/facts/minutes-drafter.facts.yml',
+        'qc/e2e-coverage.yml',
+        'audit/PGAS-NEW-minutes-drafter.md',
+      ]),
+    );
   });
 
   it('rejects unsafe manifest paths before planning writes', () => {
@@ -140,12 +174,12 @@ describe('artifact planner', () => {
   });
 
   it('does not plan frontend, auth, database, or external-service implementations', () => {
-    const allPaths = [
-      ...createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' }).artifacts.map((artifact) => artifact.path),
-      ...createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST).artifacts.map((artifact) => artifact.path),
-    ];
+    const standalonePaths = createStandaloneArtifactPlan({ slug: 'pgas-new', name: 'PGAS New' }).artifacts.map((artifact) => artifact.path);
+    const existingPaths = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST).artifacts.map((artifact) => artifact.path);
 
-    expect(allPaths.some((path) => path.includes('frontend'))).toBe(false);
+    expect(standalonePaths.some((path) => path.includes('frontend'))).toBe(false);
+    expect(existingPaths.some((path) => path.includes('frontend'))).toBe(true);
+    const allPaths = [...standalonePaths, ...existingPaths];
     expect(allPaths.some((path) => path.includes('/auth/') || path.startsWith('auth/'))).toBe(false);
     expect(allPaths.some((path) => path.includes('/db/') || path.startsWith('db/'))).toBe(false);
     expect(allPaths.some((path) => path.includes('external-service'))).toBe(false);
