@@ -1030,6 +1030,19 @@ function smokeInitialTriggerExpression(stages: Stage[], entryChannel: string): s
   }
 
   if (Object.keys(request).length === 0) {
+    if (entryChannel === 'frontend_intake') {
+      return `JSON.stringify(${JSON.stringify({
+        client_name: 'Acme Holdings',
+        matter_or_service_type: 'Professional services engagement',
+        jurisdiction: 'New York',
+        complexity_tier: 'standard',
+        target_deadline: '2026-07-15',
+        constraints: ['board-ready proposal', 'transparent assumptions'],
+        budget_signal: 'value-conscious',
+        currency: 'USD',
+        fee_structure: 'fixed',
+      }, null, 2)})`;
+    }
     return tsString('start generated smoke');
   }
   return `JSON.stringify(${JSON.stringify(request, null, 2)})`;
@@ -1124,6 +1137,13 @@ function safeIdentifier(value: string): string {
 }
 
 function normalizePgasChannelId(value: string): string {
+  const lowered = value.trim().toLowerCase();
+  if (/\bfrontend_intake\b/u.test(lowered) || /\bfrontend\b[\s\S]*\bstructured\s+intake\b/u.test(lowered)) {
+    return 'frontend_intake';
+  }
+  if (/\buser_text\b/u.test(lowered)) {
+    return 'user_text';
+  }
   const slug = value
     .trim()
     .toLowerCase()
