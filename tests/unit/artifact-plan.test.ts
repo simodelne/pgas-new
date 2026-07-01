@@ -89,6 +89,7 @@ describe('artifact planner', () => {
       'programs/review/handlers/_resolver.ts',
       'programs/review/tools.ts',
       'tests/review-deterministic.test.ts',
+      'tests/live-provider.test.ts',
       'qc/e2e-frontend/review.scenario.yml',
       'qc/facts/review.facts.yml',
       'qc/e2e-coverage.yml',
@@ -131,6 +132,28 @@ describe('artifact planner', () => {
         'audit/PGAS-NEW-minutes-drafter.md',
       ]),
     );
+  });
+
+  it('plans generated smoke verification for existing-repo programs with stages', () => {
+    const plan = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST, {
+      stageSlugs: ['triage'],
+    });
+
+    expect(plan.artifacts.find((artifact) => artifact.path === 'tests/generated-program-smoke.test.ts')).toMatchObject({
+      kind: 'test',
+      mode_introduced: 'smoke_verify',
+      verification: expect.arrayContaining(['smoke_verify', 'npm-test']),
+    });
+  });
+
+  it('plans live-provider verification for existing-repo graduation', () => {
+    const plan = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST);
+
+    expect(plan.artifacts.find((artifact) => artifact.path === 'tests/live-provider.test.ts')).toMatchObject({
+      kind: 'test',
+      mode_introduced: 'live_verify',
+      verification: ['live-provider'],
+    });
   });
 
   it('rejects unsafe manifest paths before planning writes', () => {

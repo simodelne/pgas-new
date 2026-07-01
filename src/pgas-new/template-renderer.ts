@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import {
@@ -118,11 +118,14 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
 }
 
 export function renderExistingRepoAttachment(options: RenderExistingRepoOptions): RenderResult {
-  const synthesizedSources = synthesizedSourcesFor(options);
+  const synthesizedSources = existingRepoSynthesizedSources(options, synthesizedSourcesFor(options));
   const plan = createExistingRepoArtifactPlan(
     { slug: options.slug, name: options.name },
     options.manifest,
-    { stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}) },
+    {
+      stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}),
+      includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
+    },
   );
   assertSupportedTemplate(options.template);
 
@@ -134,6 +137,39 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
     templateForArtifact: (artifact) => templateForExistingArtifact(artifact, options.slug, synthesizedSources),
     tokens: tokensFor(options, plan),
   });
+}
+
+function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sources: SynthesizedSources): SynthesizedSources {
+  if (!sources.smokeTestTs) {
+    return sources;
+  }
+
+  return {
+    ...sources,
+    smokeTestTs: rewriteSmokeTestRegistrationImport(
+      sources.smokeTestTs,
+      options.slug,
+      existingRepoProgramRegistrationImport(options.manifest, options.slug),
+    ),
+  };
+}
+
+function existingRepoProgramRegistrationImport(manifest: WiringManifest, slug: string): string {
+  const programsDir = trimRepoRelativePath(manifest.paths.programs_dir);
+  const registrationPath = posix.join(programsDir, slug, 'registration.js');
+  let relativePath = posix.relative('tests', registrationPath);
+  if (!relativePath.startsWith('.')) {
+    relativePath = `./${relativePath}`;
+  }
+  return relativePath;
+}
+
+function rewriteSmokeTestRegistrationImport(source: string, slug: string, registrationImportPath: string): string {
+  const standaloneImportPath = `../src/programs/${slug}/registration.js`;
+  if (!source.includes(standaloneImportPath)) {
+    throw new Error(`generated smoke test missing standalone registration import: ${standaloneImportPath}`);
+  }
+  return source.replaceAll(standaloneImportPath, registrationImportPath);
 }
 
 function assertNoExistingArtifacts(rootDir: string, plan: ArtifactPlan): void {
@@ -627,6 +663,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stripOneTrailingNewline(value: string): string {
   return value.endsWith('\n') ? value.slice(0, -1) : value;
+}
+
+function trimRepoRelativePath(path: string): string {
+  return path.replace(/^\/+|\/+$/g, '');
 }
 
 function ensureTrailingNewline(value: string): string {

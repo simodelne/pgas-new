@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
@@ -156,6 +156,51 @@ describe('template renderer', () => {
       expect(readFileSync(join(outDir, 'tests/generated-program-smoke.test.ts'), 'utf8')).toContain('generated program smoke');
     } finally {
       rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders existing-repo smoke tests with a manifest-relative registration import', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-smoke-'));
+    const manifest: WiringManifest = {
+      ...VALID_MANIFEST,
+      paths: {
+        ...VALID_MANIFEST.paths,
+        programs_dir: 'packages/simone/programs',
+      },
+    };
+    try {
+      const result = renderExistingRepoAttachment({
+        repoRoot,
+        manifest,
+        slug: 'audit-trail',
+        name: 'Audit Trail',
+        stageSlugs: ['triage'],
+        synthesizedSpecYaml: 'name: audit-trail\n',
+        synthesizedContractsTs: 'export const contractSentinel = true;\n',
+        synthesizedHandlersTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedHandlersIndexTs: 'export const handlers = { sentinel: true };\n',
+        synthesizedStageSources: {
+          triage: 'export async function runStage() { return { result_json: "{}", items_json: "[]" }; }\n',
+        },
+        synthesizedToolsTs: 'export const stageActionTools = {};\n',
+        synthesizedSmokeTestTs: [
+          "import { describe } from 'vitest';",
+          "import { createAuditTrailProgramEntry } from '../src/programs/audit-trail/registration.js';",
+          "describe('generated program smoke', () => {});",
+          '',
+        ].join('\n'),
+      });
+
+      const smokeTestPath = join(repoRoot, 'tests/generated-program-smoke.test.ts');
+      const smokeTest = readFileSync(smokeTestPath, 'utf8');
+      const registrationImport = smokeTest.match(/from '([^']+\/registration\.js)'/)?.[1];
+
+      expect(result.written).toContain('tests/generated-program-smoke.test.ts');
+      expect(registrationImport).toBe('../packages/simone/programs/audit-trail/registration.js');
+      expect(smokeTest).not.toContain('../src/programs/audit-trail/registration.js');
+      expect(existsSync(join(repoRoot, 'tests', registrationImport!.replace(/\.js$/u, '.ts')))).toBe(true);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
     }
   });
 
