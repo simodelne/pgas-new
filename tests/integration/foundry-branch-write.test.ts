@@ -247,6 +247,8 @@ describe('foundry branch_write', () => {
         'programs/fee-proposal-drafter/stages/complete.ts',
         'programs/fee-proposal-drafter/stages/blocked.ts',
       ]);
+      expect(plannedPaths).toContain('tests/generated-program-smoke.test.ts');
+      expect(plannedPaths).toContain('tests/live-provider.test.ts');
       expect(writtenPaths).toEqual(plannedPaths);
       expect(plannedPaths.filter((path) => !writtenPaths.includes(path))).toEqual([]);
 
@@ -254,6 +256,15 @@ describe('foundry branch_write', () => {
         expect(existsSync(join(targetDir, path)), `${path} should be written`).toBe(true);
         expect(readFileSync(join(targetDir, path), 'utf8')).toContain('runStage');
       }
+
+      const smokeTestPath = join(targetDir, 'tests/generated-program-smoke.test.ts');
+      const smokeTest = readFileSync(smokeTestPath, 'utf8');
+      expect(smokeTest).toContain("from '../programs/fee-proposal-drafter/registration.js'");
+      expect(smokeTest).not.toContain('../src/programs/fee-proposal-drafter/registration.js');
+      expect(existsSync(join(targetDir, 'programs/fee-proposal-drafter/registration.ts'))).toBe(true);
+      expect(readFileSync(join(targetDir, 'tests/live-provider.test.ts'), 'utf8')).toContain(
+        'fee-proposal-drafter live-provider graduation',
+      );
 
       const coverage = load(readFileSync(coveragePath, 'utf8')) as {
         user_facing_programs: string[];

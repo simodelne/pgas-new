@@ -203,6 +203,15 @@ export function createExistingRepoArtifactPlan(
       'npm-test',
       'program-deterministic',
     ]),
+    ...(stageSlugs.length > 0 || options.includeSmokeTest === true
+      ? [artifact('test', 'tests/generated-program-smoke.test.ts', 'Verify synthesized stage bodies run through the deterministic smoke path without stub output.', 'smoke_verify', [
+          'smoke_verify',
+          'npm-test',
+        ])]
+      : []),
+    artifact('test', 'tests/live-provider.test.ts', 'Define the real-provider graduation gate through the attached repository external API.', 'live_verify', [
+      'live-provider',
+    ]),
     artifact('qc', `qc/e2e-frontend/${slug}.scenario.yml`, 'Exercise the user-facing frontend projection through the repo QC scenario harness.', 'static_verify', [
       'qc-e2e-frontend',
     ]),
