@@ -1072,7 +1072,7 @@ function actionsForCompletionPath(actions: TransitionAction[], finalStage: strin
   const seen = new Set<string>();
   while (current && current !== finalStage && !seen.has(current)) {
     seen.add(current);
-    const next = (bySource.get(current) ?? []).find((action) => reachesFinalStage(action.target, finalStage, bySource, new Set()));
+    const next = (bySource.get(current) ?? []).find((action) => reachesFinalStage(action.target, finalStage, bySource, new Set(seen)));
     if (!next) break;
     path.push(next);
     current = next.target;
@@ -1093,7 +1093,7 @@ function reachesFinalStage(
     return false;
   }
   seen.add(mode);
-  return (bySource.get(mode) ?? []).some((action) => reachesFinalStage(action.target, finalStage, bySource, seen));
+  return (bySource.get(mode) ?? []).some((action) => reachesFinalStage(action.target, finalStage, bySource, new Set(seen)));
 }
 
 function safeIdentifier(value: string): string {
