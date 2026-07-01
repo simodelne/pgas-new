@@ -246,7 +246,7 @@ export function createExistingRepoArtifactPlan(
     },
     artifacts: uniqueArtifacts([
       ...coreArtifacts,
-      ...requestedArtifacts(options.requestedArtifactPaths ?? [], coreArtifacts),
+      ...requestedArtifacts(options.requestedArtifactPaths ?? [], coreArtifacts, programPath),
     ]),
   };
 }
@@ -307,9 +307,9 @@ function artifact(
   };
 }
 
-function requestedArtifacts(paths: string[], existingArtifacts: PlannedArtifact[]): PlannedArtifact[] {
+function requestedArtifacts(paths: string[], existingArtifacts: PlannedArtifact[], programPath: string): PlannedArtifact[] {
   const existingPaths = new Set(existingArtifacts.map((artifact) => artifact.path));
-  return safeRequestedArtifactPaths(paths)
+  return safeRequestedArtifactPaths(paths, programPath)
     .filter((path) => !existingPaths.has(path))
     .map((path) =>
       artifact(
@@ -322,11 +322,12 @@ function requestedArtifacts(paths: string[], existingArtifacts: PlannedArtifact[
     );
 }
 
-function safeRequestedArtifactPaths(paths: string[]): string[] {
+function safeRequestedArtifactPaths(paths: string[], programPath: string): string[] {
   const seen = new Set<string>();
   const safePaths: string[] = [];
   for (const rawPath of paths) {
-    const path = trimSlashes(rawPath.trim());
+    const path = reconcileExistingRepoRequestedPath(trimSlashes(rawPath.trim()), programPath);
+    if (!path) continue;
     if (path.length === 0) continue;
     if (!isSafeRepoRelativePath(path)) {
       throw new Error(`requested artifact path must be a safe repo-relative path: ${rawPath}`);
@@ -336,6 +337,29 @@ function safeRequestedArtifactPaths(paths: string[]): string[] {
     safePaths.push(path);
   }
   return safePaths;
+}
+
+function reconcileExistingRepoRequestedPath(path: string, programPath: string): string | undefined {
+  if (path === FIXED_WIRING_MANIFEST_PATH) {
+    return undefined;
+  }
+  if (isProgramRelativeArtifactPath(path)) {
+    return `${programPath}/${path}`;
+  }
+  return path;
+}
+
+function isProgramRelativeArtifactPath(path: string): boolean {
+  return path === 'projection.ts'
+    || path === 'frontend.spec.yml'
+    || path === 'specs.yml'
+    || path === 'registration.ts'
+    || path === 'contracts.ts'
+    || path === 'handlers.ts'
+    || path === 'tools.ts'
+    || /^export\/[^/]+\.ts$/u.test(path)
+    || /^stages\/[^/]+\.ts$/u.test(path)
+    || /^handlers\/[^/]+\.ts$/u.test(path);
 }
 
 function uniqueArtifacts(artifacts: PlannedArtifact[]): PlannedArtifact[] {
@@ -354,6 +378,11 @@ function kindForRequestedArtifact(path: string): ArtifactKind {
   if (path.startsWith('qc/')) return 'qc';
   if (path.startsWith('tests/')) return 'test';
   if (path.includes('/stages/')) return 'stage';
+  if (path.endsWith('/contracts.ts')) return 'contract';
+  if (path.endsWith('/handlers.ts') || path.includes('/handlers/')) return 'handler';
+  if (path.endsWith('/tools.ts')) return 'tool';
+  if (path.endsWith('/specs.yml')) return 'spec';
+  if (path.endsWith('/registration.ts')) return 'registration';
   if (path.startsWith('audit/')) return 'audit';
   return 'metadata';
 }

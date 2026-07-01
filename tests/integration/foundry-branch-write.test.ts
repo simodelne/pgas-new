@@ -189,6 +189,10 @@ describe('foundry branch_write', () => {
       'program.target_dir': targetDir,
       'intake.purpose': 'Draft fee proposals through scoped assembly and partner review.',
       'intake.entry_channel': 'user_text',
+      'inputs.user_decision.instruction': [
+        'Preserve projection.ts, frontend.spec.yml, export/html.ts, export/docx.ts, specs.yml, contracts.ts.',
+        'Also preserve stages/scope_definition.ts, handlers.ts, handlers/index.ts, handlers/_resolver.ts, tools.ts, and .pgas/wiring.yml.',
+      ].join(' '),
       'intake.stages_json': JSON.stringify(stageList),
       'intake.transitions_json': JSON.stringify([
         { from: 'intake', to: 'scope_definition', trigger: 'started', guard_field: 'intake.started' },
@@ -249,6 +253,21 @@ describe('foundry branch_write', () => {
       ]);
       expect(plannedPaths).toContain('tests/generated-program-smoke.test.ts');
       expect(plannedPaths).toContain('tests/live-provider.test.ts');
+      expect(plannedPaths.filter((path) => [
+        '.pgas/wiring.yml',
+        'projection.ts',
+        'frontend.spec.yml',
+        'export/html.ts',
+        'export/docx.ts',
+        'specs.yml',
+        'contracts.ts',
+        'stages/scope_definition.ts',
+        'handlers.ts',
+        'handlers/index.ts',
+        'handlers/_resolver.ts',
+        'tools.ts',
+      ].includes(path))).toEqual([]);
+      expect(plannedPaths.filter((path) => path === 'programs/fee-proposal-drafter/projection.ts')).toHaveLength(1);
       expect(writtenPaths).toEqual(plannedPaths);
       expect(plannedPaths.filter((path) => !writtenPaths.includes(path))).toEqual([]);
 
@@ -279,6 +298,47 @@ describe('foundry branch_write', () => {
           required: true,
         },
       });
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps branch_write strict for genuinely planned artifacts that were not written', { timeout: 120_000 }, async () => {
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-existing-branch-write-missing-'));
+    const domain = {
+      'program.slug': 'fee-proposal-drafter',
+      'program.name': 'Fee Proposal Drafter',
+      'program.target_dir': targetDir,
+      'intake.purpose': 'Draft fee proposals through scoped assembly and partner review.',
+      'intake.entry_channel': 'user_text',
+      'intake.stages_json': JSON.stringify(stages),
+      'intake.transitions_json': JSON.stringify(transitions),
+      'intake.delegation_json': JSON.stringify({}),
+      'intake.completion_json': JSON.stringify({ final_stage: 'resolved', guard_field: 'triage.summary_ready' }),
+      'repo.target_kind': 'existing_repo',
+      'repo.wiring_manifest_json': JSON.stringify(existingRepoManifest),
+    };
+
+    try {
+      await handlers.synthesize_program_spec({ sessionId: 'existing-branch-write-missing-session', domain });
+      const planned = await handlers.plan_artifacts({ sessionId: 'existing-branch-write-missing-session', domain }) as Array<{ path: string; kind: string }>;
+      (domain as Record<string, unknown>)['artifact_plan.artifacts'] = [
+        ...planned,
+        {
+          kind: 'metadata',
+          path: 'programs/fee-proposal-drafter/unwritten.ts',
+        },
+      ];
+      await handlers.synthesize_domain_logic({
+        sessionId: 'existing-branch-write-missing-session',
+        domain,
+        cache_dir: join(targetDir, '.domain-synthesis-cache'),
+        __domain_synthesis_body: synthesizedTriageBody,
+      });
+
+      await expect(
+        handlers.write_scaffold_artifacts({ sessionId: 'existing-branch-write-missing-session', domain }),
+      ).rejects.toThrow(/branch_write did not write planned artifacts:\nprograms\/fee-proposal-drafter\/unwritten\.ts/);
     } finally {
       rmSync(targetDir, { recursive: true, force: true });
     }
