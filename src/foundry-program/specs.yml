@@ -1033,6 +1033,26 @@ control_plane:
           mode: async
       presentation:
         priority: primary
+    revise_artifact_plan:
+      title: Reject and revise artifact plan
+      aliases: ["/revise-plan"]
+      args:
+        instruction:
+          type: string
+          required: false
+          capture: rest
+      availability:
+        when: "active_session"
+      dispatch:
+        - op: trigger
+          session: "$active_session.id"
+          channel: user_confirmation
+          payload:
+            decision: reject
+            instruction: "$args.instruction"
+          mode: async
+      presentation:
+        priority: contextual
     confirm_design:
       title: Confirm design intake
       availability:
