@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { Readable } from 'node:stream';
+import { sanitizedVerificationEnv } from './verification-env.js';
 
 export type SemanticCommandId =
   | 'npmInstall'
@@ -56,6 +57,13 @@ type CommandSpec =
   | { sequence: Array<{ command: string; args: string[] }> };
 
 const MAX_EXCERPT_LENGTH = 4000;
+const VERIFICATION_COMMAND_IDS = new Set<SemanticCommandId>([
+  'npmInstall',
+  'npmTypecheck',
+  'npmTest',
+  'runGeneratedStaticTests',
+  'runGeneratedSmokeTest',
+]);
 
 export function createNodeCommandRunner(spawnImpl: SpawnImpl = spawn as unknown as SpawnImpl): CommandRunner {
   return {
@@ -117,7 +125,7 @@ async function runSemanticCommand(
   let exitCode = 0;
 
   for (const step of steps) {
-    const result = await runProcess(step.command, step.args, request, spawnImpl);
+    const result = await runProcess(commandId, step.command, step.args, request, spawnImpl);
     stdout.push(result.stdout);
     stderr.push(result.stderr);
     exitCode = result.exitCode;
@@ -137,15 +145,17 @@ async function runSemanticCommand(
 }
 
 function runProcess(
+  commandId: SemanticCommandId,
   command: string,
   args: string[],
   request: CommandRequest,
   spawnImpl: SpawnImpl,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
+    const env = { ...process.env, ...request.env };
     const child = spawnImpl(command, args, {
       cwd: request.cwd,
-      env: { ...process.env, ...request.env },
+      env: VERIFICATION_COMMAND_IDS.has(commandId) ? sanitizedVerificationEnv(env) : env,
       shell: false,
     });
     let stdout = '';

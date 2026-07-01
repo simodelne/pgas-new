@@ -1,0 +1,32 @@
+export const VERIFICATION_ENV_DENYLIST = [
+  'PGAS_OPENAI_BASE_URL',
+  'PGAS_OPENAI_MODEL',
+  'PGAS_OPENAI_API_KEY',
+  'PGAS_OPENAI_TOOL_CHOICE',
+  'PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT',
+  'PGAS_OPENAI_DISABLE_THINKING',
+  'PGAS_OPENAI_TEMPERATURE',
+  'PGAS_OPENAI_MAX_TOKENS',
+  'PGAS_OPENAI_MIN_P',
+  'PGAS_OPENAI_PRESENCE_PENALTY',
+  'PGAS_OPENAI_TOP_K',
+  'PGAS_OPENAI_TOP_P',
+  'PGAS_MODEL',
+  'PGAS_PROVIDER',
+  'PGAS_ENABLE_MOCK_PROVIDER',
+  'PGAS_LIVE_SYNTH',
+  'PGAS_LIVE_GRADUATION',
+  'PGAS_LIVE_REPO_TARGETING',
+  'OPENAI_API_KEY',
+  'GOOGLE_API_KEY',
+  'GEMINI_API_KEY',
+  'ANTHROPIC_API_KEY',
+] as const;
+
+export function sanitizedVerificationEnv(base: NodeJS.ProcessEnv | Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of VERIFICATION_ENV_DENYLIST) {
+    delete env[key];
+  }
+  return env;
+}
