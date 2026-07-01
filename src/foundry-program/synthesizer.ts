@@ -85,6 +85,8 @@ interface PlannedTransitionAction {
   guardField?: string;
 }
 
+const PGAS_CHANNEL_ID_MAX_LENGTH = 64;
+
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   '../../templates/pgas-new/program/spec-skeleton.yml.tmpl',
@@ -97,7 +99,7 @@ export function synthesizeProgramSpecFromDomain(
   const slug = stringDomainField(domain, 'program.slug');
   const name = stringDomainField(domain, 'program.name');
   const purpose = stringDomainField(domain, 'intake.purpose');
-  const entryChannel = stringDomainField(domain, 'intake.entry_channel');
+  const entryChannel = normalizePgasChannelId(stringDomainField(domain, 'intake.entry_channel'));
   const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseJsonDomainField<StageInput[]>(domain, 'intake.stages_json'));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
@@ -261,6 +263,7 @@ export function synthesizeProgramSpecFromDomain(
     [entryChannel]: { direction: 'In', sync: 'Async' },
     stage_output: { direction: 'Out', sync: 'Sync' },
   };
+  applyControlPlaneEntryChannel(spec, entryChannel);
 
   const actionMap = recordField(spec, 'action_map');
   const placeholderActionName = ['example', 'action'].join('_');
@@ -447,6 +450,24 @@ function applyStageOutputChannels(modes: MutableRecord, transitionActions: Trans
     const mode = recordField(modes, action.source);
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.channels = unique([...channels, 'stage_output']);
+  }
+}
+
+function applyControlPlaneEntryChannel(spec: MutableRecord, entryChannel: string): void {
+  const controls = recordField(recordField(spec, 'control_plane'), 'controls');
+  const ask = recordField(controls, 'ask');
+  const dispatch = ask.dispatch;
+  if (!Array.isArray(dispatch)) {
+    return;
+  }
+  for (const step of dispatch) {
+    if (!step || typeof step !== 'object' || Array.isArray(step)) {
+      continue;
+    }
+    const record = step as MutableRecord;
+    if (record.op === 'trigger' && typeof record.channel === 'string') {
+      record.channel = entryChannel;
+    }
   }
 }
 
@@ -675,6 +696,14 @@ function renderHandlersSource(
     entryPath: string;
   },
 ): string {
+  const beginWorkHandler = transitionActions.some((action) => action.name === 'begin_work')
+    ? `  async begin_work(payload) {
+    return {
+      kind: 'work_started',
+      payload,
+    };
+  },`
+    : '';
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
@@ -737,14 +766,7 @@ ${stageImports ? `${stageImports}\n` : ''}
 // stages keep the runtime model's tool-call arguments as their source of truth.
 
 export const handlers: Record<string, ToolHandler> = {
-  async begin_work(payload) {
-    return {
-      kind: 'work_started',
-      payload,
-    };
-  },
-
-  async record_user_note(payload) {
+${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(payload) {
     const note = resolveDomainValue<string>(payload as HandlerPayload, 'note', '');
     return {
       kind: 'note_recorded',
@@ -1099,6 +1121,19 @@ function reachesFinalStage(
 function safeIdentifier(value: string): string {
   const normalized = value.trim().replace(/[^a-zA-Z0-9_]+/gu, '_').replace(/^_+|_+$/gu, '');
   return normalized.length > 0 ? normalized : 'stage';
+}
+
+function normalizePgasChannelId(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/gu, '_')
+    .replace(/_+/gu, '_')
+    .replace(/^_+|_+$/gu, '');
+  const bounded = slug
+    .slice(0, PGAS_CHANNEL_ID_MAX_LENGTH)
+    .replace(/^_+|_+$/gu, '');
+  return bounded.length > 0 ? bounded : 'user_text';
 }
 
 function tsString(value: string): string {

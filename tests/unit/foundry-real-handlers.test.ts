@@ -174,7 +174,7 @@ describe('git_status and git_rebase_latest', () => {
       status: 'passed',
     });
     expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin'], expect.any(Object));
-    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', 'origin/main'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', '--autostash', 'origin/main'], expect.any(Object));
   });
 
   it('defaults rebase cwd and target branch for the standalone graduation path', async () => {
@@ -187,7 +187,7 @@ describe('git_status and git_rebase_latest', () => {
       status: 'passed',
     });
     expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin'], expect.any(Object));
-    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', 'origin/main'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', '--autostash', 'origin/main'], expect.any(Object));
   });
 
   it('reports unmerged paths on rebase conflict', async () => {

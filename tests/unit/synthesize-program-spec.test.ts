@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, validateSpecWiring, type ActionHandler } from '@simodelne/pgas-server/plugin.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import {
@@ -156,6 +156,7 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.modes.triage.vocabulary).toEqual(expect.arrayContaining(['complete_triage']));
     expect(parsed.modes.triage.vocabulary).not.toContain('example_action');
     expect(parsed.proceed_to.complete_triage).toBe('resolved');
+    expect(parsed.action_map).toHaveProperty('begin_work');
     expect(parsed.action_map).not.toHaveProperty('example_action');
     expect(parsed.action_map.complete_triage.channel).toBe('stage_output');
     expect(parsed.action_map.complete_triage.result_path).toBe('triage.output');
@@ -168,15 +169,122 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.guidance.triage.join('\n')).toContain('delegation');
     expect(artifact?.contracts_ts).toContain('triage');
     expect(artifact?.handlers_ts).toContain('runTriage');
+    expect(artifact?.handlers_ts).toContain('async begin_work(payload)');
     expect(artifact?.handlers_ts).toContain('capture_initial_entry_input');
     expect(artifact?.handlers_ts).toContain('inputs.initial_user_text');
     expect(artifact?.handlers_ts).toContain('async session_status(payload)');
     expect(artifact?.handlers_ts).toContain("control: 'session_status'");
     expect(artifact?.handlers_ts).not.toContain('stage_action_stub');
+    expect(artifact?.handlers_index_ts).toContain('async begin_work(payload)');
     expect(artifact?.smoke_test_ts).toContain('generated program smoke');
     expect(smokeEffectNames(artifact?.smoke_test_ts ?? '')).toEqual(['begin_work', 'complete_triage']);
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
+    expectGeneratedHandlersToWire(artifact?.spec_yaml ?? '', artifact?.handlers_ts ?? '');
+    expectGeneratedHandlersToWire(artifact?.spec_yaml ?? '', artifact?.handlers_index_ts ?? '');
+  });
+
+  it('does not emit a begin_work handler when the synthesized action_map does not declare begin_work', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domain({
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'draft' },
+        { slug: 'blocked', is_terminal: true },
+        { slug: 'resolved', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'draft', trigger: 'draft', guard_field: 'intake.draft_requested' },
+        { from: 'intake', to: 'blocked', trigger: 'block', guard_field: 'intake.blocked' },
+        { from: 'draft', to: 'resolved', trigger: 'done', guard_field: 'draft.ready' },
+      ]),
+      'intake.completion_json': JSON.stringify({ final_stage: 'resolved', guard_field: 'draft.ready' }),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      modes: Record<string, { vocabulary?: string[] }>;
+      action_map: Record<string, unknown>;
+    };
+
+    expect(parsed.action_map).not.toHaveProperty('begin_work');
+    expect(parsed.modes.intake.vocabulary).toEqual(expect.arrayContaining([
+      'advance_intake_to_draft',
+      'advance_intake_to_blocked',
+    ]));
+    expect(parsed.modes.intake.vocabulary).not.toContain('begin_work');
+    expect(artifact.handlers_ts).not.toContain('async begin_work(payload)');
+    expect(artifact.handlers_index_ts).not.toContain('async begin_work(payload)');
+    expect(smokeEffectNames(artifact.smoke_test_ts)).not.toContain('begin_work');
+    expectGeneratedHandlersToWire(artifact.spec_yaml, artifact.handlers_ts);
+    expectGeneratedHandlersToWire(artifact.spec_yaml, artifact.handlers_index_ts);
+  });
+
+  it('normalizes prose entry_channel answers into bounded PGAS channel ids in emitted artifacts', () => {
+    const proseEntryChannel = 'SimoneOS frontend structured intake plus user_text. Fields: client_name, matter_or_service_type, jurisdiction, complexity_tier, target_deadline, constraints, budget_signal, currency, requested fee_structure, optional rate_card/precedent. Frontend supports edit/review/finalize/export.';
+    const rawDomain = domain({ 'intake.entry_channel': proseEntryChannel });
+    const artifact = synthesizeProgramSpecFromDomain(rawDomain);
+    const parsed = load(artifact.spec_yaml) as {
+      channels: Record<string, unknown>;
+      control_plane: { controls: { ask: { dispatch: Array<Record<string, unknown>> } } };
+      ingestion: Record<string, unknown>;
+      modes: Record<string, { channels?: string[] }>;
+      projection: Record<string, { include: string[] }>;
+      reactions: Record<string, { watch: string[]; write_scope: string[] }>;
+      schema: Record<string, string>;
+    };
+    const normalizedChannel = 'simoneos_frontend_structured_intake_plus_user_text_fields_client';
+
+    expect(rawDomain['intake.entry_channel']).toBe(proseEntryChannel);
+    expect(normalizedChannel).toMatch(/^[a-z0-9_]+$/u);
+    expect(normalizedChannel.length).toBeLessThanOrEqual(64);
+    expect(parsed.channels).toHaveProperty(normalizedChannel);
+    expect(parsed.channels).not.toHaveProperty(proseEntryChannel);
+    expect(parsed.ingestion).toHaveProperty(normalizedChannel);
+    expect(parsed.ingestion).not.toHaveProperty(proseEntryChannel);
+    expect(parsed.schema).toHaveProperty(`inputs.${normalizedChannel}`, 'string');
+    expect(parsed.schema).toHaveProperty(`inputs.initial_${normalizedChannel}`, 'string');
+    expect(parsed.modes.intake.channels).toContain(normalizedChannel);
+    expect(parsed.projection.intake.include).toEqual(expect.arrayContaining([
+      `inputs.${normalizedChannel}`,
+      `inputs.initial_${normalizedChannel}`,
+    ]));
+    expect(parsed.reactions.capture_initial_entry_input).toEqual({
+      event: 'AfterIngestion',
+      watch: [`inputs.${normalizedChannel}`],
+      write_scope: [`inputs.initial_${normalizedChannel}`],
+    });
+    expect(artifact.smoke_test_ts).toContain(`defaultChannel: '${normalizedChannel}'`);
+    expect(artifact.smoke_test_ts).not.toContain(proseEntryChannel);
+    expect(artifact.synthesis_context.entry_channel).toBe(normalizedChannel);
+    expect(parsed.control_plane.controls.ask.dispatch).toContainEqual(expect.objectContaining({
+      op: 'trigger',
+      channel: normalizedChannel,
+    }));
+  });
+
+  it('falls back to user_text for empty entry_channel ids and preserves valid short ids', () => {
+    const invalidArtifact = synthesizeProgramSpecFromDomain(domain({ 'intake.entry_channel': ' !!! ' }));
+    const invalidParsed = load(invalidArtifact.spec_yaml) as {
+      channels: Record<string, unknown>;
+      ingestion: Record<string, unknown>;
+    };
+    expect(invalidParsed.channels).toHaveProperty('user_text');
+    expect(invalidParsed.ingestion).toHaveProperty('user_text');
+    expect(invalidArtifact.smoke_test_ts).toContain("defaultChannel: 'user_text'");
+    expect(invalidArtifact.synthesis_context.entry_channel).toBe('user_text');
+
+    const validArtifact = synthesizeProgramSpecFromDomain(domain({ 'intake.entry_channel': 'webhook_event_1' }));
+    const validParsed = load(validArtifact.spec_yaml) as {
+      channels: Record<string, unknown>;
+      control_plane: { controls: { ask: { dispatch: Array<Record<string, unknown>> } } };
+      ingestion: Record<string, unknown>;
+    };
+    expect(validParsed.channels).toHaveProperty('webhook_event_1');
+    expect(validParsed.ingestion).toHaveProperty('webhook_event_1');
+    expect(validArtifact.smoke_test_ts).toContain("defaultChannel: 'webhook_event_1'");
+    expect(validArtifact.synthesis_context.entry_channel).toBe('webhook_event_1');
+    expect(validParsed.control_plane.controls.ask.dispatch).toContainEqual(expect.objectContaining({
+      op: 'trigger',
+      channel: 'webhook_event_1',
+    }));
   });
 
   it('does not import synthesized stage contracts for an LLM-only program with no generated stage bodies', () => {
@@ -866,6 +974,20 @@ function transitionsFor(stageNames: string[]) {
 
 function smokeEffectNames(source: string): string[] {
   return Array.from(source.matchAll(/effect\('([^']+)'/gu), (match) => match[1] as string);
+}
+
+function expectGeneratedHandlersToWire(specYaml: string, handlersSource: string): void {
+  const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-wire-'));
+  const specPath = join(dir, 'specs.yml');
+  writeFileSync(specPath, specYaml);
+  const spec = loadSpecWithPatterns(specPath).spec;
+  rmSync(dir, { recursive: true, force: true });
+  expect(() => validateSpecWiring(spec, handlerMapFromSource(handlersSource))).not.toThrow();
+}
+
+function handlerMapFromSource(source: string): Map<string, ActionHandler> {
+  const names = Array.from(source.matchAll(/^\s+async\s+([a-zA-Z0-9_]+)\(/gmu), (match) => match[1] as string);
+  return new Map(names.map((name) => [name, () => ({})]));
 }
 
 function writeTempSpec(specYaml: string): string {

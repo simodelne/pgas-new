@@ -899,7 +899,7 @@ export const handlers: Record<string, ToolHandler> = {
 
   /**
    * git_rebase_latest
-   * side effects: spawns git fetch origin, then git rebase origin/<target_branch>.
+   * side effects: spawns git fetch origin, then git rebase --autostash origin/<target_branch>.
    * secret redaction: no env values are logged or returned.
    * cwd safety: cwd must resolve inside program.target_dir.
    */
@@ -908,7 +908,7 @@ export const handlers: Record<string, ToolHandler> = {
     const targetBranch = optionalStringPayloadField(payload, 'target_branch') ?? 'main';
     await runCommand('git', ['fetch', 'origin'], cwd, 300_000);
     try {
-      await runCommand('git', ['rebase', `origin/${targetBranch}`], cwd, 300_000);
+      await runCommand('git', ['rebase', '--autostash', `origin/${targetBranch}`], cwd, 300_000);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const unmerged = message
