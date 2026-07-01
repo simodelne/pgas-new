@@ -59,3 +59,6 @@ tests/sota/scorecard/rl-*.json
 tests/sota/scorecard/rl-*.md
 tests/sota/scorecard/verify-closegap*.json
 tests/sota/scorecard/verify-closegap*.md
+
+# Foundry domain-synthesis cache written into cwd when run from repo root
+.pgas-new-domain-synthesis-cache/

@@ -48,6 +48,7 @@ export interface PlannedArtifact {
   owner: 'pgas-new';
   mode_introduced: PgasNewMode;
   verification: string[];
+  writeMode?: 'create' | 'update';
 }
 
 export interface ArtifactPlan {
@@ -208,9 +209,14 @@ export function createExistingRepoArtifactPlan(
     artifact('qc', `qc/facts/${slug}.facts.yml`, 'Declare deterministic frontend facts and fixtures for the attached program.', 'static_verify', [
       'qc-facts',
     ]),
-    artifact('qc', 'qc/e2e-coverage.yml', 'Register or update E2E coverage for the attached program frontend workflow.', 'static_verify', [
-      'qc-coverage',
-    ]),
+    artifact(
+      'qc',
+      'qc/e2e-coverage.yml',
+      'Register or update E2E coverage for the attached program frontend workflow.',
+      'static_verify',
+      ['qc-coverage'],
+      { writeMode: 'update' },
+    ),
     artifact('dossier', `${pgasNewDir}/${slug}/dossier.yml`, 'Persist pgas-new intake and design notes in the target repo.', 'scaffold_plan', [
       'artifact-plan',
     ]),
@@ -279,6 +285,7 @@ function artifact(
   purpose: string,
   mode_introduced: PgasNewMode,
   verification: string[],
+  options: { writeMode?: PlannedArtifact['writeMode'] } = {},
 ): PlannedArtifact {
   return {
     kind,
@@ -287,6 +294,7 @@ function artifact(
     owner: 'pgas-new',
     mode_introduced,
     verification,
+    ...(options.writeMode ? { writeMode: options.writeMode } : {}),
   };
 }
 

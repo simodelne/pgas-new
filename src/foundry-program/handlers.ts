@@ -811,6 +811,7 @@ export const handlers: Record<string, ToolHandler> = {
           ...program,
           repoRoot: targetDir,
           manifest: parseWiringManifestDomainField(domain),
+          stageSlugs: existingRepoStageSlugs(synthesized),
           synthesizedSpecYaml: synthesized.spec_yaml,
           synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
@@ -830,6 +831,7 @@ export const handlers: Record<string, ToolHandler> = {
           synthesizedToolsTs: synthesized.tools_ts,
           synthesizedSmokeTestTs: synthesized.smoke_test_ts,
         });
+    assertAllPlannedArtifactsWritten(domain, result.written);
 
     return {
       kind: 'artifacts_written',
@@ -854,14 +856,19 @@ export const handlers: Record<string, ToolHandler> = {
 
   /**
    * npm_typecheck
-   * side effects: spawns npm run typecheck.
+   * side effects: spawns npm run typecheck for standalone scaffolds, or the
+   * attached repo manifest's static/typecheck/build command for existing repos.
    * secret redaction: no env values are logged or returned.
    * cwd safety: cwd must resolve inside program.target_dir.
    */
   async npm_typecheck(payload) {
     const cwd = safeCwd(payload);
-    const result = await runCommand('npm', ['run', 'typecheck'], cwd, 120_000);
-    return commandResult('npm run typecheck', result, 'static');
+    const command = typecheckCommandForPayload(payload, cwd);
+    if ('skipReason' in command) {
+      return skippedCommandResult(command.label, command.skipReason, 'static');
+    }
+    const result = await runCommand(command.executable, command.args, cwd, 120_000);
+    return commandResult(command.label, result, 'static');
   },
 
   /**
@@ -1262,6 +1269,44 @@ function parseWiringManifestDomainField(domain: Record<string, unknown>): Wiring
   throw new Error('existing-repo artifact planning requires repo.wiring_manifest_json');
 }
 
+function assertAllPlannedArtifactsWritten(domain: Record<string, unknown>, written: string[]): void {
+  const planned = artifactPlanPathsFromDomain(domain);
+  if (planned.length === 0) {
+    return;
+  }
+
+  const writtenPaths = new Set(written);
+  const missing = planned.filter((path) => !writtenPaths.has(path));
+  if (missing.length > 0) {
+    throw new Error(`branch_write did not write planned artifacts:\n${missing.join('\n')}`);
+  }
+}
+
+function artifactPlanPathsFromDomain(domain: Record<string, unknown>): string[] {
+  const value = domainValue(domain, 'artifact_plan.artifacts');
+  const artifacts = typeof value === 'string' ? parseJsonArray(value, 'artifact_plan.artifacts') : value;
+  if (!Array.isArray(artifacts)) {
+    return [];
+  }
+  return uniqueStrings(
+    artifacts.flatMap((artifact) => {
+      if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+        return [];
+      }
+      const path = (artifact as Record<string, unknown>).path;
+      return typeof path === 'string' && path.length > 0 ? [path] : [];
+    }),
+  );
+}
+
+function parseJsonArray(value: string, label: string): unknown[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label} must decode to an array`);
+  }
+  return parsed;
+}
+
 function synthesisOptionsFromDomain(domain: Record<string, unknown>): {
   targetKind: 'standalone_repo' | 'existing_repo';
   integrations: WiringManifest['integrations'];
@@ -1321,6 +1366,142 @@ function requireAcceptedStageSources(artifact: SynthesizedArtifact): Record<stri
     throw new Error(`domain synthesis incomplete; missing accepted stage bodies: ${missing.join(', ')}`);
   }
   return stageSources;
+}
+
+interface ParsedCommand {
+  executable: string;
+  args: string[];
+  label: string;
+}
+
+interface SkippedCommand {
+  label: string;
+  skipReason: string;
+}
+
+function typecheckCommandForPayload(payload: Record<string, unknown>, cwd: string): ParsedCommand | SkippedCommand {
+  const domain = domainFromPayload(payload);
+  const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
+  if (targetKind !== 'existing_repo') {
+    return parseCommandLine('npm run typecheck');
+  }
+
+  const manifestCommand = attachedRepoStaticCommand(domain);
+  if (manifestCommand) {
+    return parseCommandLine(manifestCommand);
+  }
+
+  const packageScriptCommand = packageJsonStaticCommand(cwd);
+  if (packageScriptCommand) {
+    return parseCommandLine(packageScriptCommand);
+  }
+
+  return {
+    label: 'attached repo static verification',
+    skipReason: 'attached repo has no .pgas/wiring.yml verification.commands.typecheck/static/build command and no package.json typecheck/build script',
+  };
+}
+
+function attachedRepoStaticCommand(domain: Record<string, unknown>): string | undefined {
+  try {
+    const manifest = parseWiringManifestDomainField(domain);
+    return firstCommand(manifest.verification?.commands, ['typecheck', 'static', 'build']);
+  } catch {
+    return undefined;
+  }
+}
+
+function firstCommand(commands: Record<string, string> | undefined, names: string[]): string | undefined {
+  if (!commands) {
+    return undefined;
+  }
+  for (const name of names) {
+    const command = commands[name];
+    if (typeof command === 'string' && command.trim().length > 0) {
+      return command.trim();
+    }
+  }
+  return undefined;
+}
+
+function packageJsonStaticCommand(cwd: string): string | undefined {
+  const packageJsonPath = join(cwd, 'package.json');
+  if (!existsSync(packageJsonPath)) {
+    return undefined;
+  }
+  const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const scripts = (parsed as { scripts?: unknown }).scripts;
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
+    return undefined;
+  }
+  const scriptNames = new Set(Object.keys(scripts as Record<string, unknown>));
+  if (scriptNames.has('typecheck')) {
+    return 'npm run typecheck';
+  }
+  if (scriptNames.has('build')) {
+    return 'npm run build';
+  }
+  return undefined;
+}
+
+function parseCommandLine(commandLine: string): ParsedCommand {
+  const parts = splitCommandLine(commandLine);
+  const executable = parts[0];
+  if (!executable) {
+    throw new Error('verification command must not be empty');
+  }
+  return {
+    executable,
+    args: parts.slice(1),
+    label: commandLine,
+  };
+}
+
+function splitCommandLine(commandLine: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < commandLine.length; index += 1) {
+    const char = commandLine[index] as string;
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else if (char === '\\' && quote === '"' && index + 1 < commandLine.length) {
+        index += 1;
+        current += commandLine[index] as string;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      if (current.length > 0) {
+        parts.push(current);
+        current = '';
+      }
+      continue;
+    }
+    if (char === '\\' && index + 1 < commandLine.length) {
+      index += 1;
+      current += commandLine[index] as string;
+      continue;
+    }
+    current += char;
+  }
+  if (quote) {
+    throw new Error(`unterminated quote in verification command: ${commandLine}`);
+  }
+  if (current.length > 0) {
+    parts.push(current);
+  }
+  return parts;
 }
 
 function safeCwd(payload: Record<string, unknown>): string {
@@ -1388,6 +1569,16 @@ function commandResult(command: string, result: ProcessResult, prefix: string): 
     evidence_id: evidenceId(prefix),
     stdout: result.stdout,
     stderr: result.stderr,
+  };
+}
+
+function skippedCommandResult(command: string, reason: string, prefix: string): Record<string, unknown> {
+  return {
+    kind: 'command_result',
+    command,
+    status: 'skipped',
+    evidence_id: evidenceId(prefix),
+    reason,
   };
 }
 

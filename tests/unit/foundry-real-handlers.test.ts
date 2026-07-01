@@ -90,6 +90,36 @@ describe('npm_typecheck and npm_test', () => {
     });
   });
 
+  it('uses an attached repo manifest build command instead of hardcoded npm run typecheck', async () => {
+    spawnMock.mockImplementationOnce(() => fakeChild({ stdout: 'build ok\n' }));
+
+    const manifestWithBuildOnly = {
+      ...MANIFEST,
+      verification: {
+        commands: {
+          install: 'npm install --no-audit --no-fund',
+          build: 'npm run build',
+          test: 'npm test',
+        },
+      },
+    };
+
+    await expect(
+      handlers.npm_typecheck(payload({
+        cwd: '/tmp/out',
+        domain: {
+          'repo.target_kind': 'existing_repo',
+          'repo.wiring_manifest_json': JSON.stringify(manifestWithBuildOnly),
+        },
+      })),
+    ).resolves.toMatchObject({
+      kind: 'command_result',
+      command: 'npm run build',
+      status: 'passed',
+    });
+    expect(spawnMock).toHaveBeenCalledWith('npm', ['run', 'build'], expect.objectContaining({ cwd: '/tmp/out' }));
+  });
+
   it('times out long-running npm commands', async () => {
     vi.useFakeTimers();
     spawnMock.mockImplementationOnce(() => fakeChild({ hang: true }));
@@ -290,10 +320,14 @@ describe('web_research', () => {
 });
 
 function payload(args: Record<string, unknown>) {
+  const domain = args.domain && typeof args.domain === 'object' && !Array.isArray(args.domain)
+    ? args.domain as Record<string, unknown>
+    : {};
   return {
     ...args,
     domain: {
       'program.target_dir': '/tmp/out',
+      ...domain,
     },
   };
 }
