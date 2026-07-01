@@ -113,6 +113,52 @@ describe('foundry scaffold_plan tool ordering', () => {
       'plan_artifacts',
     ]);
   });
+
+  it('declares revise_artifact_plan as the artifact-plan rejection control', () => {
+    const spec = load(readFileSync(FOUNDRY_SPEC, 'utf8')) as {
+      control_plane: {
+        controls: Record<string, {
+          aliases?: string[];
+          args?: Record<string, { type: string; required: boolean; capture?: string }>;
+          availability?: { when: string };
+          dispatch?: Array<{
+            op: string;
+            session?: string;
+            channel?: string;
+            payload?: Record<string, unknown>;
+            mode?: string;
+          }>;
+        }>;
+      };
+    };
+
+    expect(spec.control_plane.controls.revise_artifact_plan).toMatchObject({
+      title: 'Reject and revise artifact plan',
+      aliases: ['/revise-plan'],
+      args: {
+        instruction: {
+          type: 'string',
+          required: false,
+          capture: 'rest',
+        },
+      },
+      availability: {
+        when: 'active_session',
+      },
+      dispatch: [
+        {
+          op: 'trigger',
+          session: '$active_session.id',
+          channel: 'user_confirmation',
+          payload: {
+            decision: 'reject',
+            instruction: '$args.instruction',
+          },
+          mode: 'async',
+        },
+      ],
+    });
+  });
 });
 
 function readSkeletonSpec(): SkeletonSpec {
