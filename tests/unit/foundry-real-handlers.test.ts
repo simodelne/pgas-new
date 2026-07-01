@@ -120,6 +120,30 @@ describe('npm_typecheck and npm_test', () => {
     expect(spawnMock).toHaveBeenCalledWith('npm', ['run', 'build'], expect.objectContaining({ cwd: '/tmp/out' }));
   });
 
+  it('strips foundry provider env from target verification commands while preserving ordinary env', async () => {
+    vi.stubEnv('PGAS_PROVIDER', 'openai');
+    vi.stubEnv('PGAS_OPENAI_API_KEY', 'foundry-openai-key');
+    vi.stubEnv('PGAS_OPENAI_TOOL_CHOICE', 'required');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'foundry-anthropic-key');
+    try {
+      spawnMock.mockImplementationOnce(() => fakeChild({ stdout: 'test ok\n' }));
+
+      await expect(handlers.npm_test(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+        kind: 'command_result',
+        status: 'passed',
+      });
+
+      const spawnOptions = spawnMock.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+      expect(spawnOptions?.env).toMatchObject({ PATH: process.env.PATH });
+      expect(spawnOptions?.env).not.toHaveProperty('PGAS_PROVIDER');
+      expect(spawnOptions?.env).not.toHaveProperty('PGAS_OPENAI_API_KEY');
+      expect(spawnOptions?.env).not.toHaveProperty('PGAS_OPENAI_TOOL_CHOICE');
+      expect(spawnOptions?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('times out long-running npm commands', async () => {
     vi.useFakeTimers();
     spawnMock.mockImplementationOnce(() => fakeChild({ hang: true }));

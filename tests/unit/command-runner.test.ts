@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createNodeCommandRunner,
   isSafeGitBranchName,
@@ -20,11 +20,31 @@ interface SpawnResult {
   stderr?: string;
 }
 
-function fakeSpawn(results: SpawnResult[]): { calls: SpawnCall[]; spawn: SpawnImpl } {
+const REQUIRED_STRIPPED_FOUNDRY_ENV_KEYS = [
+  'PGAS_OPENAI_BASE_URL',
+  'PGAS_OPENAI_MODEL',
+  'PGAS_OPENAI_API_KEY',
+  'PGAS_OPENAI_TOOL_CHOICE',
+  'PGAS_OPENAI_DISABLE_JSON_RESPONSE_FORMAT',
+  'PGAS_MODEL',
+  'PGAS_PROVIDER',
+  'PGAS_ENABLE_MOCK_PROVIDER',
+  'PGAS_LIVE_SYNTH',
+  'PGAS_LIVE_GRADUATION',
+  'PGAS_LIVE_REPO_TARGETING',
+  'OPENAI_API_KEY',
+  'GOOGLE_API_KEY',
+  'GEMINI_API_KEY',
+  'ANTHROPIC_API_KEY',
+] as const;
+
+function fakeSpawn(results: SpawnResult[]): { calls: SpawnCall[]; envs: NodeJS.ProcessEnv[]; spawn: SpawnImpl } {
   const calls: SpawnCall[] = [];
+  const envs: NodeJS.ProcessEnv[] = [];
 
   const spawn: SpawnImpl = (command, args, options) => {
     calls.push({ command, args, cwd: options.cwd, shell: options.shell });
+    envs.push(options.env);
     const result = results.shift() ?? { code: 0 };
     const emitter = new EventEmitter();
     const child = emitter as ReturnType<SpawnImpl>;
@@ -42,7 +62,7 @@ function fakeSpawn(results: SpawnResult[]): { calls: SpawnCall[]; spawn: SpawnIm
     return child;
   };
 
-  return { calls, spawn };
+  return { calls, envs, spawn };
 }
 
 describe('node command runner', () => {
@@ -88,6 +108,28 @@ describe('node command runner', () => {
         shell: false,
       },
     ]);
+  });
+
+  it('strips foundry provider env from target verification commands while preserving ordinary env', async () => {
+    for (const key of REQUIRED_STRIPPED_FOUNDRY_ENV_KEYS) {
+      vi.stubEnv(key, `foundry-${key}`);
+    }
+    try {
+      const { envs, spawn } = fakeSpawn([{ code: 0, stdout: 'ok' }]);
+      const runner = createNodeCommandRunner(spawn);
+
+      await runner.npmTest({ cwd: '/tmp/repo', env: { TARGET_ENV: 'kept' } });
+
+      expect(envs[0]).toMatchObject({
+        PATH: process.env.PATH,
+        TARGET_ENV: 'kept',
+      });
+      for (const key of REQUIRED_STRIPPED_FOUNDRY_ENV_KEYS) {
+        expect(envs[0]).not.toHaveProperty(key);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('rebases by fetching the declared branch and then rebasing against origin branch', async () => {

@@ -5,6 +5,7 @@ import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
 import { renderMissingWiringRequest } from '../pgas-new/curator-request.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
+import { sanitizedVerificationEnv } from '../pgas-new/verification-env.js';
 import {
   WIRING_MANIFEST_PATH,
   isSafeRepoRelativePath,
@@ -850,7 +851,7 @@ export const handlers: Record<string, ToolHandler> = {
    */
   async npm_install(payload) {
     const cwd = safeCwd(payload);
-    const result = await runCommand('npm', ['install', '--no-audit', '--no-fund'], cwd, 300_000);
+    const result = await runCommand('npm', ['install', '--no-audit', '--no-fund'], cwd, 300_000, { sanitizeEnv: true });
     return commandResult('npm install --no-audit --no-fund', result, 'install');
   },
 
@@ -867,7 +868,7 @@ export const handlers: Record<string, ToolHandler> = {
     if ('skipReason' in command) {
       return skippedCommandResult(command.label, command.skipReason, 'static');
     }
-    const result = await runCommand(command.executable, command.args, cwd, 120_000);
+    const result = await runCommand(command.executable, command.args, cwd, 120_000, { sanitizeEnv: true });
     return commandResult(command.label, result, 'static');
   },
 
@@ -879,7 +880,7 @@ export const handlers: Record<string, ToolHandler> = {
    */
   async npm_test(payload) {
     const cwd = safeCwd(payload);
-    const result = await runCommand('npm', ['test'], cwd, 180_000);
+    const result = await runCommand('npm', ['test'], cwd, 180_000, { sanitizeEnv: true });
     return commandResult('npm test', result, 'static');
   },
 
@@ -978,13 +979,13 @@ export const handlers: Record<string, ToolHandler> = {
    */
   async run_api_blackbox_verification(payload) {
     const cwd = safeCwd(payload);
-    const result = await runCommand('npm', ['test', '--', 'tests/api-blackbox.test.ts'], cwd, 180_000);
+    const result = await runCommand('npm', ['test', '--', 'tests/api-blackbox.test.ts'], cwd, 180_000, { sanitizeEnv: true });
     return commandResult('npm test -- tests/api-blackbox.test.ts', result, 'static');
   },
 
   async run_smoke_verification(payload) {
     const cwd = safeCwd(payload);
-    const result = await runCommand('npm', ['test', '--', 'tests/generated-program-smoke.test.ts'], cwd, 180_000);
+    const result = await runCommand('npm', ['test', '--', 'tests/generated-program-smoke.test.ts'], cwd, 180_000, { sanitizeEnv: true });
     return { ...commandResult('npm test -- tests/generated-program-smoke.test.ts', result, 'smoke'), kind: 'smoke_verification' };
   },
 
@@ -1518,11 +1519,17 @@ interface ProcessResult {
   stderr: string;
 }
 
-function runCommand(command: string, args: string[], cwd: string, timeoutMs: number): Promise<ProcessResult> {
+function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  options: { sanitizeEnv?: boolean } = {},
+): Promise<ProcessResult> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(command, args, {
       cwd,
-      env: process.env,
+      env: options.sanitizeEnv ? sanitizedVerificationEnv(process.env) : process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
