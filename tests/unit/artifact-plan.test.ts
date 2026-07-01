@@ -99,6 +99,70 @@ describe('artifact planner', () => {
     ]);
   });
 
+  it('reconciles requested existing-repo program paths to the manifest layout', () => {
+    const plan = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST, {
+      stageSlugs: ['triage'],
+      requestedArtifactPaths: [
+        '.pgas/wiring.yml',
+        'projection.ts',
+        'frontend.spec.yml',
+        'specs.yml',
+        'contracts.ts',
+        'export/html.ts',
+        'export/docx.ts',
+        'stages/triage.ts',
+        'handlers.ts',
+        'handlers/index.ts',
+        'handlers/_resolver.ts',
+        'tools.ts',
+        'programs/review/projection.ts',
+        'qc/custom-review.yml',
+        'audit/custom-review.md',
+        'tests/custom-review.test.ts',
+      ],
+    });
+
+    const paths = plan.artifacts.map((artifact) => artifact.path);
+    const unresolvedRequestedPaths = [
+      '.pgas/wiring.yml',
+      'projection.ts',
+      'frontend.spec.yml',
+      'specs.yml',
+      'contracts.ts',
+      'export/html.ts',
+      'export/docx.ts',
+      'stages/triage.ts',
+      'handlers.ts',
+      'handlers/index.ts',
+      'handlers/_resolver.ts',
+      'tools.ts',
+    ];
+    const resolvedProgramPaths = [
+      'programs/review/projection.ts',
+      'programs/review/frontend.spec.yml',
+      'programs/review/specs.yml',
+      'programs/review/contracts.ts',
+      'programs/review/export/html.ts',
+      'programs/review/export/docx.ts',
+      'programs/review/stages/triage.ts',
+      'programs/review/handlers.ts',
+      'programs/review/handlers/index.ts',
+      'programs/review/handlers/_resolver.ts',
+      'programs/review/tools.ts',
+    ];
+
+    expect(paths.filter((path) => unresolvedRequestedPaths.includes(path))).toEqual([]);
+    expect(paths).toEqual(expect.arrayContaining([
+      ...resolvedProgramPaths,
+      'qc/custom-review.yml',
+      'audit/custom-review.md',
+      'tests/custom-review.test.ts',
+    ]));
+    for (const path of resolvedProgramPaths) {
+      expect(paths.filter((plannedPath) => plannedPath === path), path).toHaveLength(1);
+    }
+  });
+
   it('marks only explicit existing-repo registration artifacts as update-mode', () => {
     const plan = createExistingRepoArtifactPlan({ slug: 'review', name: 'Review' }, MANIFEST);
 
