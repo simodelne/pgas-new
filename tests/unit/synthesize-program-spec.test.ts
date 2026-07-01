@@ -174,6 +174,7 @@ describe('synthesize_program_spec handler', () => {
     expect(artifact?.handlers_ts).toContain("control: 'session_status'");
     expect(artifact?.handlers_ts).not.toContain('stage_action_stub');
     expect(artifact?.smoke_test_ts).toContain('generated program smoke');
+    expect(smokeEffectNames(artifact?.smoke_test_ts ?? '')).toEqual(['begin_work', 'complete_triage']);
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
@@ -666,6 +667,54 @@ describe('synthesize_program_spec handler', () => {
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
 
+  it('drives generated smoke tests through the forward branch when a revision loop is also reachable', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(domain({
+      'program.slug': 'fee-proposal-drafter',
+      'program.name': 'Fee Proposal Drafter',
+      'program.target_dir': '/tmp/fee-proposal-drafter',
+      'intake.purpose': 'Draft a fee proposal, collect partner approval, and deliver the client-ready version.',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'fee_modelling' },
+        { slug: 'draft_assembly' },
+        { slug: 'partner_review' },
+        { slug: 'revision' },
+        { slug: 'client_delivery' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'fee_modelling', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'fee_modelling', to: 'draft_assembly', trigger: 'modelled', guard_field: 'fee_modelling.ready' },
+        { from: 'draft_assembly', to: 'partner_review', trigger: 'drafted', guard_field: 'draft_assembly.ready' },
+        { from: 'partner_review', to: 'revision', trigger: 'reject', guard_field: 'partner_review.rejected' },
+        { from: 'partner_review', to: 'client_delivery', trigger: 'approve', guard_field: 'partner_review.approved' },
+        { from: 'revision', to: 'draft_assembly', trigger: 'revised', guard_field: 'revision.ready' },
+        { from: 'client_delivery', to: 'complete', trigger: 'delivered', guard_field: 'client_delivery.ready' },
+      ]),
+      'intake.delegation_json': JSON.stringify({ enabled: false }),
+      'intake.completion_json': JSON.stringify({
+        final_stage: 'complete',
+        guard_field: 'client_delivery.ready',
+      }),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      proceed_to: Record<string, string>;
+    };
+    const smokeActionNames = smokeEffectNames(artifact.smoke_test_ts);
+
+    expect(smokeActionNames).toEqual([
+      'begin_work',
+      'complete_fee_modelling',
+      'complete_draft_assembly',
+      'advance_partner_review_to_client_delivery',
+      'complete_client_delivery',
+    ]);
+    expect(smokeActionNames).not.toContain('advance_partner_review_to_revision');
+    expect(smokeActionNames).not.toContain('complete_revision');
+    expect(parsed.proceed_to[smokeActionNames.at(-1) as string]).toBe('complete');
+    expect(artifact.smoke_test_ts).toContain("expect(snapshot.mode).toBe('complete')");
+  });
+
   it('synthesizes revised stages after stale Q4 default transitions are refreshed', async () => {
     const sessionId = 'session-revised-stale-transitions';
     clearSynthesizedArtifact(sessionId);
@@ -813,6 +862,10 @@ function transitionsFor(stageNames: string[]) {
     trigger: index === 0 ? 'started' : 'ready',
     guard_field: index === 0 ? `${from}.started` : `${from}.ready`,
   }));
+}
+
+function smokeEffectNames(source: string): string[] {
+  return Array.from(source.matchAll(/effect\('([^']+)'/gu), (match) => match[1] as string);
 }
 
 function writeTempSpec(specYaml: string): string {
