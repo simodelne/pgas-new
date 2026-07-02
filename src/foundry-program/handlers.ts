@@ -5,6 +5,7 @@ import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin
 import { createExistingRepoArtifactPlan, createStandaloneArtifactPlan } from '../pgas-new/artifact-plan.js';
 import { renderMissingWiringRequest } from '../pgas-new/curator-request.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
+import { graduationEvidenceRows, renderFinalizedGraduationAudit } from '../pgas-new/graduation-audit.js';
 import { sanitizedVerificationEnv } from '../pgas-new/verification-env.js';
 import {
   WIRING_MANIFEST_PATH,
@@ -931,6 +932,50 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   /**
+   * run_rebase_static_verification
+   * Records post-rebase static verification evidence (status/evidence_id pass
+   * through from the caller) AND reconciles the graduation audit artifact from
+   * governed graduation.* state (pgas-new#100). This is the last guaranteed
+   * action before the terminal pr_graduation mode (the session terminates on
+   * pr_graduation entry, so there is no actionable round inside it), which makes
+   * it the deterministic place to finalize the audit — no LLM sequencing.
+   * side effects: rewrites the graduation audit markdown under the target repo.
+   * The audit write is non-fatal: a failure records audit_finalized=false rather
+   * than blocking graduation, and surfaces audit_error (never silent).
+   */
+  async run_rebase_static_verification(payload) {
+    const domainRaw = (payload as { domain?: unknown }).domain;
+    const domain = domainRaw && typeof domainRaw === 'object' && !Array.isArray(domainRaw)
+      ? (domainRaw as Record<string, unknown>)
+      : undefined;
+    const status = optionalStringPayloadField(payload, 'status') ?? 'passed';
+    const evidenceIdValue = optionalStringPayloadField(payload, 'evidence_id') ?? evidenceId('rebase-static');
+
+    let auditPath = '';
+    let auditFinalized = false;
+    let auditError: string | undefined;
+    if (domain) {
+      try {
+        auditPath = finalizeGraduationAudit(domain, status, evidenceIdValue);
+        auditFinalized = true;
+      } catch (error) {
+        auditError = error instanceof Error ? error.message : String(error);
+      }
+    } else {
+      auditError = 'no domain snapshot available to reconcile graduation audit';
+    }
+
+    return {
+      kind: 'rebase_static_verification',
+      status,
+      evidence_id: evidenceIdValue,
+      audit_finalized: auditFinalized,
+      audit_path: auditPath,
+      ...(auditError ? { audit_error: auditError } : {}),
+    };
+  },
+
+  /**
    * open_pull_request
    * side effects: spawns gh pr create.
    * secret redaction: GITHUB_TOKEN is never logged or returned.
@@ -1160,6 +1205,47 @@ function stringDomainField(domain: Record<string, unknown>, path: string): strin
 function optionalStringDomainField(domain: Record<string, unknown>, path: string): string | undefined {
   const value = domainValue(domain, path);
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Reconcile the graduation audit artifact from governed graduation.* state
+ * (pgas-new#100). Returns the repo-relative path written. The post-rebase row
+ * uses the current step's status/evidence because graduation.rebase_verification
+ * is set by this same action and is not yet in the domain snapshot here.
+ */
+function finalizeGraduationAudit(
+  domain: Record<string, unknown>,
+  postRebaseStatus: string,
+  postRebaseEvidenceId: string,
+): string {
+  const slug = stringDomainField(domain, 'program.slug');
+  const name = optionalStringDomainField(domain, 'program.name') ?? humanizeSlug(slug);
+  const targetDir = stringDomainField(domain, 'program.target_dir');
+  const targetKind = optionalStringDomainField(domain, 'repo.target_kind')
+    ?? optionalStringDomainField(domain, 'repo.kind');
+
+  const relativePath = targetKind === 'existing_repo'
+    ? `${trimSlashes(parseWiringManifestDomainField(domain).paths?.audit_dir ?? 'audit')}/PGAS-NEW-${slug}.md`
+    : 'audit/PGAS-NEW-GRADUATION.md';
+
+  const rows = graduationEvidenceRows({
+    static_verification: optionalStringDomainField(domain, 'graduation.static_verification'),
+    static_evidence_id: optionalStringDomainField(domain, 'graduation.static_evidence_id'),
+    smoke_verification: optionalStringDomainField(domain, 'graduation.smoke_verification'),
+    smoke_evidence_id: optionalStringDomainField(domain, 'graduation.smoke_evidence_id'),
+    live_verification: optionalStringDomainField(domain, 'graduation.live_verification'),
+    live_evidence_id: optionalStringDomainField(domain, 'graduation.live_evidence_id'),
+    rebase_status: optionalStringDomainField(domain, 'graduation.rebase_status'),
+    rebase_evidence_id: optionalStringDomainField(domain, 'graduation.rebase_evidence_id'),
+    rebase_verification: postRebaseStatus,
+    rebase_static_evidence_id: postRebaseEvidenceId,
+  });
+
+  const content = renderFinalizedGraduationAudit({ name, slug, rows });
+  const outPath = join(targetDir, relativePath);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, content);
+  return relativePath;
 }
 
 function planArtifactsFromPayload(payload: Record<string, unknown>) {
