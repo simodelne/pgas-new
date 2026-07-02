@@ -1,12 +1,21 @@
 # Real LLM-Reasoning Stage Synthesis — Design Spec
 
 - **Date:** 2026-07-02
-- **Status:** Draft for owner review (independent validation pass: Codex)
+- **Status:** Draft for owner review — Codex-validated **SOLID-WITH-FIXES** (fixes folded in 2026-07-02)
 - **Owner:** Simone
 - **Baseline:** pgas-new v3.9.2 (`main` @ `b6ae256a`), engine `@simodelne/pgas-server` 2.16.0
 - **Predecessor:** `docs/superpowers/specs/2026-06-28-foundry-domain-synthesis-design.md`
   (which deliberately deferred llm-reasoning stages: "no body; tune prompt/schema", §4).
   This spec is that deferred work.
+
+## 0. Independent validation (Codex, 2026-07-02)
+
+Codex reviewed this spec against the actual engine + synthesizer code. **Verdict: SOLID-WITH-FIXES** — the weave points are real and feasible, and every assumption in §12 was **validated** against source (scripted payloads feed `from_arg`; GKType applies on the scripted path *before* `runTypeGate`; GKType is nominal `Map<Path,TypeName>` so enum/composite agreement is not engine-enforceable; the post-approval spec-sha drift is technically allowed by `gates.ts:239`; all named functions/paths exist). Codex's four corrections are folded into this revision:
+
+1. **Enforcement language tightened** — §2.1(b): the schema is engine-enforced at the *type* level only (nominal GKType); enum/required-key/composite agreement is gate+prompt-enforced (already documented in §5.3, §12.2–12.3).
+2. **Smoke channel fixed** — §6.7: the generated smoke effect must be emitted on the action's declared channel (`widget_output`), not the helper's `stage_output` default, or the observability envelope is unreachable.
+3. **Item-template literal anchors** — §5.3: `itemTemplateMatcher` treats every `<...>` as a wildcard, so literal prefixes (e.g. the stage slug) must be spelled out; `assertReasoningContract` enforces this.
+4. **Fallback-vs-hard-fail default → OPEN OWNER DECISION** — §12.8: Codex flags the §5.5 "fallback unless `REQUIRE_LLM=1`" as a real policy change from body-synthesis's hard-fail-only; it prefers inverting the default (hard-fail on configured-provider failure; `ALLOW_..._FALLBACK=1` to opt in). **Requires Simone's decision before implementation.**
 
 ## 1. Problem (verified against code)
 
@@ -86,8 +95,11 @@ while its recommend/review/summarize stages produce structurally arbitrary outpu
 ### 2.1 Goal
 
 Every generated llm-reasoning stage carries: (a) a stage-specific reasoning
-prompt in the generated `specs.yml`, (b) a typed, engine-enforced core output
-schema, (c) a schema-conformant canned example used by the generated smoke test
+prompt in the generated `specs.yml`, (b) a typed core output schema whose
+per-field runtime *types* are engine-enforced by GKType — nominal only: enum
+membership, required-key presence, and composite/field agreement are enforced at
+the synthesis gate + prompt layers, not by the engine (see §5.3 and §12.2/§12.3),
+(c) a schema-conformant canned example used by the generated smoke test
 and by fixture seeding, and (d) a real synthesis-time gate replacing
 `behavioral_gate: 'not_applicable'` — proven by a live standalone graduation
 drive where a real provider reasons at those stages.
@@ -196,6 +208,15 @@ repair signal in §5.4):
 - `canned_example.result` must contain every core field with the mapped runtime
   type and (for enums) a declared member; `canned_example.items` must match
   `items_schema.templates` positionally via `itemTemplateMatcher`.
+- **Literal prefixes in item templates must be spelled out, not `<stage>` (Codex).**
+  `itemTemplateMatcher` (`domain-synthesis.ts:1378-1389`) treats *every* `<...>`
+  token as a free wildcard, so a template like `<stage>:decision:<decision>` does
+  **not** assert the stage literal — any prefix would match. Where a template is
+  meant to pin a constant (e.g. the stage slug), emit the literal (`triage:decision:<decision>`).
+  `assertReasoningContract` rejects a template whose first segment is a
+  `<...>` placeholder when that segment is intended as a literal anchor (the
+  meta-prompt is instructed to use the concrete slug, and the deterministic
+  fallback already substitutes it).
 - Strictness decision: **required core fields, extras allowed.** Contrast with
   the deterministic-stage rule `assertResultJsonSchema`
   (`domain-synthesis.ts:1337-1354`), which demands exact key set + order because
@@ -483,6 +504,15 @@ module.
   canned example —
   `effect(name, { result_json: JSON.stringify(canned_example.result), items_json: JSON.stringify(canned_example.items), ...cannedFieldArgs })`
   where `cannedFieldArgs` maps each core field to `canned_example.result[field]`.
+  **Channel selection (Codex):** the generic smoke helper defaults every
+  non-`begin_work` effect to `stage_output` (`synthesizer.ts:1007`), but the
+  llm-reasoning `action_map` uses `widget_output` (`synthesizer.ts:640`). The
+  llm-reasoning branch therefore MUST emit the effect on the action's declared
+  channel — pass `channel: 'widget_output'` explicitly — otherwise the
+  `widget_output` conformance envelope described above is never produced and the
+  SOTA judge / session-log observability path is unreachable. The generated smoke
+  helper gains one parameter: the action's channel from the topology, defaulting
+  to `stage_output` for non-reasoning stages (no behavior change there).
   Evidence that scripted payload keys feed `from_arg` mutations on this path:
   today's generated smoke passes `result_json` in the scripted payload and the
   SOTA scorer subsequently reads `<stage>.result_json` out of the domain
@@ -714,7 +744,28 @@ captured into the run directory + graduation audit:
    contracts woven for stages: …" before `branch_write`. Open question for the
    owner: should `scaffold_plan` re-approval be forced when the sha changes?
    Recommended **no** (the plan approves artifact *paths and intent*, which are
-   unchanged), but flagged for Codex review.
+   unchanged), but flagged for Codex review. **Codex confirmed** this is
+   technically allowed — `branch_write` gates on the approved artifact plan +
+   write authorization, not the spec hash (`gates.ts:239`) — and agrees a forced
+   re-approval is unnecessary, provided the reweave is surfaced loudly (§9).
+8. **Fallback-vs-hard-fail default is an OPEN OWNER DECISION (raised by Codex).**
+   §5.5 as written *opts into* strictness: provider-configured-but-failed falls
+   through to the deterministic fallback (with loud audit) **unless**
+   `PGAS_REASONING_CONTRACT_REQUIRE_LLM=1`. Codex flags this as a genuine policy
+   change from the existing body-synthesis contract, which is retry-then-**hard-fail**
+   with no fallback (`domain-synthesis.ts:181,214`). Codex's preference is to
+   **invert the default**: fallback only on the *no-provider* hermetic path, and
+   hard-fail when a configured provider fails, gated instead by an explicit
+   opt-in (`ALLOW_REASONING_FALLBACK=1`). Trade-off: the current default keeps a
+   flaky local Qwen substrate from blocking every build (fallback is audited, and
+   live graduation sets `REQUIRE_LLM=1` so a *graduated* program never ships a
+   silent fallback); Codex's inversion is safer-by-default but makes CI/build more
+   brittle to provider flakiness. **Decision required from Simone before
+   implementation.** Recommendation if forced to choose now: adopt Codex's
+   inversion (default hard-fail on configured-provider failure; `ALLOW_..._FALLBACK=1`
+   to opt in), because it matches the established body-synthesis policy and the
+   "no silent degradation" invariant, and the hermetic no-provider path is
+   unaffected either way.
 
 ## 13. Implementation outline (ordered)
 
