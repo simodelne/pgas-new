@@ -176,6 +176,67 @@ describe('domain logic synthesis', () => {
     });
   });
 
+  it('retries transient stage body generator failures before hard-failing synthesis', async () => {
+    await withCache(async (cacheDir) => {
+      const repairs: string[] = [];
+      let attempts = 0;
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async ({ repair }) => {
+          repairs.push(repair?.lastError ?? 'initial');
+          attempts += 1;
+          if (attempts === 1) {
+            throw new Error('provider request timed out');
+          }
+          return validBody;
+        },
+      });
+
+      expect(repairs).toEqual(['initial', 'stage body generator failed: provider request timed out']);
+      expect(result.stage_sources?.calculate).toBe(validBody);
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'calculate',
+        attempts: 2,
+        behavioral_gate: 'passed',
+      }));
+    });
+  });
+
+  it('materializes deterministic source files for LLM-reasoning stages without provider calls', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic({
+        ...artifact(),
+        mode_names: ['intake', 'review', 'done'],
+        stage_classification: [
+          { slug: 'review', archetype: 'llm-reasoning', rationale: 'review requires natural-language reasoning' },
+        ],
+        body_stage_slugs: ['review'],
+      }, {
+        cacheDir,
+        generator: async () => {
+          throw new Error('LLM-reasoning stage materialization must not call the body generator');
+        },
+      });
+
+      expect(result.stage_sources?.review).toContain('review_reasoning_ready');
+      expect(result.stage_sources?.review).not.toContain('TODO');
+      expect(result.stage_sources?.review).not.toContain('stage_action_stub');
+      expect(result.domain_synthesis_audit).toEqual([
+        expect.objectContaining({
+          stage: 'review',
+          archetype: 'llm-reasoning',
+          behavioral_gate: 'not_applicable',
+          attempts: 0,
+          cache_hit: false,
+          body_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        }),
+      ]);
+    });
+  });
+
   it('passes the behavioral gate for a body that returns the expected fixture shape', async () => {
     await withCache(async (cacheDir) => {
       const result = await synthesizeDomainLogic(artifact(), {

@@ -19,9 +19,35 @@
   },
   "stage_body_hashes": {
     "asset_score": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3",
-    "cms_publish": "42437cd56a43ed7c7b6c853c3b3ff9aa9ccb37c7196cba31c1807635ebc9e218"
+    "cms_publish": "42437cd56a43ed7c7b6c853c3b3ff9aa9ccb37c7196cba31c1807635ebc9e218",
+    "editorial_review": "47bd3b0a030e711bd5a8bbb301c99105b829f90e6497d93bc9c84e5121db4f75",
+    "intake": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3"
   },
   "audit": [
+    {
+      "stage": "intake",
+      "archetype": "pure-compute",
+      "behavioral_gate": "passed",
+      "behavioral_fixture": {
+        "input_stage": "intake",
+        "expected_result_stage": "intake",
+        "expected_items_non_empty": true,
+        "available_domain_paths": [
+          "account.id",
+          "apply_discount.output",
+          "crm_lookup.output",
+          "estimate_fee.output",
+          "inputs.initial_user_text",
+          "inputs.user_text",
+          "owner.queue",
+          "record.id",
+          "score_risk.output"
+        ]
+      },
+      "attempts": 1,
+      "cache_hit": false,
+      "body_hash": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3"
+    },
     {
       "stage": "asset_score",
       "archetype": "pure-compute",
@@ -71,6 +97,14 @@
       "attempts": 1,
       "cache_hit": false,
       "body_hash": "42437cd56a43ed7c7b6c853c3b3ff9aa9ccb37c7196cba31c1807635ebc9e218"
+    },
+    {
+      "stage": "editorial_review",
+      "archetype": "llm-reasoning",
+      "behavioral_gate": "not_applicable",
+      "attempts": 0,
+      "cache_hit": false,
+      "body_hash": "47bd3b0a030e711bd5a8bbb301c99105b829f90e6497d93bc9c84e5121db4f75"
     }
   ]
 }

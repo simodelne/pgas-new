@@ -77,6 +77,12 @@ describe('generated multi-stage smoke test', () => {
       expect(artifact.smoke_test_ts).toContain("expect(serialized).toContain('in_memory_mock')");
       expect(artifact.domain_synthesis_audit).toEqual([
         expect.objectContaining({
+          stage: 'intake',
+          archetype: 'pure-compute',
+          attempts: 1,
+          cache_hit: false,
+        }),
+        expect.objectContaining({
           stage: 'fee_modeling',
           archetype: 'pure-compute',
           attempts: 1,
@@ -87,6 +93,13 @@ describe('generated multi-stage smoke test', () => {
           archetype: 'external-adapter',
           adapter_kind: 'in_memory_mock',
           attempts: 1,
+          cache_hit: false,
+        }),
+        expect.objectContaining({
+          stage: 'brief_summary',
+          archetype: 'llm-reasoning',
+          behavioral_gate: 'not_applicable',
+          attempts: 0,
           cache_hit: false,
         }),
       ]);

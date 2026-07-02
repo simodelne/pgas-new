@@ -94,6 +94,17 @@ export async function synthesizeDomainLogic(
   for (const stage of artifact.body_stage_slugs) {
     const classification = resolveIntegrationBinding(classificationFor(artifact, stage), targetKind, integrations);
     if (classification.archetype === 'llm-reasoning') {
+      const body = renderLlmReasoningStageBody(stage);
+      stageSources[stage] = body;
+      audit.push({
+        stage,
+        archetype: classification.archetype,
+        ...auditFieldsFor(classification),
+        behavioral_gate: 'not_applicable',
+        attempts: 0,
+        cache_hit: false,
+        body_hash: sha256(body),
+      });
       continue;
     }
     if (classification.archetype !== 'pure-compute' && classification.archetype !== 'external-adapter') {
@@ -169,13 +180,19 @@ export async function synthesizeDomainLogic(
     } else {
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         attemptsUsed = attempt;
-        const body = await generator({
-          stage,
-          archetype: classification.archetype,
-          contract: artifact.contracts_ts,
-          prompt,
-          ...(lastError ? { repair: { attempt, lastError } } : {}),
-        });
+        let body: string;
+        try {
+          body = await generator({
+            stage,
+            archetype: classification.archetype,
+            contract: artifact.contracts_ts,
+            prompt,
+            ...(lastError ? { repair: { attempt, lastError } } : {}),
+          });
+        } catch (error) {
+          lastError = `stage body generator failed: ${errorMessage(error)}`;
+          continue;
+        }
         const verification = await verifyStageBody(body, classification.archetype, {
           stage,
           ...(domainSpec ? { domainSpec } : {}),
@@ -508,34 +525,49 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
     if (!config.providerUrl || !config.model) {
       throw new Error('domain synthesis requires PGAS_OPENAI_BASE_URL and PGAS_OPENAI_MODEL');
     }
-    const response = await fetch(`${config.providerUrl.replace(/\/+$/u, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${process.env.PGAS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? 'local'}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              'Return only TypeScript source code. Do not use markdown fences.',
-              'Do not include comments.',
-              'Do not include the literal words TODO, placeholder, stage_action_stub, or not implemented.',
-              "The only allowed import is: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
-            ].join(' '),
-          },
-          {
-            role: 'user',
-            content: request.repair
-              ? `${request.prompt}\n\nPrevious attempt failed:\n${request.repair.lastError}`
-              : request.prompt,
-          },
-        ],
-      }),
-    });
+    const timeoutMs = domainSynthesisProviderTimeoutMs();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`${config.providerUrl.replace(/\/+$/u, '')}/chat/completions`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${process.env.PGAS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? 'local'}`,
+        },
+        body: JSON.stringify({
+          model: config.model,
+          temperature: 0,
+          max_tokens: domainSynthesisProviderMaxTokens(),
+          messages: [
+            {
+              role: 'system',
+              content: [
+                'Return only TypeScript source code. Do not use markdown fences.',
+                'Do not include comments.',
+                'Do not include the literal words TODO, placeholder, stage_action_stub, or not implemented.',
+                "The only allowed import is: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
+              ].join(' '),
+            },
+            {
+              role: 'user',
+              content: request.repair
+                ? `${request.prompt}\n\nPrevious attempt failed:\n${request.repair.lastError}`
+                : request.prompt,
+            },
+          ],
+        }),
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`domain synthesis provider timed out after ${timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
     if (!response.ok) {
       throw new Error(`domain synthesis provider failed: HTTP ${response.status}`);
     }
@@ -546,6 +578,25 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
     }
     return extractCode(content);
   };
+}
+
+function domainSynthesisProviderTimeoutMs(): number {
+  return positiveIntegerEnv('PGAS_DOMAIN_SYNTHESIS_TIMEOUT_MS', 45_000);
+}
+
+function domainSynthesisProviderMaxTokens(): number {
+  return positiveIntegerEnv('PGAS_DOMAIN_SYNTHESIS_MAX_TOKENS', 2_400);
+}
+
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function promptForStage(stage: string, classification: StageClassification, artifact: SynthesizedArtifact): string {
@@ -606,6 +657,24 @@ function promptForStage(stage: string, classification: StageClassification, arti
 
 function domainSpecForStage(artifact: SynthesizedArtifact, stage: string): StageDomainSpec | undefined {
   return artifact.synthesis_context?.stages.find((item) => item.slug === stage)?.domain_spec;
+}
+
+function renderLlmReasoningStageBody(stage: string): string {
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  const result = {
+    stage: input.stage,
+    status: ${JSON.stringify(`${stage}_reasoning_ready`)},
+    generated_at: runtime.now(),
+  };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify([${JSON.stringify(`${stage}:reasoning_ready`)}]),
+    digest: '',
+  };
+}
+`;
 }
 
 function contextForStage(

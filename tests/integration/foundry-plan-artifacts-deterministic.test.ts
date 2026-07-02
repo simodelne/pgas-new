@@ -69,7 +69,9 @@ describe('foundry deterministic artifact planning', () => {
         slug: 'incident-triage',
         name: 'Incident Triage',
       }, {
-        stageSlugs: ['triage'],
+        // All non-terminal stages are planned (bootstrap `intake` + `triage`;
+        // `resolved` is terminal). Previously only non-LLM stages were planned.
+        stageSlugs: ['intake', 'triage'],
       }).artifacts;
 
       expect(snapshot.domain['artifact_plan.status']).toBe('draft');
