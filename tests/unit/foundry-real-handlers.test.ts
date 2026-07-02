@@ -158,10 +158,14 @@ describe('npm_typecheck and npm_test', () => {
 });
 
 describe('git_status and git_rebase_latest', () => {
-  it('returns clean git status lines', async () => {
-    spawnMock.mockImplementationOnce(() => fakeChild({ stdout: '' }));
+  it('returns clean git status lines (git repo)', async () => {
+    spawnMock
+      .mockImplementationOnce(() => fakeChild({ stdout: 'true\n' })) // rev-parse --is-inside-work-tree
+      .mockImplementationOnce(() => fakeChild({ stdout: '' })); // status --porcelain
 
     await expect(handlers.git_status(payload({ cwd: '/tmp/out' }))).resolves.toEqual({ clean: true, lines: [] });
+    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['rev-parse', '--is-inside-work-tree'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['status', '--porcelain'], expect.any(Object));
   });
 
   it('runs fetch then rebase for the target branch (repo has origin)', async () => {

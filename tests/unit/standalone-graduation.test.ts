@@ -71,4 +71,13 @@ describe('#106 git_rebase_latest tolerates standalone targets without an origin'
     expect(result.status).toBe('passed');
     expect(String(result.reason)).toMatch(/origin/i);
   });
+
+  it('git_status reports clean/no-repo instead of failing on a non-git target', async () => {
+    const target = tempDir('pgas-new-standalone-status-');
+    const result = await handlers.git_status!({
+      domain: { 'program.target_dir': target },
+    } as never) as Record<string, unknown>;
+
+    expect(result).toMatchObject({ clean: true, lines: [], not_a_git_repo: true });
+  });
 });

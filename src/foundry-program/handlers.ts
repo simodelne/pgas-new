@@ -919,6 +919,11 @@ export const handlers: Record<string, ToolHandler> = {
    */
   async git_status(payload) {
     const cwd = safeCwd(payload);
+    // #106: a fresh standalone output is not a git repository. `git status` would
+    // fatally fail; report a clean/no-repo status instead of crashing the round.
+    if (!(await isGitRepo(cwd))) {
+      return { clean: true, lines: [], not_a_git_repo: true };
+    }
     const result = await runCommand('git', ['status', '--porcelain'], cwd, 60_000);
     const lines = result.stdout.split(/\r?\n/u).filter(Boolean);
     return { clean: lines.length === 0, lines };
@@ -1662,6 +1667,16 @@ async function gitHasOriginRemote(cwd: string): Promise<boolean> {
       .includes('origin');
   } catch {
     // `git remote` fails when cwd is not a git repository.
+    return false;
+  }
+}
+
+/** True when `cwd` is inside a git work tree (a standalone output is not). */
+async function isGitRepo(cwd: string): Promise<boolean> {
+  try {
+    await runCommand('git', ['rev-parse', '--is-inside-work-tree'], cwd, 30_000);
+    return true;
+  } catch {
     return false;
   }
 }
