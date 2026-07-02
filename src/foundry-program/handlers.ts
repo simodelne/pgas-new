@@ -476,7 +476,7 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   ['normalize_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.static_verification')],
   ['normalize_smoke_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.smoke_verification')],
   ['normalize_live_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.live_verification')],
-  ['normalize_rebase_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_status')],
+  ['normalize_rebase_status', (snapshot) => normalizeRebaseStatus(snapshot, 'graduation.rebase_status')],
   ['normalize_rebase_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_verification')],
   ['normalize_intake_json_fields', (snapshot) => {
     const mutations = intakeJsonPaths.flatMap((path) => {
@@ -501,6 +501,27 @@ function normalizeVerificationStatus(snapshot: ReadonlyMap<string, unknown>, sta
   const canonical = canonicalizeVerificationStatus(rawStatus);
   if (!canonical || rawStatus === canonical) return undefined;
   return { mutations: [{ op: 'MSet' as const, path: statusPath, value: canonical }] };
+}
+
+/**
+ * Rebase status is normalized more decisively than the generic verification path.
+ * git_rebase_latest only RECORDS a status after a successful rebase or a
+ * standalone no-op — a genuine rebase conflict throws and never records. The
+ * engine model, however, predicts the `status` arg before the handler runs and,
+ * for a standalone target with no upstream, may report a non-canonical value like
+ * "no-op-standalone" or "skipped". Any recorded rebase status that is not an
+ * explicit failure therefore means the rebase requirement is satisfied → 'passed'.
+ * Without this, an unrecognized status stalls the exact-"passed" rebase_verify
+ * gate (observed live: session incident-digest-1783006038754 looped __fallback__
+ * on graduation.rebase_status="no-op-standalone").
+ */
+function normalizeRebaseStatus(snapshot: ReadonlyMap<string, unknown>, statusPath: string) {
+  const rawStatus = snapshot.get(statusPath);
+  if (typeof rawStatus !== 'string' || rawStatus.trim().length === 0) return undefined;
+  const resolved = canonicalizeVerificationStatus(rawStatus) === 'failed' ? 'failed' : 'passed';
+  return rawStatus === resolved
+    ? undefined
+    : { mutations: [{ op: 'MSet' as const, path: statusPath, value: resolved }] };
 }
 
 const VERIFICATION_STATUS_SYNONYMS: Record<string, 'passed' | 'failed' | 'skipped'> = {

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { handlers } from '../../src/foundry-program/handlers.js';
+import { handlers, reactionHandlers } from '../../src/foundry-program/handlers.js';
 
 const tempRoots: string[] = [];
 afterEach(() => {
@@ -79,5 +79,52 @@ describe('#106 git_rebase_latest tolerates standalone targets without an origin'
     } as never) as Record<string, unknown>;
 
     expect(result).toMatchObject({ clean: true, lines: [], not_a_git_repo: true });
+  });
+});
+
+// A recorded rebase means git_rebase_latest succeeded or was a standalone no-op
+// (conflicts throw and never record). The engine model predicts the status arg
+// and, for a standalone target, may report "no-op-standalone"/"skipped" — which
+// must still open the exact-"passed" rebase_verify gate. Regression: a live
+// standalone drive stalled with graduation.rebase_status="no-op-standalone".
+describe('normalize_rebase_status: any recorded non-failure rebase resolves to passed', () => {
+  const reaction = reactionHandlers.get('normalize_rebase_status');
+
+  function resolve(status: string): unknown {
+    const out = reaction!(new Map<string, unknown>([['graduation.rebase_status', status]]), undefined as never, undefined as never);
+    return out;
+  }
+
+  it('is registered', () => {
+    expect(reaction).toBeTypeOf('function');
+  });
+
+  it('maps a model-invented standalone no-op status to passed', () => {
+    expect(resolve('no-op-standalone')).toEqual({
+      mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'passed' }],
+    });
+  });
+
+  it('maps skipped/other non-failure phrasings to passed', () => {
+    for (const status of ['skipped', 'noop', 'not applicable', 'n/a', 'done', 'clean']) {
+      expect(resolve(status)).toEqual({
+        mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'passed' }],
+      });
+    }
+  });
+
+  it('is a no-op when already passed', () => {
+    expect(resolve('passed')).toBeUndefined();
+  });
+
+  it('preserves an explicit failure (a real rebase conflict throws before recording, so this only fires on model-reported failures)', () => {
+    expect(resolve('failed')).toBeUndefined();
+    // Failure synonyms canonicalize to 'failed' and are preserved, never bumped to passed.
+    expect(resolve('failure')).toEqual({
+      mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'failed' }],
+    });
+    expect(resolve('error')).toEqual({
+      mutations: [{ op: 'MSet', path: 'graduation.rebase_status', value: 'failed' }],
+    });
   });
 });
