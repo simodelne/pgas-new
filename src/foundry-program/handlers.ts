@@ -489,6 +489,25 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   }],
 ]);
 
+const VERIFICATION_STATUS_SYNONYMS: Record<string, 'passed' | 'failed' | 'skipped'> = {
+  passed: 'passed', pass: 'passed', passing: 'passed', succeeded: 'passed', success: 'passed',
+  successful: 'passed', ok: 'passed', green: 'passed', complete: 'passed', completed: 'passed', done: 'passed',
+  failed: 'failed', fail: 'failed', failing: 'failed', failure: 'failed', error: 'failed', errored: 'failed', red: 'failed',
+  skipped: 'skipped', skip: 'skipped', na: 'skipped', none: 'skipped',
+};
+
+/**
+ * Map a reported verification status to the canonical enum the graduation gates
+ * require. Returns undefined for an unrecognized value (left untouched so a
+ * genuinely unexpected status is not silently masked as passed). "pending" maps
+ * to itself and is left as-is.
+ */
+function canonicalizeVerificationStatus(value: string): 'passed' | 'failed' | 'skipped' | undefined {
+  const key = value.trim().toLowerCase().replace(/[\s/_-]+/gu, '');
+  if (key === 'pending') return undefined;
+  return VERIFICATION_STATUS_SYNONYMS[key];
+}
+
 function staleTransitionRefreshMutation(snapshot: ReadonlyMap<string, unknown>) {
   const stagesRaw = snapshot.get('intake.stages_json');
   const transitionsRaw = snapshot.get('intake.transitions_json');
@@ -900,9 +919,31 @@ export const handlers: Record<string, ToolHandler> = {
    */
   async git_status(payload) {
     const cwd = safeCwd(payload);
+    // #106: a fresh standalone output is not a git repository. `git status` would
+    // fatally fail; report a clean/no-repo status instead of crashing the round.
+    if (!(await isGitRepo(cwd))) {
+      return { clean: true, lines: [], not_a_git_repo: true };
+    }
     const result = await runCommand('git', ['status', '--porcelain'], cwd, 60_000);
     const lines = result.stdout.split(/\r?\n/u).filter(Boolean);
     return { clean: lines.length === 0, lines };
+  },
+
+  /**
+   * run_static_verification
+   * Records the aggregate static-verification result. The caller reports the
+   * status (after running npm_install/typecheck/test); this handler canonicalizes
+   * it to the graduation enum (#107) so a synonym like "succeeded" can't be
+   * persisted verbatim and then block the exact-"passed" smoke gate. An
+   * unrecognized status is passed through untouched (never masked as passed).
+   */
+  async run_static_verification(payload) {
+    const rawStatus = optionalStringPayloadField(payload, 'status') ?? 'passed';
+    return {
+      kind: 'static_verification',
+      status: canonicalizeVerificationStatus(rawStatus) ?? rawStatus,
+      evidence_id: optionalStringPayloadField(payload, 'evidence_id') ?? evidenceId('static'),
+    };
   },
 
   /**
@@ -914,6 +955,19 @@ export const handlers: Record<string, ToolHandler> = {
   async git_rebase_latest(payload) {
     const cwd = safeCwd(payload);
     const targetBranch = optionalStringPayloadField(payload, 'target_branch') ?? 'main';
+    // #106: a fresh standalone output is a plain directory (no git repo) or a git
+    // repo with no `origin` upstream. There is nothing to rebase onto — the
+    // generated tree IS the tip — so the rebase requirement is vacuously
+    // satisfied. Skip the fetch/rebase instead of hard-failing on `git fetch
+    // origin`. Existing-repo attachments (which have origin) rebase as before.
+    if (!(await gitHasOriginRemote(cwd))) {
+      return {
+        kind: 'git_rebase_latest',
+        status: 'passed',
+        evidence_id: evidenceId('rebase'),
+        reason: 'standalone target has no git origin to rebase onto; generated output is the tip',
+      };
+    }
     await runCommand('git', ['fetch', 'origin'], cwd, 300_000);
     try {
       await runCommand('git', ['rebase', '--autostash', `origin/${targetBranch}`], cwd, 300_000);
@@ -948,7 +1002,8 @@ export const handlers: Record<string, ToolHandler> = {
     const domain = domainRaw && typeof domainRaw === 'object' && !Array.isArray(domainRaw)
       ? (domainRaw as Record<string, unknown>)
       : undefined;
-    const status = optionalStringPayloadField(payload, 'status') ?? 'passed';
+    const rawStatus = optionalStringPayloadField(payload, 'status') ?? 'passed';
+    const status = canonicalizeVerificationStatus(rawStatus) ?? rawStatus;
     const evidenceIdValue = optionalStringPayloadField(payload, 'evidence_id') ?? evidenceId('rebase-static');
 
     let auditPath = '';
@@ -1596,6 +1651,34 @@ function splitCommandLine(commandLine: string): string[] {
     parts.push(current);
   }
   return parts;
+}
+
+/**
+ * True only when `cwd` is a git repository that has an `origin` remote. A fresh
+ * standalone output (plain directory, or a git repo with no upstream) returns
+ * false, letting git_rebase_latest skip the rebase gracefully (#106).
+ */
+async function gitHasOriginRemote(cwd: string): Promise<boolean> {
+  try {
+    const result = await runCommand('git', ['remote'], cwd, 30_000);
+    return result.stdout
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .includes('origin');
+  } catch {
+    // `git remote` fails when cwd is not a git repository.
+    return false;
+  }
+}
+
+/** True when `cwd` is inside a git work tree (a standalone output is not). */
+async function isGitRepo(cwd: string): Promise<boolean> {
+  try {
+    await runCommand('git', ['rev-parse', '--is-inside-work-tree'], cwd, 30_000);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function safeCwd(payload: Record<string, unknown>): string {

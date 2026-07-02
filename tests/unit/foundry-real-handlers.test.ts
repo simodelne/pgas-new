@@ -158,14 +158,19 @@ describe('npm_typecheck and npm_test', () => {
 });
 
 describe('git_status and git_rebase_latest', () => {
-  it('returns clean git status lines', async () => {
-    spawnMock.mockImplementationOnce(() => fakeChild({ stdout: '' }));
+  it('returns clean git status lines (git repo)', async () => {
+    spawnMock
+      .mockImplementationOnce(() => fakeChild({ stdout: 'true\n' })) // rev-parse --is-inside-work-tree
+      .mockImplementationOnce(() => fakeChild({ stdout: '' })); // status --porcelain
 
     await expect(handlers.git_status(payload({ cwd: '/tmp/out' }))).resolves.toEqual({ clean: true, lines: [] });
+    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['rev-parse', '--is-inside-work-tree'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['status', '--porcelain'], expect.any(Object));
   });
 
-  it('runs fetch then rebase for the target branch', async () => {
+  it('runs fetch then rebase for the target branch (repo has origin)', async () => {
     spawnMock
+      .mockImplementationOnce(() => fakeChild({ stdout: 'origin\n' }))
       .mockImplementationOnce(() => fakeChild({ stdout: 'fetched\n' }))
       .mockImplementationOnce(() => fakeChild({ stdout: 'rebased\n' }));
 
@@ -173,12 +178,14 @@ describe('git_status and git_rebase_latest', () => {
       kind: 'git_rebase_latest',
       status: 'passed',
     });
-    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin'], expect.any(Object));
-    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', '--autostash', 'origin/main'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['remote'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['fetch', 'origin'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(3, 'git', ['rebase', '--autostash', 'origin/main'], expect.any(Object));
   });
 
-  it('defaults rebase cwd and target branch for the standalone graduation path', async () => {
+  it('defaults rebase cwd and target branch when the repo has an origin', async () => {
     spawnMock
+      .mockImplementationOnce(() => fakeChild({ stdout: 'origin\n' }))
       .mockImplementationOnce(() => fakeChild({ stdout: 'fetched\n' }))
       .mockImplementationOnce(() => fakeChild({ stdout: 'rebased\n' }));
 
@@ -186,12 +193,25 @@ describe('git_status and git_rebase_latest', () => {
       kind: 'git_rebase_latest',
       status: 'passed',
     });
-    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['fetch', 'origin'], expect.any(Object));
-    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['rebase', '--autostash', 'origin/main'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['remote'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(2, 'git', ['fetch', 'origin'], expect.any(Object));
+    expect(spawnMock).toHaveBeenNthCalledWith(3, 'git', ['rebase', '--autostash', 'origin/main'], expect.any(Object));
+  });
+
+  it('skips rebase (passed) when the target has no origin remote (#106 standalone)', async () => {
+    spawnMock.mockImplementationOnce(() => fakeChild({ stdout: '\n' }));
+
+    await expect(handlers.git_rebase_latest(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+      kind: 'git_rebase_latest',
+      status: 'passed',
+    });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenNthCalledWith(1, 'git', ['remote'], expect.any(Object));
   });
 
   it('reports unmerged paths on rebase conflict', async () => {
     spawnMock
+      .mockImplementationOnce(() => fakeChild({ stdout: 'origin\n' }))
       .mockImplementationOnce(() => fakeChild({ stdout: 'fetched\n' }))
       .mockImplementationOnce(() => fakeChild({ code: 1, stderr: 'CONFLICT\n', stdout: 'UU src/a.ts\n' }));
 
