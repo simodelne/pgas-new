@@ -844,7 +844,11 @@ action_map:
       - { op: MSet, path: graduation.rebase_evidence_id, from_arg: evidence_id }
     channel: widget_output
   run_rebase_static_verification:
-    description: "Record post-rebase static verification evidence."
+    description: |
+      Record post-rebase static verification evidence AND reconcile the generated
+      graduation audit artifact from governed graduation state (#100). The handler
+      rewrites the audit markdown's evidence rows to actual statuses/ids so a
+      terminal pr_graduation does not ship an audit that still reads "pending".
     mutations:
       - { op: MSet, path: graduation.rebase_verification, from_arg: status }
       - { op: MSet, path: graduation.rebase_static_evidence_id, from_arg: evidence_id }
