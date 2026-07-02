@@ -13,7 +13,12 @@
   "llm_outputs": {
     "release_note_summary": {
       "result_json": "{\"stage\":\"release_note_summary\",\"product\":\"Mobile Sync\",\"version\":\"4.8.1\",\"risk_level\":\"medium\",\"customer_action\":\"notify beta tenants before July 12\",\"change_count\":2}",
-      "items_json": "[\"product:Mobile Sync\",\"version:4.8.1\",\"risk_level:medium\",\"action:notify beta tenants before July 12\"]"
+      "items_json": "[\"product:Mobile Sync\",\"version:4.8.1\",\"risk_level:medium\",\"action:notify beta tenants before July 12\"]",
+      "product": "Mobile Sync",
+      "version": "4.8.1",
+      "risk_level": "medium",
+      "customer_action": "notify beta tenants before July 12",
+      "change_count": 2
     }
   }
 }

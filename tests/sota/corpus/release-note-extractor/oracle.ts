@@ -7,12 +7,15 @@ import {
   type SotaStageActual,
 } from '../../oracle-types.js';
 
+const TYPED_FIELDS = ['product', 'version', 'risk_level', 'customer_action', 'change_count'] as const;
+
 function expected(input: Parameters<SotaOracle['expected']>[0]): SotaFunctionalActual {
   const result = JSON.parse(input.llm_outputs?.release_note_summary?.result_json ?? '{}') as Record<string, unknown>;
   const items = JSON.parse(input.llm_outputs?.release_note_summary?.items_json ?? '[]') as unknown[];
   return {
     final_stage: 'complete',
-    domain: {},
+    // Woven reasoning contracts write one GKType-typed flat key per core field.
+    domain: Object.fromEntries(TYPED_FIELDS.map((field) => [`release_note_summary.result.${field}`, result[field]])),
     stages: {
       release_note_summary: stage('release_note_summary', result, items),
     },
@@ -24,6 +27,9 @@ function assertOutput(input: Parameters<SotaOracle['assertOutput']>[0], actual: 
   assertEqual(actual.final_stage, want.final_stage, 'final_stage');
   assertEqual(assertStage(actual, 'release_note_summary').result, want.stages.release_note_summary.result, 'release_note_summary.result');
   assertEqual(assertStage(actual, 'release_note_summary').items, want.stages.release_note_summary.items, 'release_note_summary.items');
+  for (const field of TYPED_FIELDS) {
+    assertEqual(actual.domain[`release_note_summary.result.${field}`], want.domain[`release_note_summary.result.${field}`], `release_note_summary.result.${field}`);
+  }
 }
 
 function mutations(_input: Parameters<SotaOracle['mutations']>[0], good: SotaFunctionalActual): SotaFunctionalActual[] {
@@ -33,7 +39,9 @@ function mutations(_input: Parameters<SotaOracle['mutations']>[0], good: SotaFun
   inventedRollback.stages.release_note_summary.result.customer_action = 'schedule rollback window';
   const missingActionItem = cloneActual(good);
   missingActionItem.stages.release_note_summary.items = ['product:Mobile Sync', 'version:4.8.1', 'risk_level:medium'];
-  return [inflatedRisk, inventedRollback, missingActionItem];
+  const divergedTypedField = cloneActual(good);
+  divergedTypedField.domain['release_note_summary.result.change_count'] = 99;
+  return [inflatedRisk, inventedRollback, missingActionItem, divergedTypedField];
 }
 
 function stage(stageName: string, result: Record<string, unknown>, items: unknown[]): SotaStageActual {

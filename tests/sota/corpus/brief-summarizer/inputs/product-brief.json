@@ -13,7 +13,11 @@
   "llm_outputs": {
     "brief_summary": {
       "result_json": "{\"stage\":\"brief_summary\",\"audience\":\"customer success\",\"deadline\":\"2026-07-15\",\"constraint\":\"no billing changes this release\",\"decision\":\"prepare enterprise admin beta onboarding\"}",
-      "items_json": "[\"audience:customer success\",\"deadline:2026-07-15\",\"constraint:no billing changes this release\"]"
+      "items_json": "[\"audience:customer success\",\"deadline:2026-07-15\",\"constraint:no billing changes this release\"]",
+      "audience": "customer success",
+      "deadline": "2026-07-15",
+      "constraint": "no billing changes this release",
+      "decision": "prepare enterprise admin beta onboarding"
     }
   }
 }

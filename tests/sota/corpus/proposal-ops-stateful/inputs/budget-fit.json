@@ -14,7 +14,11 @@
   "llm_outputs": {
     "approval_summary": {
       "result_json": "{\"stage\":\"approval_summary\",\"approved\":true,\"basis\":\"discounted_total_within_budget\",\"discounted_total_usd\":10800,\"budget_usd\":12000}",
-      "items_json": "[\"approved:true\",\"discounted_total_usd:10800\"]"
+      "items_json": "[\"approved:true\",\"discounted_total_usd:10800\"]",
+      "approved": true,
+      "basis": "discounted_total_within_budget",
+      "discounted_total_usd": 10800,
+      "budget_usd": 12000
     }
   }
 }
