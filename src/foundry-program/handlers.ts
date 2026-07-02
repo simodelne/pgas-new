@@ -15,6 +15,7 @@ import {
 } from '../pgas-new/wiring-manifest.js';
 import { runCompositeStaticChecks } from './composite-checks.js';
 import { synthesizeDomainLogic, type StageBodyGenerator } from './domain-synthesis.js';
+import type { ReasoningContractGenerator } from './reasoning-contract.js';
 import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain } from './synthesizer.js';
 import { putSynthesizedArtifact, requireSynthesizedArtifact, type SynthesizedArtifact } from './synthesizer-store.js';
 
@@ -804,19 +805,29 @@ export const handlers: Record<string, ToolHandler> = {
     const sessionId = sessionIdFromPayload(payload);
     const domain = domainFromPayload(payload);
     const synthesized = requireSynthesizedArtifact(sessionId);
+    const specSha256Before = synthesized.sha256;
     const result = await synthesizeDomainLogic(synthesized, {
       cacheDir: optionalStringPayloadField(payload, 'cache_dir'),
       providerUrl: optionalStringPayloadField(payload, 'provider_url'),
       model: optionalStringPayloadField(payload, 'model'),
       generator: optionalStageBodyGenerator(payload),
+      reasoningContractGenerator: optionalReasoningContractGenerator(payload),
       ...synthesisOptionsFromDomain(domain),
     });
     putSynthesizedArtifact(sessionId, result);
+    const reasoningContractsWoven = (result.domain_synthesis_audit ?? [])
+      .filter((entry) => entry.behavioral_gate === 'reasoning_contract_conformance')
+      .map((entry) => String(entry.stage));
     return {
       kind: 'domain_synthesis',
       status: 'passed',
       stage_count: result.domain_synthesis_audit?.length ?? 0,
       audit: result.domain_synthesis_audit ?? [],
+      // The reasoning-contract re-weave rewrites the spec after the
+      // architecture_design approval; surface the sha delta loudly (spec §9).
+      spec_sha256_before: specSha256Before,
+      spec_sha256_after: result.sha256,
+      reasoning_contracts_woven: reasoningContractsWoven,
     };
   },
 
@@ -1541,6 +1552,11 @@ function optionalStageBodyGenerator(payload: Record<string, unknown>): StageBody
   }
   const generator = payload.__domain_synthesis_generator;
   return typeof generator === 'function' ? generator as StageBodyGenerator : undefined;
+}
+
+function optionalReasoningContractGenerator(payload: Record<string, unknown>): ReasoningContractGenerator | undefined {
+  const generator = payload.__reasoning_contract_generator;
+  return typeof generator === 'function' ? generator as ReasoningContractGenerator : undefined;
 }
 
 function requireAcceptedStageSources(artifact: SynthesizedArtifact): Record<string, string> {

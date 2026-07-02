@@ -205,7 +205,7 @@ describe('domain logic synthesis', () => {
     });
   });
 
-  it('materializes deterministic source files for LLM-reasoning stages without provider calls', async () => {
+  it('materializes reasoning contract-record modules for LLM-reasoning stages without provider calls', async () => {
     await withCache(async (cacheDir) => {
       const result = await synthesizeDomainLogic({
         ...artifact(),
@@ -221,19 +221,30 @@ describe('domain logic synthesis', () => {
         },
       });
 
-      expect(result.stage_sources?.review).toContain('review_reasoning_ready');
+      // No fake runStage: the stage record is the reasoning contract itself.
+      expect(result.stage_sources?.review).toContain('export const reasoningContract = {');
+      expect(result.stage_sources?.review).toContain('engine author-LLM');
+      expect(result.stage_sources?.review).not.toContain('function runStage');
+      expect(result.stage_sources?.review).not.toContain('export async function');
       expect(result.stage_sources?.review).not.toContain('TODO');
       expect(result.stage_sources?.review).not.toContain('stage_action_stub');
       expect(result.domain_synthesis_audit).toEqual([
         expect.objectContaining({
           stage: 'review',
           archetype: 'llm-reasoning',
-          behavioral_gate: 'not_applicable',
+          behavioral_gate: 'reasoning_contract_conformance',
+          contract_source: 'deterministic_fallback',
+          contract_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          fallback_reason: expect.stringContaining('no meta-LLM provider configured'),
           attempts: 0,
           cache_hit: false,
           body_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       ]);
+      // The reasoning behavioral gate is real now: never 'not_applicable'.
+      for (const entry of result.domain_synthesis_audit ?? []) {
+        expect(entry.behavioral_gate).not.toBe('not_applicable');
+      }
     });
   });
 
