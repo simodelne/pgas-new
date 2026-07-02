@@ -473,6 +473,11 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   ['debug_approve_artifact_plan_preconditions', (snapshot, trigger, mode) => {
     debugApprovalPreconditions(snapshot, trigger, mode);
   }],
+  ['normalize_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.static_verification')],
+  ['normalize_smoke_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.smoke_verification')],
+  ['normalize_live_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.live_verification')],
+  ['normalize_rebase_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_status')],
+  ['normalize_rebase_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_verification')],
   ['normalize_intake_json_fields', (snapshot) => {
     const mutations = intakeJsonPaths.flatMap((path) => {
       const value = snapshot.get(path);
@@ -488,6 +493,15 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
     return allMutations.length > 0 ? { mutations: allMutations } : undefined;
   }],
 ]);
+
+function normalizeVerificationStatus(snapshot: ReadonlyMap<string, unknown>, statusPath: string) {
+  const rawStatus = snapshot.get(statusPath);
+  if (typeof rawStatus !== 'string') return undefined;
+
+  const canonical = canonicalizeVerificationStatus(rawStatus);
+  if (!canonical || rawStatus === canonical) return undefined;
+  return { mutations: [{ op: 'MSet' as const, path: statusPath, value: canonical }] };
+}
 
 const VERIFICATION_STATUS_SYNONYMS: Record<string, 'passed' | 'failed' | 'skipped'> = {
   passed: 'passed', pass: 'passed', passing: 'passed', succeeded: 'passed', success: 'passed',

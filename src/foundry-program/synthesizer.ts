@@ -306,11 +306,7 @@ export function synthesizeProgramSpecFromDomain(
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
-  const bodyStageSlugs = unique(
-    transitionActions
-      .filter((action) => action.name !== 'begin_work' && action.archetype !== 'llm-reasoning')
-      .map((action) => action.source),
-  );
+  const bodyStageSlugs = nonTerminalStageSlugs(stages, completion);
 
   return {
     spec_yaml: specYaml,
@@ -1264,6 +1260,14 @@ function normalizeStages(stages: StageInput[]): Stage[] {
       ...(index === stages.length - 1 ? { is_terminal: true } : {}),
     };
   });
+}
+
+function nonTerminalStageSlugs(stages: Stage[], completion: Completion): string[] {
+  return unique(
+    stages
+      .filter((stage) => !stage.is_terminal && stage.slug !== completion.final_stage)
+      .map((stage) => stage.slug),
+  );
 }
 
 function domainSpecsByStage(stages: Stage[]): Record<string, StageDomainSpec> {

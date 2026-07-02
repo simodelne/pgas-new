@@ -188,6 +188,59 @@ describe('foundry end-to-end acceptance gate', () => {
     }
   }, 600_000);
 
+  it('canonicalizes verification result statuses before downstream graduation gates', async () => {
+    const tempRoot = trackedTempRoot('pgas-new-foundry-status-canonical-');
+    const targetDir = join(tempRoot, 'incident-triage');
+    vi.spyOn(handlers, 'run_smoke_verification').mockResolvedValue({
+      kind: 'smoke_verification',
+      status: 'passed',
+      evidence_id: 'smoke-synonym',
+    });
+    vi.spyOn(handlers, 'run_live_provider_verification').mockResolvedValue({
+      kind: 'live_provider_verification',
+      status: 'passed',
+      evidence_id: 'live-synonym',
+    });
+    const harness = await createHarness(successWithVerificationStatusSynonyms(targetDir));
+
+    try {
+      const seenModes = [await harness.getMode()];
+
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Create an incident triage PGAS program.' });
+      await triggerAndRecord(harness, seenModes, { channel: 'user_text', payload: 'Use the design path.' });
+      for (let i = 0; i < 7; i += 1) {
+        await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      }
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'scaffold_plan' && snapshot.domain['artifact_plan.status'] === 'draft',
+        'draft artifact plan before status canonicalization regression',
+      );
+      await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'branch_write' && snapshot.domain['program.domain_synthesis_complete'] === true,
+        'domain synthesis completion before status canonicalization regression',
+      );
+
+      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      const finalSnapshot = await waitForSnapshot(
+        harness,
+        (snapshot) => snapshot.mode === 'pr_graduation' && snapshot.terminal === true,
+        'status synonyms canonicalized through pr_graduation',
+      );
+
+      expect(finalSnapshot.domain['graduation.static_verification']).toBe('passed');
+      expect(finalSnapshot.domain['graduation.smoke_verification']).toBe('passed');
+      expect(finalSnapshot.domain['graduation.live_verification']).toBe('passed');
+      expect(finalSnapshot.domain['graduation.rebase_status']).toBe('passed');
+      expect(finalSnapshot.domain['graduation.rebase_verification']).toBe('passed');
+    } finally {
+      await harness.close();
+    }
+  }, 600_000);
+
   it('reaches curator_request on the refusal path without binding a port', async () => {
     const tempRoot = trackedTempRoot('pgas-new-foundry-refusal-');
     const targetDir = join(tempRoot, 'existing-repo');
@@ -272,6 +325,26 @@ function successWithCompositeChecks(targetDir: string): TestHarnessAuthorRespons
   );
   sequence.splice(writeIndex + 1, 0, compositeChecksEffect());
   return sequence;
+}
+
+function successWithVerificationStatusSynonyms(targetDir: string): TestHarnessAuthorResponse[] {
+  const sequence = successAuthorResponses(targetDir);
+  return sequence.map((response) => {
+    switch (firstActionName(response)) {
+      case 'run_static_verification':
+        return effect('run_static_verification', { status: 'succeeded', evidence_id: 'static-synonym' });
+      case 'run_smoke_verification':
+        return effect('run_smoke_verification', { status: 'succeeded', evidence_id: 'smoke-synonym' });
+      case 'run_live_provider_verification':
+        return effect('run_live_provider_verification', { status: 'succeeded', evidence_id: 'live-synonym' });
+      case 'git_rebase_latest':
+        return effect('git_rebase_latest', { status: 'succeeded', evidence_id: 'rebase-synonym' });
+      case 'run_rebase_static_verification':
+        return effect('run_rebase_static_verification', { status: 'succeeded', evidence_id: 'rebase-static-synonym' });
+      default:
+        return response;
+    }
+  });
 }
 
 function firstActionName(response: TestHarnessAuthorResponse): string | undefined {

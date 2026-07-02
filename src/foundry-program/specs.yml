@@ -802,6 +802,7 @@ action_map:
     mutations:
       - { op: MSet, path: graduation.static_verification, from_arg: status }
       - { op: MSet, path: graduation.static_evidence_id, from_arg: evidence_id }
+      - { op: MSet, path: graduation.static_verification_recorded, value: true }
     channel: widget_output
   run_parallel_static_checks:
     description: |
@@ -823,6 +824,7 @@ action_map:
     mutations:
       - { op: MSet, path: graduation.smoke_verification, from_arg: status }
       - { op: MSet, path: graduation.smoke_evidence_id, from_arg: evidence_id }
+      - { op: MSet, path: graduation.smoke_verification_recorded, value: true }
     channel: widget_output
   confirm_live_provider_intent:
     description: "Confirm user-selected live-provider graduation after static verification."
@@ -836,12 +838,14 @@ action_map:
     mutations:
       - { op: MSet, path: graduation.live_verification, from_arg: status }
       - { op: MSet, path: graduation.live_evidence_id, from_arg: evidence_id }
+      - { op: MSet, path: graduation.live_verification_recorded, value: true }
     channel: widget_output
   git_rebase_latest:
     description: "Rebase on latest target repo state and record rebase status."
     mutations:
       - { op: MSet, path: graduation.rebase_status, from_arg: status }
       - { op: MSet, path: graduation.rebase_evidence_id, from_arg: evidence_id }
+      - { op: MSet, path: graduation.rebase_recorded, value: true }
     channel: widget_output
   run_rebase_static_verification:
     description: |
@@ -852,6 +856,7 @@ action_map:
     mutations:
       - { op: MSet, path: graduation.rebase_verification, from_arg: status }
       - { op: MSet, path: graduation.rebase_static_evidence_id, from_arg: evidence_id }
+      - { op: MSet, path: graduation.rebase_static_verification_recorded, value: true }
     channel: widget_output
   open_pull_request: { description: "Open pull request.", mutations: [], channel: widget_output }
 
@@ -878,6 +883,36 @@ reactions:
       - intake.transitions_json
       - intake.delegation_json
       - intake.completion_json
+  normalize_static_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.static_verification_recorded
+    write_scope:
+      - graduation.static_verification
+  normalize_smoke_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.smoke_verification_recorded
+    write_scope:
+      - graduation.smoke_verification
+  normalize_live_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.live_verification_recorded
+    write_scope:
+      - graduation.live_verification
+  normalize_rebase_status:
+    event: AfterMutation
+    watch:
+      - graduation.rebase_recorded
+    write_scope:
+      - graduation.rebase_status
+  normalize_rebase_static_verification_status:
+    event: AfterMutation
+    watch:
+      - graduation.rebase_static_verification_recorded
+    write_scope:
+      - graduation.rebase_verification
 
 schema:
   inputs.user_text: string
@@ -948,16 +983,21 @@ schema:
   artifacts.generated_paths: array
   curator_requests.requests: array
   graduation.static_verification: string
+  graduation.static_verification_recorded: boolean
   graduation.static_evidence_id: string
   graduation.smoke_verification: string
+  graduation.smoke_verification_recorded: boolean
   graduation.smoke_evidence_id: string
   graduation.live_verification: string
+  graduation.live_verification_recorded: boolean
   graduation.live_provider_intent: boolean
   graduation.ready_for_live: boolean
   graduation.live_evidence_id: string
   graduation.rebase_status: string
+  graduation.rebase_recorded: boolean
   graduation.rebase_evidence_id: string
   graduation.rebase_verification: string
+  graduation.rebase_static_verification_recorded: boolean
   graduation.rebase_static_evidence_id: string
   graduation.composite_checks: object
   debug.approve_artifact_plan_preconditions_checked: boolean

@@ -288,7 +288,7 @@ describe('synthesize_program_spec handler', () => {
     }));
   });
 
-  it('does not import synthesized stage contracts for an LLM-only program with no generated stage bodies', () => {
+  it('records stage artifacts for an LLM-only program without importing unused stage contracts', () => {
     const artifact = synthesizeProgramSpecFromDomain({
       'program.slug': 'brief-summarizer',
       'program.name': 'Brief Summarizer',
@@ -309,7 +309,7 @@ describe('synthesize_program_spec handler', () => {
       'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'brief_summary.done' }),
     });
 
-    expect(artifact.body_stage_slugs).toEqual([]);
+    expect(artifact.body_stage_slugs).toEqual(['intake', 'brief_summary']);
     expect(artifact.handlers_ts).not.toContain('./contracts.js');
     expect(artifact.handlers_index_ts).not.toContain('../contracts.js');
     expect(artifact.handlers_ts).toContain('async complete_brief_summary(payload)');
