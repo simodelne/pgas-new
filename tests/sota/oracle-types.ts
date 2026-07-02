@@ -6,10 +6,15 @@ export interface SotaBenchmarkInput {
     now_iso?: string;
     random?: number;
   };
+  /**
+   * Scripted reasoning-stage payloads. result_json/items_json are the
+   * composite JSON strings; additional keys are the per-field typed args
+   * consumed by the woven <stage>.result.<field> from_arg mutations.
+   */
   llm_outputs?: Record<string, {
     result_json: string;
     items_json: string;
-  }>;
+  } & Record<string, unknown>>;
 }
 
 export interface SotaStageActual {

@@ -46,6 +46,7 @@ describe('generated multi-stage smoke test', () => {
       providerUrl: 'http://provider.local/v1',
       model: 'qwen36-27b',
       generator: async ({ stage, archetype }) => deterministicStageBody(stage, archetype),
+      reasoningContractGenerator: async ({ stage }) => briefSummaryContractJson(stage),
     });
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-multistage-render-'));
 
@@ -98,11 +99,15 @@ describe('generated multi-stage smoke test', () => {
         expect.objectContaining({
           stage: 'brief_summary',
           archetype: 'llm-reasoning',
-          behavioral_gate: 'not_applicable',
-          attempts: 0,
+          behavioral_gate: 'reasoning_contract_conformance',
+          contract_source: 'meta_llm',
+          contract_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+          attempts: 1,
           cache_hit: false,
         }),
       ]);
+      expect(artifact.spec_yaml).toContain('brief_summary.result.decision');
+      expect(artifact.stage_sources?.brief_summary).toContain('export const reasoningContract = {');
       expect(JSON.stringify(artifact.stage_sources).toLowerCase()).not.toContain('stage_action_stub');
       expect(JSON.stringify(artifact.stage_sources).toLowerCase()).not.toContain('"todo"');
 
@@ -120,6 +125,39 @@ function artifactFromDomain(domain: Record<string, unknown>): SynthesizedArtifac
     ...synthesizeProgramSpecFromDomain(domain),
     created_at: '2026-06-28T00:00:00.000Z',
   };
+}
+
+function briefSummaryContractJson(stage: string): string {
+  expect(stage).toBe('brief_summary');
+  return JSON.stringify({
+    reasoning_prompt: [
+      'Summarize the project brief captured at inputs.initial_user_text for a decision-ready readout. Extract the',
+      'audience, the delivery constraint, and the requested action; weigh the fee model and CRM account context from',
+      'the prior stage outputs; then decide whether the proposal work can proceed and justify that decision briefly.',
+    ].join(' '),
+    result_schema: {
+      fields: [
+        { name: 'summary', type: 'string', description: 'One-paragraph decision-ready summary of the brief.' },
+        { name: 'decision', type: 'enum', description: 'Whether the proposal can proceed.', enum_values: ['proceed', 'blocked'] },
+        { name: 'confidence', type: 'enum', description: 'Confidence in the summary judgment.', enum_values: ['low', 'medium', 'high'] },
+        { name: 'key_points', type: 'string_array', description: 'Key evidence points from the brief.' },
+      ],
+      allow_extra_fields: true,
+    },
+    items_schema: {
+      templates: ['brief_summary:decision:<decision>', 'brief_summary:confidence:<confidence>'],
+      description: 'Key:value item strings for the brief summary judgment.',
+    },
+    canned_example: {
+      result: {
+        summary: 'The brief requests proposal preparation for an enterprise engagement with a fixed deadline.',
+        decision: 'proceed',
+        confidence: 'high',
+        key_points: ['audience: enterprise buyer', 'deadline stated in brief'],
+      },
+      items: ['brief_summary:decision:proceed', 'brief_summary:confidence:high'],
+    },
+  });
 }
 
 function deterministicStageBody(stage: string, archetype: 'pure-compute' | 'external-adapter'): string {

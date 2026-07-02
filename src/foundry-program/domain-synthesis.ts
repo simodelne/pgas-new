@@ -5,8 +5,15 @@ import { createContext, Script } from 'node:vm';
 import ts from 'typescript';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesizedArtifact } from './synthesizer-store.js';
+import { resynthesizeWithReasoningContracts } from './synthesizer.js';
+import {
+  synthesizeReasoningContract,
+  type ReasoningContractGenerator,
+  type ReasoningStageContract,
+  type SynthesizedReasoningContract,
+} from './reasoning-contract.js';
 
-const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v5';
+const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
 
 export interface StageBodyRequest {
   stage: string;
@@ -25,6 +32,7 @@ export interface StageBodyGenerator {
 
 export interface DomainSynthesisOptions {
   generator?: StageBodyGenerator;
+  reasoningContractGenerator?: ReasoningContractGenerator;
   cacheDir?: string;
   maxAttempts?: number;
   providerUrl?: string;
@@ -91,18 +99,50 @@ export async function synthesizeDomainLogic(
 
   mkdirSync(cacheDir, { recursive: true });
 
-  for (const stage of artifact.body_stage_slugs) {
-    const classification = resolveIntegrationBinding(classificationFor(artifact, stage), targetKind, integrations);
+  // Reasoning contracts run FIRST (spec §6.8 ordering): the deterministic
+  // body loop below must generate against the woven artifact so body prompts
+  // embed the contract-bearing spec_yaml and typed prior-stage paths.
+  const reasoningStages = artifact.body_stage_slugs.filter((stage) =>
+    classificationFor(artifact, stage).archetype === 'llm-reasoning');
+  const reasoningResults: Record<string, SynthesizedReasoningContract> = {};
+  for (const stage of reasoningStages) {
+    reasoningResults[stage] = await synthesizeReasoningContract(stage, artifact, {
+      generator: options.reasoningContractGenerator,
+      cacheDir,
+      maxAttempts,
+      providerUrl,
+      model,
+    });
+  }
+  const reasoningContracts: Record<string, ReasoningStageContract> = Object.fromEntries(
+    Object.entries(reasoningResults).map(([stage, result]) => [stage, result.contract]),
+  );
+  const workingArtifact: SynthesizedArtifact = reasoningStages.length > 0 && artifact.synthesis_context
+    ? {
+        ...artifact,
+        ...resynthesizeWithReasoningContracts(artifact, reasoningContracts, { targetKind, integrations }),
+      }
+    : artifact;
+
+  for (const stage of workingArtifact.body_stage_slugs) {
+    const classification = resolveIntegrationBinding(classificationFor(workingArtifact, stage), targetKind, integrations);
     if (classification.archetype === 'llm-reasoning') {
-      const body = renderLlmReasoningStageBody(stage);
+      const reasoningResult = reasoningResults[stage];
+      if (!reasoningResult) {
+        throw new Error(`missing synthesized reasoning contract for stage ${stage}`);
+      }
+      const body = renderReasoningContractRecordModule(reasoningResult.contract);
       stageSources[stage] = body;
       audit.push({
         stage,
         archetype: classification.archetype,
         ...auditFieldsFor(classification),
-        behavioral_gate: 'not_applicable',
-        attempts: 0,
-        cache_hit: false,
+        behavioral_gate: 'reasoning_contract_conformance',
+        contract_source: reasoningResult.contract_source,
+        contract_hash: reasoningResult.contract_hash,
+        ...(reasoningResult.fallback_reason ? { fallback_reason: reasoningResult.fallback_reason } : {}),
+        attempts: reasoningResult.attempts,
+        cache_hit: reasoningResult.cache_hit,
         body_hash: sha256(body),
       });
       continue;
@@ -111,17 +151,17 @@ export async function synthesizeDomainLogic(
       throw new Error(`unsupported stage archetype for ${stage}: ${classification.archetype}`);
     }
 
-    const prompt = promptForStage(stage, classification, artifact);
+    const prompt = promptForStage(stage, classification, workingArtifact);
     const cacheKey = cacheKeyFor({
       stage,
-      contract: artifact.contracts_ts,
+      contract: workingArtifact.contracts_ts,
       prompt,
       model,
       providerUrl,
     });
     const cachePath = join(cacheDir, `${cacheKey}.json`);
     const repoIntegration = integrationForClassification(classification, integrations);
-    const domainSpec = domainSpecForStage(artifact, stage);
+    const domainSpec = domainSpecForStage(workingArtifact, stage);
     const verificationOptions = {
       stage,
       ...(repoIntegration ? {
@@ -131,6 +171,7 @@ export async function synthesizeDomainLogic(
         integration: repoIntegration,
       } : {}),
       ...(domainSpec ? { domainSpec } : {}),
+      reasoningContracts,
     };
     const cached = readCache(cachePath);
     if (cached) {
@@ -185,7 +226,7 @@ export async function synthesizeDomainLogic(
           body = await generator({
             stage,
             archetype: classification.archetype,
-            contract: artifact.contracts_ts,
+            contract: workingArtifact.contracts_ts,
             prompt,
             ...(lastError ? { repair: { attempt, lastError } } : {}),
           });
@@ -196,6 +237,7 @@ export async function synthesizeDomainLogic(
         const verification = await verifyStageBody(body, classification.archetype, {
           stage,
           ...(domainSpec ? { domainSpec } : {}),
+          reasoningContracts,
         });
         if (verification.ok) {
           accepted = {
@@ -229,7 +271,7 @@ export async function synthesizeDomainLogic(
   }
 
   return {
-    ...artifact,
+    ...workingArtifact,
     stage_sources: stageSources,
     domain_synthesis_audit: audit,
   };
@@ -245,6 +287,7 @@ function verifyStageBody(
     integrationMethod?: string;
     integration?: WiringIntegration;
     domainSpec?: StageDomainSpec;
+    reasoningContracts?: Record<string, ReasoningStageContract>;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
@@ -637,7 +680,7 @@ function promptForStage(stage: string, classification: StageClassification, arti
     'Use common named-field arithmetic: hours multiplied by hourly rates produce subtotals; discount_pct is a percentage applied to a subtotal; budget fields are comparison thresholds, not fee inputs.',
     'When parsed request facts contain identifiers, echo those identifiers; do not replace them with synthetic IDs from runtime.random().',
     "Prior deterministic stage outputs are stored as objects at input.domain['<stage>.output']; parse their result_json and items_json strings before using them.",
-    "Prior LLM reasoning stage outputs are stored as strings at input.domain['<stage>.result_json'] and input.domain['<stage>.items_json']; parse them before using them.",
+    "Prior LLM reasoning stage outputs are stored as strings at input.domain['<stage>.result_json'] and input.domain['<stage>.items_json'], and as typed fields at input.domain['<stage>.result.<field>']; prefer the typed fields.",
     'Do not treat input.payload.__stage_runtime as business input; use runtime.now() and runtime.random() through StageRuntime only.',
     'Shape result_json from the mandate, stage slug, input facts, and prior stage outputs. Preserve concrete field names from the request and prior results when they are meaningful.',
     'If the domain spec declares produces.result_json, construct result_json with exactly those declared top-level keys, in that declared order, and no extra top-level keys.',
@@ -659,21 +702,13 @@ function domainSpecForStage(artifact: SynthesizedArtifact, stage: string): Stage
   return artifact.synthesis_context?.stages.find((item) => item.slug === stage)?.domain_spec;
 }
 
-function renderLlmReasoningStageBody(stage: string): string {
-  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
-
-export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
-  const result = {
-    stage: input.stage,
-    status: ${JSON.stringify(`${stage}_reasoning_ready`)},
-    generated_at: runtime.now(),
-  };
-  return {
-    result_json: JSON.stringify(result),
-    items_json: JSON.stringify([${JSON.stringify(`${stage}:reasoning_ready`)}]),
-    digest: '',
-  };
-}
+function renderReasoningContractRecordModule(contract: ReasoningStageContract): string {
+  return `// Runtime locus: this stage executes inside the program's engine author-LLM.
+// There is no deterministic runStage here on purpose — the woven specs.yml
+// (mode prompt, synthesized arg schema, GKType-typed <stage>.result.* paths)
+// is what executes and enforces this stage at runtime. This module is the
+// first-class record of that reasoning contract.
+export const reasoningContract = ${JSON.stringify(contract, null, 2)} as const;
 `;
 }
 
@@ -845,6 +880,7 @@ async function runBehavioralGate(
     integrationMethod?: string;
     integration?: WiringIntegration;
     domainSpec?: StageDomainSpec;
+    reasoningContracts?: Record<string, ReasoningStageContract>;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
@@ -862,7 +898,7 @@ async function runBehavioralGate(
 
   try {
     const runStage = loadRunStageForBehavior(body);
-    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec);
+    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec, options.reasoningContracts);
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `behavioral gate failed for stage ${options.stage}: runStage timed out`,
@@ -894,6 +930,7 @@ async function runRepoIntegrationLoopbackGate(
     integrationName?: string;
     integrationMethod?: string;
     domainSpec?: StageDomainSpec;
+    reasoningContracts?: Record<string, ReasoningStageContract>;
   },
 ): Promise<
   | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified: true }
@@ -919,7 +956,7 @@ async function runRepoIntegrationLoopbackGate(
 
   try {
     const runStage = loadRunStageForBehavior(body, { env: { ...process.env } });
-    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec);
+    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec, options.reasoningContracts);
     const output = await withBehaviorTimeout(
       Promise.resolve(runStage(fixture.input, fixture.runtime)),
       `repo integration loopback gate failed for stage ${options.stage}: runStage timed out`,
@@ -993,6 +1030,7 @@ function behaviorFixtureFor(
   stage: string,
   archetype: 'pure-compute' | 'external-adapter',
   domainSpec?: StageDomainSpec,
+  reasoningContracts?: Record<string, ReasoningStageContract>,
 ): {
   input: Record<string, unknown>;
   runtime: Record<string, unknown>;
@@ -1006,7 +1044,7 @@ function behaviorFixtureFor(
     'account.id': 'acct-behavior-001',
     'record.id': 'record-behavior-001',
     'owner.queue': 'operations',
-    ...seedPriorStageOutputs(domainSpec),
+    ...seedPriorStageOutputs(domainSpec, reasoningContracts),
   };
   const itemTemplates = domainSpec?.produces.items_json;
   return {
@@ -1068,7 +1106,10 @@ function seedInitialRequestFacts(domainSpec?: StageDomainSpec): Record<string, u
   return facts;
 }
 
-function seedPriorStageOutputs(domainSpec?: StageDomainSpec): Record<string, unknown> {
+function seedPriorStageOutputs(
+  domainSpec?: StageDomainSpec,
+  reasoningContracts?: Record<string, ReasoningStageContract>,
+): Record<string, unknown> {
   const seeded: Record<string, unknown> = {
     'crm_lookup.output': stageOutputFixture('crm_lookup', {
       stage: 'crm_lookup',
@@ -1097,7 +1138,34 @@ function seedPriorStageOutputs(domainSpec?: StageDomainSpec): Record<string, unk
     }, ['risk_score:100', 'severity:high']),
   };
 
+  // When a reasoning contract exists for a prior stage referenced by
+  // domain_spec.reads, seed schema-realistic canned values (spec §6.8)
+  // instead of generic sample synthesis: the composite result_json plus one
+  // typed flat key per core field.
+  const contractSeeded = new Set<string>();
+  const seedContractOutputs = (prior: string): boolean => {
+    const contract = reasoningContracts?.[prior];
+    if (!contract) {
+      return false;
+    }
+    if (!contractSeeded.has(prior)) {
+      contractSeeded.add(prior);
+      seeded[`${prior}.result_json`] = JSON.stringify(contract.canned_example.result);
+      seeded[`${prior}.items_json`] = JSON.stringify(contract.canned_example.items);
+      for (const field of contract.result_schema.fields) {
+        const value = contract.canned_example.result[field.name];
+        seeded[`${prior}.result.${field.name}`] = field.type === 'string_array' ? JSON.stringify(value) : value;
+      }
+    }
+    return true;
+  };
+
   for (const read of domainSpec?.reads ?? []) {
+    const reasoningRead = read.match(/^([a-zA-Z0-9_]+)\.(?:result_json|items_json|result)(?:\.(.+))?$/u);
+    if (reasoningRead?.[1] && seedContractOutputs(reasoningRead[1])) {
+      continue;
+    }
+
     const deterministic = read.match(/^([a-zA-Z0-9_]+)\.output\.result_json(?:\.(.+))?$/u);
     if (deterministic?.[1] && deterministic[2]) {
       const outputPath = `${deterministic[1]}.output`;
