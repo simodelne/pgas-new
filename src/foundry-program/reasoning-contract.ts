@@ -440,23 +440,34 @@ export function reasoningContractCacheKey(
   ].join('\n---\n'));
 }
 
-export function runtimeTypeNameFor(type: ReasoningFieldType): 'string' | 'number' | 'boolean' | 'array' {
+/**
+ * GKType mapping for typed <stage>.result.<field> paths. Deviation from the
+ * design spec's §4 sketch (string_array → array): the engine's S-11 coupling
+ * check statically forbids MSet/MIncrement into array-typed schema paths
+ * (arrays are MAppend/MRemove-only), so a whole-array from_arg write cannot
+ * target an array-typed path. string_array fields therefore ride the engine's
+ * established JSON-string-scalar pattern (same as result_json/items_json):
+ * the arg is a JSON array string and GKType enforces string.
+ */
+export function runtimeTypeNameFor(type: ReasoningFieldType): 'string' | 'number' | 'boolean' {
   switch (type) {
     case 'number':
       return 'number';
     case 'boolean':
       return 'boolean';
-    case 'string_array':
-      return 'array';
     default:
       return 'string';
   }
 }
 
 export function reasoningFieldSummary(field: ReasoningField): string {
-  return field.type === 'enum'
-    ? `${field.name} (enum: ${(field.enum_values ?? []).join(' | ')})`
-    : `${field.name} (${field.type})`;
+  if (field.type === 'enum') {
+    return `${field.name} (enum: ${(field.enum_values ?? []).join(' | ')})`;
+  }
+  if (field.type === 'string_array') {
+    return `${field.name} (string_array; pass the argument as a JSON array string)`;
+  }
+  return `${field.name} (${field.type})`;
 }
 
 export function createOpenAiCompatibleReasoningContractGenerator(

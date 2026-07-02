@@ -7,12 +7,17 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { SynthesisContext } from './synthesizer-store.js';
+import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
   type StageArchetype,
 } from './stage-classifier.js';
+import {
+  reasoningFieldSummary,
+  runtimeTypeNameFor,
+  type ReasoningStageContract,
+} from './reasoning-contract.js';
 
 interface Stage {
   slug: string;
@@ -43,7 +48,7 @@ interface Completion {
   guard_field: string;
 }
 
-interface SynthesizedSpec {
+export interface SynthesizedSpec {
   spec_yaml: string;
   mode_names: string[];
   sha256: string;
@@ -60,6 +65,7 @@ interface SynthesizedSpec {
 export interface SynthesizeProgramSpecOptions {
   targetKind?: 'standalone_repo' | 'existing_repo';
   integrations?: WiringIntegration[];
+  reasoningContracts?: Record<string, ReasoningStageContract>;
 }
 
 type MutableRecord = Record<string, unknown>;
@@ -118,6 +124,10 @@ export function synthesizeProgramSpecFromDomain(
     options,
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
+  const reasoningContractsBySlug = new Map<string, ReasoningStageContract>(
+    Object.entries(options.reasoningContracts ?? {}).filter(([slug]) =>
+      stageClassificationBySlug.get(slug)?.archetype === 'llm-reasoning'),
+  );
   const stageDomainSpecBySlug = new Map(
     stages
       .filter((stage): stage is Stage & { domain_spec: StageDomainSpec } => !!stage.domain_spec)
@@ -190,7 +200,7 @@ export function synthesizeProgramSpecFromDomain(
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
-  const intermediateJsonFields = intermediateModes.flatMap((modeName) => outputProjectionFields(modeName, stageClassificationBySlug));
+  const intermediateJsonFields = intermediateModes.flatMap((modeName) => outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug));
   const intermediateGuardFields = unique(
     intermediateModes.flatMap((modeName) => guardFieldsByMode.get(modeName) ?? []),
   );
@@ -201,7 +211,7 @@ export function synthesizeProgramSpecFromDomain(
     }
     return intermediateModes
       .filter((candidate) => modeNames.indexOf(candidate) < modeIndex)
-      .flatMap((candidate) => outputProjectionFields(candidate, stageClassificationBySlug));
+      .flatMap((candidate) => outputProjectionFields(candidate, stageClassificationBySlug, reasoningContractsBySlug));
   };
 
   const projection: MutableRecord = {
@@ -225,7 +235,7 @@ export function synthesizeProgramSpecFromDomain(
         'notebook.pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
         ...accumulatedOutputFieldsBefore(modeName),
-        ...outputProjectionFields(modeName, stageClassificationBySlug),
+        ...outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug),
       ]),
       exclude: [],
     };
@@ -241,7 +251,7 @@ export function synthesizeProgramSpecFromDomain(
       : `Terminal sink mode after ${name} cannot progress further.`;
   }
   for (const modeName of intermediateModes) {
-    prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName));
+    prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
   }
   spec.prompts = prompts;
 
@@ -272,7 +282,7 @@ export function synthesizeProgramSpecFromDomain(
     delete actionMap.begin_work;
   }
   for (const action of transitionActions) {
-    actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source));
+    actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source), reasoningContractsBySlug.get(action.source));
   }
 
   const schema = recordField(spec, 'schema');
@@ -291,6 +301,13 @@ export function synthesizeProgramSpecFromDomain(
     if (classification?.archetype === 'llm-reasoning') {
       schema[`${modeName}.result_json`] = 'string';
       schema[`${modeName}.items_json`] = 'string';
+      const reasoningContract = reasoningContractsBySlug.get(modeName);
+      if (reasoningContract) {
+        schema[`${modeName}.result`] = 'object';
+        for (const field of reasoningContract.result_schema.fields) {
+          schema[`${modeName}.result.${field.name}`] = runtimeTypeNameFor(field.type);
+        }
+      }
     } else {
       schema[`${modeName}.output`] = 'object';
       schema[`${modeName}.output.result_json`] = 'string';
@@ -302,7 +319,7 @@ export function synthesizeProgramSpecFromDomain(
     }
   }
 
-  spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug);
+  spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -312,7 +329,7 @@ export function synthesizeProgramSpecFromDomain(
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
-    contracts_ts: renderContractsSource(stages, stageClassification, transitionActions),
+    contracts_ts: renderContractsSource(stages, stageClassification, transitionActions, reasoningContractsBySlug),
     handlers_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: true,
       resolverImport: './handlers/_resolver.js',
@@ -320,7 +337,7 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: './stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
-    }),
+    }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
       resolverImport: './_resolver.js',
@@ -328,9 +345,9 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: '../stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
-    }),
-    tools_ts: renderToolsSource(slug, transitionActions),
-    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion),
+    }, reasoningContractsBySlug),
+    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug),
+    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
     synthesis_context: {
@@ -344,6 +361,34 @@ export function synthesizeProgramSpecFromDomain(
       completion,
     },
   };
+}
+
+/**
+ * Deterministically re-runs spec synthesis from the stored synthesis context
+ * with reasoning contracts woven in. Byte-identical to the original synthesis
+ * wherever no contract applies (spec §6): the context holds every input
+ * synthesizeProgramSpecFromDomain consumes, entry_channel is already
+ * normalized, and normalizePgasChannelId is idempotent on its own output.
+ */
+export function resynthesizeWithReasoningContracts(
+  artifact: SynthesizedArtifact,
+  contracts: Record<string, ReasoningStageContract>,
+  options: SynthesizeProgramSpecOptions = {},
+): SynthesizedSpec {
+  const context = artifact.synthesis_context;
+  if (!context) {
+    throw new Error('resynthesizeWithReasoningContracts requires artifact.synthesis_context');
+  }
+  return synthesizeProgramSpecFromDomain({
+    'program.slug': context.program_slug,
+    'program.name': context.program_name,
+    'intake.purpose': context.purpose,
+    'intake.entry_channel': context.entry_channel,
+    'intake.stages_json': JSON.stringify(context.stages),
+    'intake.transitions_json': JSON.stringify(context.transitions),
+    'intake.delegation_json': JSON.stringify(context.delegation),
+    'intake.completion_json': JSON.stringify(context.completion),
+  }, { ...options, reasoningContracts: contracts });
 }
 
 export function refreshStaleTransitionsForStages(
@@ -602,16 +647,29 @@ function actionsBySourceMode(actions: TransitionAction[]): Map<string, Transitio
   return actionsBySource;
 }
 
-function outputProjectionFields(modeName: string, stageClassificationBySlug: Map<string, ClassifiedStage>): string[] {
+function outputProjectionFields(
+  modeName: string,
+  stageClassificationBySlug: Map<string, ClassifiedStage>,
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
+): string[] {
   const classification = stageClassificationBySlug.get(modeName);
-  return classification?.archetype === 'llm-reasoning'
-    ? [`${modeName}.result_json`, `${modeName}.items_json`]
-    : [`${modeName}.output`];
+  if (classification?.archetype !== 'llm-reasoning') {
+    return [`${modeName}.output`];
+  }
+  return reasoningContractsBySlug.has(modeName)
+    ? [`${modeName}.result_json`, `${modeName}.items_json`, `${modeName}.result`]
+    : [`${modeName}.result_json`, `${modeName}.items_json`];
 }
 
-function actionMapEntryFor(action: TransitionAction, firstMode: string, domainSpec?: StageDomainSpec): MutableRecord {
+function actionMapEntryFor(
+  action: TransitionAction,
+  firstMode: string,
+  domainSpec?: StageDomainSpec,
+  reasoningContract?: ReasoningStageContract,
+): MutableRecord {
   const isBootstrap = action.source === firstMode;
   const isResultPathStage = !isBootstrap && action.archetype !== 'llm-reasoning';
+  const contract = !isBootstrap && action.archetype === 'llm-reasoning' ? reasoningContract : undefined;
   const domainSpecDescription = domainSpec
     ? ` Author-provided domain spec for ${action.source}: ${JSON.stringify(domainSpec)}`
     : '';
@@ -620,6 +678,11 @@ function actionMapEntryFor(action: TransitionAction, firstMode: string, domainSp
     ...(isBootstrap || isResultPathStage ? [] : [
       { op: 'MSet', path: `${action.source}.result_json`, from_arg: 'result_json' },
       { op: 'MSet', path: `${action.source}.items_json`, from_arg: 'items_json' },
+      ...(contract ? contract.result_schema.fields.map((field) => ({
+        op: 'MSet',
+        path: `${action.source}.result.${field.name}`,
+        from_arg: field.name,
+      })) : []),
     ]),
   ];
 
@@ -630,10 +693,19 @@ function actionMapEntryFor(action: TransitionAction, firstMode: string, domainSp
         ? `Record runtime LLM reasoning output for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`
         : `Run deterministic ${action.archetype} wrapper for ${action.source} and advance exactly one hop to ${action.target}.${domainSpecDescription}`,
     ...(isBootstrap || isResultPathStage ? {} : {
-      arg_descriptions: {
-        result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
-        items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
-      },
+      arg_descriptions: contract
+        ? {
+            result_json: `JSON string result for the ${action.source} LLM reasoning stage. Must encode a JSON object containing at least: ${contract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed.${domainSpecDescription}`,
+            items_json: `JSON string array of item strings produced by the ${action.source} LLM reasoning stage. Must match the templates: ${contract.items_schema.templates.join(', ')}.${domainSpecDescription}`,
+            ...Object.fromEntries(contract.result_schema.fields.map((field) => [
+              field.name,
+              `${field.description}${field.type === 'enum' ? ` One of: ${(field.enum_values ?? []).join(' | ')}.` : ''}${field.type === 'string_array' ? ' Provide the value as a JSON array string.' : ''}`,
+            ])),
+          }
+        : {
+            result_json: `JSON string result for the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
+            items_json: `JSON string array of item ids or summaries produced by the ${action.source} LLM reasoning stage.${domainSpecDescription}`,
+          },
     }),
     ...(isResultPathStage ? { result_path: `${action.source}.output` } : {}),
     mutations,
@@ -691,6 +763,7 @@ function renderHandlersSource(
     initialEntryPath: string;
     entryPath: string;
   },
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
   const beginWorkHandler = transitionActions.some((action) => action.name === 'begin_work')
     ? `  async begin_work(payload) {
@@ -722,8 +795,36 @@ function renderHandlersSource(
       payload,
     };
   },`).join('\n\n');
+  const contractActionSources = new Set(stageActions
+    .filter((action) => action.archetype === 'llm-reasoning' && reasoningContractsBySlug.has(action.source))
+    .map((action) => action.source));
   const actionHandlers = stageActions.map((action) => {
     if (action.archetype === 'llm-reasoning') {
+      const reasoningContract = reasoningContractsBySlug.get(action.source);
+      if (reasoningContract) {
+        const coreFieldNames = reasoningContract.result_schema.fields.map((field) => field.name);
+        const fieldResolvers = coreFieldNames
+          .map((name) => `      ${name}: resolveDomainValue<unknown>(payload as HandlerPayload, ${tsString(name)}, null),`)
+          .join('\n');
+        return `  async ${action.name}(payload) {
+    const resultJson = resolveDomainValue<string>(payload as HandlerPayload, 'result_json', '{}');
+    const itemsJson = resolveDomainValue<string>(payload as HandlerPayload, 'items_json', '[]');
+    const fields = {
+${fieldResolvers}
+    };
+    return {
+      kind: 'llm_reasoning_stage_output',
+      action: ${tsString(action.name)},
+      stage: ${tsString(action.source)},
+      target: ${tsString(action.target)},
+      result_json: resultJson,
+      items_json: itemsJson,
+      fields,
+      contract_conformant: reasoningOutputConformant(resultJson, fields, [${coreFieldNames.map(tsString).join(', ')}]),
+      payload,
+    };
+  },`;
+      }
       return `  async ${action.name}(payload) {
     const resultJson = resolveDomainValue<string>(payload as HandlerPayload, 'result_json', '{}');
     const itemsJson = resolveDomainValue<string>(payload as HandlerPayload, 'items_json', '[]');
@@ -751,6 +852,47 @@ function renderHandlersSource(
   const reactionExport = options.includeReactionHandlers
     ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }],\n]);`
     : '';
+  const conformanceHelper = contractActionSources.size > 0
+    ? `
+
+// Observability only: the hard reasoning-output enforcement is the engine's
+// GKType check on each typed <stage>.result.<field> path. This envelope makes
+// composite/field divergence visible in session logs without throwing.
+function reasoningOutputConformant(
+  resultJson: string | undefined,
+  fields: Record<string, unknown>,
+  coreFields: readonly string[],
+): boolean {
+  if (typeof resultJson !== 'string') {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(resultJson);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return false;
+  }
+  const record = parsed as Record<string, unknown>;
+  return coreFields.every((field) => {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+      return false;
+    }
+    const arg = fields[field];
+    if (arg === null || arg === undefined) {
+      return true;
+    }
+    if (JSON.stringify(record[field]) === JSON.stringify(arg)) {
+      return true;
+    }
+    // string_array args arrive as JSON array strings (JSON-string-scalar
+    // pattern); compare against the composite value's JSON text.
+    return typeof arg === 'string' && JSON.stringify(record[field]) === arg;
+  });
+}`
+    : '';
 
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
 import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
@@ -771,24 +913,36 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
   },
 
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}
-};${reactionExport}
+};${reactionExport}${conformanceHelper}
 `;
 }
 
-function renderToolsSource(slug: string, transitionActions: TransitionAction[]): string {
+function renderToolsSource(
+  slug: string,
+  transitionActions: TransitionAction[],
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
+): string {
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
   const metadata = stageActions.length === 0
     ? '{}'
     : `{
-${stageActions.map((action) => `  ${action.name}: {
+${stageActions.map((action) => {
+  const reasoningContract = action.archetype === 'llm-reasoning' ? reasoningContractsBySlug.get(action.source) : undefined;
+  const reasoningLines = reasoningContract
+    ? `
+    result_fields: [${reasoningContract.result_schema.fields.map((field) => tsString(field.name)).join(', ')}],
+    result_record_path: ${tsString(`${action.source}.result`)},`
+    : '';
+  return `  ${action.name}: {
     mode: ${tsString(action.source)},
     target: ${tsString(action.target)},
     archetype: ${tsString(action.archetype)},
     guard_paths: [${action.guardField ? tsString(action.guardField) : ''}],
     output_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`)},
-    items_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.items_json` : `${action.source}.output.items_json`)},
+    items_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.items_json` : `${action.source}.output.items_json`)},${reasoningLines}
     description: ${tsString(`Generated stage action metadata for ${action.source}.`)},
-  },`).join('\n')}\n}`;
+  },`;
+}).join('\n')}\n}`;
 
   return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';
 
@@ -809,9 +963,41 @@ function renderContractsSource(
   stages: Stage[],
   stageClassification: ClassifiedStage[],
   transitionActions: TransitionAction[],
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
   const classified = JSON.stringify(stageClassification, null, 2);
   const domainSpecs = JSON.stringify(domainSpecsByStage(stages), null, 2);
+  const reasoningContractsBlock = reasoningContractsBySlug.size === 0
+    ? ''
+    : `
+
+export interface ReasoningFieldContract {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'enum' | 'string_array';
+  description: string;
+  enum_values?: readonly string[];
+}
+
+export interface ReasoningStageContract {
+  contract_version: string;
+  stage: string;
+  reasoning_prompt: string;
+  result_schema: {
+    fields: readonly ReasoningFieldContract[];
+    allow_extra_fields: boolean;
+  };
+  items_schema: {
+    templates: readonly string[];
+    description: string;
+  };
+  canned_example: {
+    result: Record<string, unknown>;
+    items: readonly string[];
+  };
+  contract_source: 'meta_llm' | 'deterministic_fallback';
+}
+
+export const stageReasoningContracts = ${JSON.stringify(Object.fromEntries(reasoningContractsBySlug), null, 2)} as Record<string, ReasoningStageContract>;`;
   const actionContracts = JSON.stringify(
     transitionActions
       .filter((action) => action.name !== 'begin_work')
@@ -867,7 +1053,7 @@ export interface StageOutput {
 
 export const stageClassification = ${classified} as const;
 
-export const stageDomainSpecs = ${domainSpecs} as Record<string, StageDomainSpec>;
+export const stageDomainSpecs = ${domainSpecs} as Record<string, StageDomainSpec>;${reasoningContractsBlock}
 
 export const stageActionContracts = ${actionContracts} as const;
 
@@ -959,11 +1145,38 @@ function renderSmokeTestSource(
   stages: Stage[],
   transitionActions: TransitionAction[],
   completion: Completion,
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
   const initialTrigger = smokeInitialTriggerExpression(stages, entryChannel);
+  const hasContractResponses = pathActions.some((action) =>
+    action.archetype === 'llm-reasoning' && reasoningContractsBySlug.has(action.source));
   const responses = pathActions.map((action) => {
     if (action.archetype === 'llm-reasoning') {
+      const reasoningContract = reasoningContractsBySlug.get(action.source);
+      if (reasoningContract) {
+        // The action's declared channel is widget_output (actionMapEntryFor);
+        // the canned effect must ride that channel or the handler's
+        // contract-conformance envelope is unreachable (Codex fix, spec §6.7).
+        const canned = reasoningContract.canned_example;
+        const cannedFieldArgs = reasoningContract.result_schema.fields
+          .map((field) => {
+            const value = canned.result[field.name];
+            // string_array args ride the JSON-string-scalar pattern (S-11
+            // forbids MSet into array-typed paths), so the scripted arg is
+            // the JSON text of the canned array.
+            const literal = field.type === 'string_array'
+              ? JSON.stringify(JSON.stringify(value))
+              : JSON.stringify(value);
+            return `          ${field.name}: ${literal},`;
+          })
+          .join('\n');
+        return `        effect(${tsString(action.name)}, {
+          result_json: JSON.stringify(${JSON.stringify(canned.result)}),
+          items_json: JSON.stringify(${JSON.stringify(canned.items)}),
+${cannedFieldArgs}
+        }, 'widget_output'),`;
+      }
       return `        effect(${tsString(action.name)}, {
           result_json: JSON.stringify({ stage: ${tsString(action.source)}, status: 'reasoned' }),
           items_json: JSON.stringify([${tsString(`${action.source}-item`)}]),
@@ -1004,9 +1217,13 @@ ${externalAdapterAssertions ? `${externalAdapterAssertions}\n` : ''}    } finall
   });
 });
 
-function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
+${hasContractResponses
+    ? `function effect(name: string, payload: Record<string, unknown>, channel?: string): TestHarnessAuthorResponse {
+  return { actions: [{ kind: 'EffectAction', name, channel: channel ?? (name === 'begin_work' ? 'widget_output' : 'stage_output'), payload }] };
+}`
+    : `function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
-}
+}`}
 `;
 }
 
@@ -1172,20 +1389,33 @@ function normalizeGuardField(field: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function promptForStage(modeName: string, programName: string, domainSpec?: StageDomainSpec): string {
-  const base = `Perform the ${modeName} stage for ${programName}.`;
-  if (!domainSpec) return base;
-  return [
-    base,
-    `Author-provided domain spec for ${modeName} is normative; implement it exactly and do not infer alternate business logic.`,
-    JSON.stringify(domainSpec),
-  ].join('\n');
+function promptForStage(
+  modeName: string,
+  programName: string,
+  domainSpec?: StageDomainSpec,
+  reasoningContract?: ReasoningStageContract,
+): string {
+  const domainSpecSuffix = domainSpec
+    ? [
+        `Author-provided domain spec for ${modeName} is normative; implement it exactly and do not infer alternate business logic.`,
+        JSON.stringify(domainSpec),
+      ]
+    : [];
+  if (reasoningContract) {
+    return [
+      reasoningContract.reasoning_prompt,
+      `Return your reasoning through the stage action's arguments. result_json must be a JSON object containing at least: ${reasoningContract.result_schema.fields.map(reasoningFieldSummary).join(', ')}. Additional keys are allowed. items_json must be a JSON array of strings matching: ${reasoningContract.items_schema.templates.join(', ')}.`,
+      ...domainSpecSuffix,
+    ].join('\n');
+  }
+  return [`Perform the ${modeName} stage for ${programName}.`, ...domainSpecSuffix].join('\n');
 }
 
 function guidanceFor(
   modeNames: string[],
   delegation: Record<string, unknown>,
   stageDomainSpecBySlug: Map<string, StageDomainSpec>,
+  reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): Record<string, string[]> {
   const baseGuidance = [
     'Use the synthesized JSON-string scalar fields for structured handler results.',
@@ -1195,13 +1425,22 @@ function guidanceFor(
   }
   return Object.fromEntries(modeNames.map((modeName) => {
     const domainSpec = stageDomainSpecBySlug.get(modeName);
+    const reasoningContract = reasoningContractsBySlug.get(modeName);
     const stageGuidance = domainSpec
       ? [
           ...baseGuidance,
           `Author-provided domain spec for ${modeName}: ${JSON.stringify(domainSpec)}.`,
           'Domain spec rules and invariants are mandatory; do not substitute guessed defaults.',
         ]
-      : baseGuidance;
+      : [...baseGuidance];
+    if (reasoningContract) {
+      stageGuidance.push(
+        ...reasoningContract.result_schema.fields.map((field) =>
+          `${field.name} (${field.type}${field.type === 'enum' ? `, one of: ${(field.enum_values ?? []).join(' | ')}` : ''}): ${field.description}`),
+        `items_json templates: ${reasoningContract.items_schema.templates.join(', ')}.`,
+        'Populate every core argument; the composite result_json must agree with the per-field arguments.',
+      );
+    }
     return [modeName, stageGuidance];
   }));
 }

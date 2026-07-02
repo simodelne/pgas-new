@@ -275,7 +275,9 @@ describe('assertReasoningContract', () => {
     expect(runtimeTypeNameFor('enum')).toBe('string');
     expect(runtimeTypeNameFor('number')).toBe('number');
     expect(runtimeTypeNameFor('boolean')).toBe('boolean');
-    expect(runtimeTypeNameFor('string_array')).toBe('array');
+    // S-11 forbids MSet into array-typed paths; string_array args are JSON
+    // array strings on the engine's JSON-string-scalar pattern.
+    expect(runtimeTypeNameFor('string_array')).toBe('string');
   });
 });
 
