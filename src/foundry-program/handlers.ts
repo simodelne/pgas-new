@@ -706,6 +706,13 @@ export const handlers: Record<string, ToolHandler> = {
     return planArtifactsFromPayload(payload);
   },
 
+  async await_artifact_plan_approval() {
+    return {
+      kind: 'pgas_new_artifact_plan_awaiting_approval',
+      awaiting_user_approval: true,
+    };
+  },
+
   async revise_artifact_plan(payload) {
     return planArtifactsFromPayload(payload);
   },
