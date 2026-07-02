@@ -217,7 +217,7 @@ describe('synthesize_program_spec handler', () => {
     expectGeneratedHandlersToWire(artifact.spec_yaml, artifact.handlers_index_ts);
   });
 
-  it('normalizes prose entry_channel answers into bounded PGAS channel ids in emitted artifacts', () => {
+  it('canonicalizes prose entry_channel answers that mention frontend_intake', () => {
     const proseEntryChannel = 'SimoneOS frontend structured intake plus user_text. Fields: client_name, matter_or_service_type, jurisdiction, complexity_tier, target_deadline, constraints, budget_signal, currency, requested fee_structure, optional rate_card/precedent. Frontend supports edit/review/finalize/export.';
     const rawDomain = domain({ 'intake.entry_channel': proseEntryChannel });
     const artifact = synthesizeProgramSpecFromDomain(rawDomain);
@@ -230,12 +230,13 @@ describe('synthesize_program_spec handler', () => {
       reactions: Record<string, { watch: string[]; write_scope: string[] }>;
       schema: Record<string, string>;
     };
-    const normalizedChannel = 'simoneos_frontend_structured_intake_plus_user_text_fields_client';
+    const normalizedChannel = 'frontend_intake';
 
     expect(rawDomain['intake.entry_channel']).toBe(proseEntryChannel);
     expect(normalizedChannel).toMatch(/^[a-z0-9_]+$/u);
     expect(normalizedChannel.length).toBeLessThanOrEqual(64);
     expect(parsed.channels).toHaveProperty(normalizedChannel);
+    expect(parsed.channels).toHaveProperty('user_text');
     expect(parsed.channels).not.toHaveProperty(proseEntryChannel);
     expect(parsed.ingestion).toHaveProperty(normalizedChannel);
     expect(parsed.ingestion).not.toHaveProperty(proseEntryChannel);
