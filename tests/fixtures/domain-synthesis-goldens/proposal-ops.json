@@ -18,10 +18,36 @@
     "smoke_test_ts": "import { describe, expect, it } from 'vitest';\nimport { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';\nimport { createProposalOpsProgramEntry } from '../src/programs/proposal-ops/registration.js';\n\ndescribe('generated program smoke', () => {\n  it('runs Proposal Ops through the deterministic completion path without stub output', async () => {\n    const harness = await createTestHarness(createProposalOpsProgramEntry(), {\n      programName: 'proposal-ops',\n      defaultChannel: 'user_text',\n      authorResponses: [\n        effect('begin_work', { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),\n        effect('complete_fee_modeling', { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),\n        effect('complete_crm_lookup', { __stage_runtime: { now_iso: '2026-06-28T00:00:00.000Z', random: 0.25 } }),\n        effect('complete_brief_summary', {\n          result_json: JSON.stringify({ stage: 'brief_summary', status: 'reasoned' }),\n          items_json: JSON.stringify(['brief_summary-item']),\n        }),\n      ],\n    });\n\n    try {\n      await harness.trigger('start generated smoke');\n      await harness.trigger('continue generated smoke');\n      await harness.trigger('continue generated smoke');\n      await harness.trigger('continue generated smoke');\n      const snapshot = await harness.snapshot();\n      expect(snapshot.mode).toBe('complete');\n      const serialized = JSON.stringify(snapshot.domain).toLowerCase();\n      expect(serialized).not.toContain('stage_action_stub');\n      expect(serialized).not.toContain('\"todo\"');\n      expect(serialized).toContain('in_memory_mock');\n    } finally {\n      await harness.close();\n    }\n  });\n});\n\nfunction effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {\n  return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };\n}\n"
   },
   "stage_body_hashes": {
+    "brief_summary": "c83722b4cd777c5126877077e709cd190b4cfe18f9b631477f220678d2fa6fcd",
     "crm_lookup": "42437cd56a43ed7c7b6c853c3b3ff9aa9ccb37c7196cba31c1807635ebc9e218",
-    "fee_modeling": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3"
+    "fee_modeling": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3",
+    "intake": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3"
   },
   "audit": [
+    {
+      "stage": "intake",
+      "archetype": "pure-compute",
+      "behavioral_gate": "passed",
+      "behavioral_fixture": {
+        "input_stage": "intake",
+        "expected_result_stage": "intake",
+        "expected_items_non_empty": true,
+        "available_domain_paths": [
+          "account.id",
+          "apply_discount.output",
+          "crm_lookup.output",
+          "estimate_fee.output",
+          "inputs.initial_user_text",
+          "inputs.user_text",
+          "owner.queue",
+          "record.id",
+          "score_risk.output"
+        ]
+      },
+      "attempts": 1,
+      "cache_hit": false,
+      "body_hash": "b7c17926c207556bfa3f3d7b39b70e871823a64cacb20de304058106456d6ea3"
+    },
     {
       "stage": "fee_modeling",
       "archetype": "pure-compute",
@@ -71,6 +97,14 @@
       "attempts": 1,
       "cache_hit": false,
       "body_hash": "42437cd56a43ed7c7b6c853c3b3ff9aa9ccb37c7196cba31c1807635ebc9e218"
+    },
+    {
+      "stage": "brief_summary",
+      "archetype": "llm-reasoning",
+      "behavioral_gate": "not_applicable",
+      "attempts": 0,
+      "cache_hit": false,
+      "body_hash": "c83722b4cd777c5126877077e709cd190b4cfe18f9b631477f220678d2fa6fcd"
     }
   ]
 }

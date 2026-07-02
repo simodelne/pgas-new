@@ -1,0 +1,21 @@
+{
+  "body": "import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';\n\nexport async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {\n  const request = String(input.domain['inputs.user_text'] ?? input.domain['inputs.initial_user_text'] ?? '');\n  return {\n    result_json: JSON.stringify({ stage: input.stage, started: true, request_captured: request.length > 0, captured_at: runtime.now() }),\n    items_json: JSON.stringify([input.stage + ':started']),\n    digest: '',\n  };\n}\n",
+  "body_hash": "f1d2f359156b9a0f29308fa32fb7b466f34e55be5e2ce312984d0d2d5000caf8",
+  "behavioral_gate": "passed",
+  "behavioral_fixture": {
+    "input_stage": "intake",
+    "expected_result_stage": "intake",
+    "expected_items_non_empty": true,
+    "available_domain_paths": [
+      "account.id",
+      "apply_discount.output",
+      "crm_lookup.output",
+      "estimate_fee.output",
+      "inputs.initial_user_text",
+      "inputs.user_text",
+      "owner.queue",
+      "record.id",
+      "score_risk.output"
+    ]
+  }
+}

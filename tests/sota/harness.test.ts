@@ -129,8 +129,8 @@ describe('SOTA corpus harness', () => {
       expect(result.gates.smoke.status).toBe('pass');
       expect(result.gates.behavioral.status).toBe('pass');
       expect(result.gates.functional_oracle.status).toBe('pass');
-      expect(result.stage_attempts).toEqual({ calculate_fee: 0 });
-      expect(result.cache_hits).toEqual({ calculate_fee: true });
+      expect(result.stage_attempts).toEqual({ intake: 0, calculate_fee: 0 });
+      expect(result.cache_hits).toEqual({ intake: true, calculate_fee: true });
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
