@@ -63,6 +63,32 @@ internals.
 
 
 
+## Current State - 2026-07-03 (v3.10.0)
+
+- Released **v3.10.0** — `main` @ `76535a43`, annotated tag `v3.10.0` (== origin/main HEAD),
+  GitHub release published. npm publish N/A (`package.json` is `private: true`). MINOR bump.
+- **Real LLM-reasoning stage synthesis** (PR #114; spec PR #113): `llm-reasoning` stages
+  (recommend/review/classify/draft/summarize) are synthesized with a build-time meta-LLM
+  **reasoning contract** — a domain-specific reasoning prompt + a typed structured `result_json`
+  schema woven into the generated program's `specs.yml` (per-field `from_arg` at
+  `<stage>.result.<field>`, GKType-typed). The placeholder `runStage` is replaced by a
+  first-class contract-record module; new `src/foundry-program/reasoning-contract.ts`.
+  §12.8 policy: hard-fail by default when a configured provider fails; deterministic fallback
+  only on the no-provider hermetic path or behind `ALLOW_REASONING_FALLBACK=1`;
+  `PGAS_REASONING_CONTRACT_REQUIRE_LLM=1` forces strict; only `meta_llm` contracts are cached;
+  degradation is always audited, never silent. Live-proven (standalone graduation of a program
+  with a real `recommendation` reasoning stage → terminal `pr_graduation`, real Qwen).
+- Standalone AND attached-repo graduation are clean end-to-end and live-proven (attached: v3.9.0;
+  standalone: v3.9.1; rebase-status normalization #112). Gates: typecheck clean · unit 432/5-skip
+  · static 9/0.
+- Current server target: latest checked published `@simodelne/pgas-server` is `2.16.0`.
+- **Merged-branch cleanup (2026-07-03, authorized, merged-only):** deleted 13 merged remote
+  branches (chore/v3.9.0-3.10.0-bump, docs/llm-reasoning-synthesis-spec, feat/sota-facet-c-graduation,
+  fix/issue-81/95/100, fix/standalone-graduation-106-107, fix/standalone-llm-stage-planning,
+  fix/standalone-rebase-status-normalization, impl/llm-reasoning-synthesis) + local merged branches.
+  Remaining remote: `main` + `feat/await-approval-frontend-intake` (NOT merged — PR #101 closed).
+- The "Current State - 2026-06-19" section below is **historical** (pre-v3.x); retained for reference.
+
 ## Current State - 2026-06-19
 
 - Active branch: `feat/pgas-new-standalone-template-social-media-agent`
