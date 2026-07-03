@@ -63,10 +63,21 @@ internals.
 
 
 
-## Current State - 2026-07-03 (v3.10.0)
+## Current State - 2026-07-03 (v3.10.1)
 
-- Released **v3.10.0** — `main` @ `76535a43`, annotated tag `v3.10.0` (== origin/main HEAD),
-  GitHub release published. npm publish N/A (`package.json` is `private: true`). MINOR bump.
+- Latest release **v3.10.1** — `main` @ `6acb0ba2`, annotated tag `v3.10.1` (== origin/main HEAD),
+  GitHub release published. npm publish N/A (`package.json` is `private: true`). PATCH over v3.10.0.
+- **v3.10.1 (#116) — attached-repo generator repairs** (fix commit `9dfedffb`): the v3.10.0 attached
+  SimoneOS fee-proposal dogfood required generator repairs to reach SOTA graduation — reasoning-contract
+  field-schema/canned-example repair, Qwen `stages_json` JSON repair, explicit `kind: deterministic`
+  stage-kind handling, richer domain-spec preservation + the `assertFeeProposalComputation` fee-model
+  gate (rejects non-positive quotes at synthesis), and real SimoneOS attached artifact templates
+  (projection/frontend.spec/export-html+docx/facts/scenario/deterministic-test/registration-attached)
+  + regenerated golden fixtures. typecheck clean · unit 441 passed / 5 skipped / 0 failed · static 9/0.
+  Issue #116 CLOSED. (An independent Fable pass confirmed the earlier "perfect v3.10.0 fee-proposal
+  graduation" was really v3.10.0 + this uncommitted patch set — now consolidated + released as v3.10.1.)
+- Released **v3.10.0** (MINOR) — annotated tag `v3.10.0`, GitHub release published. Real LLM-reasoning
+  stage synthesis (details below).
 - **Real LLM-reasoning stage synthesis** (PR #114; spec PR #113): `llm-reasoning` stages
   (recommend/review/classify/draft/summarize) are synthesized with a build-time meta-LLM
   **reasoning contract** — a domain-specific reasoning prompt + a typed structured `result_json`
