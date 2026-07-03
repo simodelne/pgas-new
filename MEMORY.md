@@ -92,7 +92,7 @@ internals.
 - Standalone AND attached-repo graduation are clean end-to-end and live-proven (attached: v3.9.0;
   standalone: v3.9.1; rebase-status normalization #112). Gates: typecheck clean · unit 432/5-skip
   · static 9/0.
-- Current server target: latest checked published `@simodelne/pgas-server` is `2.16.0`.
+- Current server target: latest checked published `@simodelne/pgas-server` is `3.1.0`.
 - **Merged-branch cleanup (2026-07-03, authorized, merged-only):** deleted 13 merged remote
   branches (chore/v3.9.0-3.10.0-bump, docs/llm-reasoning-synthesis-spec, feat/sota-facet-c-graduation,
   fix/issue-81/95/100, fix/standalone-graduation-106-107, fix/standalone-llm-stage-planning,
