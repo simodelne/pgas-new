@@ -144,7 +144,10 @@ export async function synthesizeReasoningContract(
         continue;
       }
       try {
-        const contract = assertReasoningContract(stampContract(parseContractJson(raw), stage, 'meta_llm'), validation);
+        const stamped = stampContract(parseContractJson(raw), stage, 'meta_llm');
+        const schemaRepaired = repairSynthesizedFieldSchema(stamped, validation);
+        const repaired = repairSynthesizedCannedExample(schemaRepaired, validation);
+        const contract = assertReasoningContract(repaired, validation);
         const record: ContractCacheRecord = {
           contract,
           contract_hash: contractHash(contract),
@@ -312,8 +315,9 @@ export function assertReasoningContract(
 export function deriveFallbackReasoningContract(stage: string, artifact: SynthesizedArtifact): ReasoningStageContract {
   const context = reasoningContextForStage(stage, artifact);
   const reserved = new Set([...RESERVED_FIELD_NAMES, ...context.guard_field_tails]);
+  const hardReserved = new Set<string>(RESERVED_FIELD_NAMES);
   const domainSpec = context.domain_spec;
-  const specFields = domainSpec ? usableDomainSpecFieldNames(domainSpec, reserved) : [];
+  const specFields = domainSpec ? usableDomainSpecFieldNames(domainSpec, hardReserved) : [];
 
   const fields: ReasoningField[] = specFields.length >= MIN_FIELDS
     ? specFields.slice(0, MAX_FIELDS).map((name) => domainSpecField(name, domainSpec as ReasoningStageDomainSpec))
@@ -502,7 +506,7 @@ export function createOpenAiCompatibleReasoningContractGenerator(
                 'Shape: { "reasoning_prompt": string, "result_schema": { "fields": [{ "name", "type", "description", "enum_values"? }], "allow_extra_fields": true }, "items_schema": { "templates": string[], "description": string }, "canned_example": { "result": object, "items": string[] } }.',
                 `reasoning_prompt must be ${MIN_PROMPT_LENGTH}..${MAX_PROMPT_LENGTH} characters of imperative, stage-specific reasoning instructions grounded in the provided context.`,
                 `result_schema.fields must declare ${MIN_FIELDS}..${MAX_FIELDS} core fields with unique snake_case names (max 32 chars) and type one of: ${FIELD_TYPES.join(', ')}.`,
-                `Field names must not be any of: ${RESERVED_FIELD_NAMES.join(', ')}, nor the tail segment of any outgoing guard field in the context.`,
+                `Field names must not be any of: ${RESERVED_FIELD_NAMES.join(', ')}, nor the tail segment of any outgoing guard field in the context unless the context domain_spec explicitly requires that field name.`,
                 `enum fields require enum_values with ${MIN_ENUM_VALUES}..${MAX_ENUM_VALUES} values; other types must omit enum_values.`,
                 `items_schema.templates must declare 1..${MAX_ITEM_TEMPLATES} item templates using <field_name> placeholders; every template must start with a literal anchor (for example the stage slug), never with a placeholder.`,
                 'canned_example.result must include every core field with a type-conformant (and enum-member) value; canned_example.items must match the templates one-to-one, in order.',
@@ -550,6 +554,140 @@ function validationOptionsFor(stage: string, context: ReasoningStageContext): As
   };
 }
 
+function repairSynthesizedCannedExample(
+  value: Record<string, unknown>,
+  options: AssertReasoningContractOptions,
+): Record<string, unknown> {
+  const resultSchema = value.result_schema;
+  const itemsSchema = value.items_schema;
+  if (!isRecord(resultSchema) || !Array.isArray(resultSchema.fields) ||
+      !isRecord(itemsSchema) || !Array.isArray(itemsSchema.templates)) {
+    return value;
+  }
+
+  const fields: ReasoningField[] = [];
+  for (let index = 0; index < resultSchema.fields.length; index += 1) {
+    try {
+      fields.push(assertReasoningField(resultSchema.fields[index], index, options));
+    } catch {
+      return value;
+    }
+  }
+
+  const templates = itemsSchema.templates;
+  if (!templates.every((template) => typeof template === 'string')) {
+    return value;
+  }
+
+  const cannedExample = value.canned_example;
+  const rawResult = isRecord(cannedExample) && isRecord(cannedExample.result)
+    ? cannedExample.result
+    : {};
+  const rawItems = isRecord(cannedExample) && Array.isArray(cannedExample.items)
+    ? cannedExample.items
+    : [];
+  const result: Record<string, unknown> = { ...rawResult };
+  let changed = !isRecord(cannedExample) ||
+    !isRecord(cannedExample.result) ||
+    !Array.isArray(cannedExample.items) ||
+    rawItems.length !== templates.length;
+  let resultChanged = false;
+
+  for (const field of fields) {
+    if (assertCannedFieldValue(field, result[field.name])) {
+      result[field.name] = cannedValueFor(field);
+      changed = true;
+      resultChanged = true;
+    }
+  }
+
+  const items = templates.map((template, index) => {
+    const current = rawItems[index];
+    if (!resultChanged && typeof current === 'string' && itemTemplateMatcher(template).test(current)) {
+      return current;
+    }
+    changed = true;
+    return renderCannedItemTemplate(template, result);
+  });
+
+  if (!changed) {
+    return value;
+  }
+
+  return {
+    ...value,
+    canned_example: {
+      ...(isRecord(cannedExample) ? cannedExample : {}),
+      result,
+      items,
+    },
+  };
+}
+
+function repairSynthesizedFieldSchema(
+  value: Record<string, unknown>,
+  options: AssertReasoningContractOptions,
+): Record<string, unknown> {
+  const resultSchema = value.result_schema;
+  if (!isRecord(resultSchema) || !Array.isArray(resultSchema.fields)) {
+    return value;
+  }
+
+  const repairedFields = repairedReasoningFields(resultSchema.fields, options);
+  if (!repairedFields) {
+    return value;
+  }
+
+  return {
+    ...value,
+    result_schema: {
+      ...resultSchema,
+      fields: repairedFields,
+      allow_extra_fields: true,
+    },
+  };
+}
+
+function repairedReasoningFields(
+  rawFields: unknown[],
+  options: AssertReasoningContractOptions,
+): ReasoningField[] | undefined {
+  if (options.domainSpec) {
+    const specNames = usableDomainSpecFieldNames(options.domainSpec, new Set(RESERVED_FIELD_NAMES));
+    if (specNames.length >= MIN_FIELDS && specNames.length <= MAX_FIELDS) {
+      const rawByName = new Map<string, Record<string, unknown>>();
+      for (const raw of rawFields) {
+        if (isRecord(raw) && typeof raw.name === 'string') {
+          rawByName.set(raw.name, raw);
+        }
+      }
+      return specNames.map((name) => {
+        const fromProvider = rawByName.get(name);
+        const fallback = domainSpecField(name, options.domainSpec as ReasoningStageDomainSpec);
+        return {
+          ...fallback,
+          ...(typeof fromProvider?.description === 'string' && fromProvider.description.trim().length > 0
+            ? { description: fromProvider.description }
+            : {}),
+        };
+      });
+    }
+  }
+
+  const repaired: ReasoningField[] = [];
+  for (let index = 0; index < rawFields.length; index += 1) {
+    try {
+      repaired.push(assertReasoningField(rawFields[index], index, options));
+    } catch {
+      // Provider output can mirror structural result_json keys such as "stage".
+      // Those keys stay inside result_json and must not become action args.
+    }
+  }
+  return repaired.length === rawFields.length || repaired.length < MIN_FIELDS
+    ? undefined
+    : repaired.slice(0, MAX_FIELDS);
+}
+
 function assertReasoningField(
   value: unknown,
   index: number,
@@ -562,8 +700,12 @@ function assertReasoningField(
   if (typeof name !== 'string' || name.length === 0 || name.length > 32 || !FIELD_NAME_PATTERN.test(name)) {
     throw new Error(`reasoning contract field name ${JSON.stringify(name)} must match ${FIELD_NAME_PATTERN} and be at most 32 characters`);
   }
-  const reserved = new Set<string>([...RESERVED_FIELD_NAMES, ...(options.reservedFieldNames ?? [])]);
-  if (reserved.has(name)) {
+  const hardReserved = new Set<string>(RESERVED_FIELD_NAMES);
+  if (hardReserved.has(name)) {
+    throw new Error(`reasoning contract field name ${name} is reserved (built-in arg names and outgoing guard-field tails are excluded)`);
+  }
+  const guardReserved = new Set<string>(options.reservedFieldNames ?? []);
+  if (guardReserved.has(name) && !isDomainSpecFieldName(name, options.domainSpec)) {
     throw new Error(`reasoning contract field name ${name} is reserved (built-in arg names and outgoing guard-field tails are excluded)`);
   }
   const type = value.type;
@@ -618,9 +760,9 @@ function assertDomainSpecAgreement(
   fields: ReasoningField[],
   templates: string[],
   domainSpec: ReasoningStageDomainSpec,
-  reservedFieldNames: readonly string[],
+  _reservedFieldNames: readonly string[],
 ): void {
-  const reserved = new Set<string>([...RESERVED_FIELD_NAMES, ...reservedFieldNames]);
+  const reserved = new Set<string>(RESERVED_FIELD_NAMES);
   const specNames = usableDomainSpecFieldNames(domainSpec, reserved);
   if (specNames.length >= MIN_FIELDS && specNames.length <= MAX_FIELDS) {
     const contractNames = fields.map((field) => field.name);
@@ -663,6 +805,11 @@ function usableDomainSpecFieldNames(domainSpec: ReasoningStageDomainSpec, reserv
     !reserved.has(name) &&
     name.length <= 32 &&
     FIELD_NAME_PATTERN.test(name));
+}
+
+function isDomainSpecFieldName(name: string, domainSpec: ReasoningStageDomainSpec | undefined): boolean {
+  const producesSchema = domainSpec?.produces.result_json;
+  return isRecord(producesSchema) && Object.prototype.hasOwnProperty.call(producesSchema, name);
 }
 
 function domainSpecField(name: string, domainSpec: ReasoningStageDomainSpec): ReasoningField {
@@ -756,6 +903,13 @@ function cannedItemText(value: unknown): string {
   }
   const text = String(value);
   return text.length > 0 ? text : 'sample';
+}
+
+function renderCannedItemTemplate(template: string, result: Record<string, unknown>): string {
+  return template.replace(/<([^>]+)>/gu, (_match, name: string) => {
+    const value = result[name];
+    return value === undefined ? 'sample' : cannedItemText(value);
+  });
 }
 
 function classificationRecordFor(

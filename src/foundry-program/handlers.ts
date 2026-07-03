@@ -82,7 +82,9 @@ function optionalJsonField(
   if (typeof jsonValue !== 'string') {
     throw new Error(`missing JSON-string payload field: ${jsonKey}`);
   }
-  const normalized = parseAndNormalizeJson(jsonValue, jsonKey);
+  const normalized = jsonKey === 'stages_json'
+    ? parseAndNormalizeStagesJson(jsonValue)
+    : parseAndNormalizeJson(jsonValue, jsonKey);
   assertJsonTopLevelType(normalized.value, expectedType, jsonKey);
   return normalized;
 }
@@ -105,6 +107,23 @@ function parseAndNormalizeJson(rawValue: string, label: string): NormalizedJsonF
     value,
     canonical: canonicalJson(value, label),
   };
+}
+
+function parseAndNormalizeStagesJson(rawValue: string): NormalizedJsonField {
+  try {
+    return parseAndNormalizeJson(rawValue, 'intake.stages_json');
+  } catch (error) {
+    const normalizedRawValue = normalizeSmartQuotes(unescapeCommonHtmlEntities(rawValue));
+    const repaired = normalizedRawValue.replace(/\]\}(?=,\s*\{"slug"\s*:)/gu, ']}}');
+    if (repaired === normalizedRawValue) {
+      throw error;
+    }
+    try {
+      return parseAndNormalizeJson(repaired, 'intake.stages_json');
+    } catch {
+      throw error;
+    }
+  }
 }
 
 function normalizeSmartQuotes(value: string): string {

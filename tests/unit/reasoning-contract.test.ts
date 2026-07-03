@@ -231,6 +231,46 @@ describe('assertReasoningContract', () => {
       .toThrow(/reserved/u);
   });
 
+  it('allows domain-spec fields to collide with outgoing guard-field tails', () => {
+    const domainSpec = {
+      reads: ['fee_modelling.output.result_json'],
+      produces: {
+        result_json: { stage: 'string', proposal_html: 'string', proposal_outline: 'string', ready: 'boolean' },
+        items_json: ['draft_ready:<ready>'],
+      },
+      rules: ['Assemble the proposal.'],
+      invariants: ['stage must equal draft_assembly.'],
+    };
+    const contract = validContract({
+      stage: 'draft_assembly',
+      result_schema: {
+        fields: [
+          { name: 'proposal_html', type: 'string', description: 'Client-ready proposal HTML.' },
+          { name: 'proposal_outline', type: 'string', description: 'Proposal section outline.' },
+          { name: 'ready', type: 'boolean', description: 'Whether the proposal is ready for review.' },
+        ],
+        allow_extra_fields: true,
+      },
+      items_schema: { templates: ['draft_ready:<ready>'], description: 'Draft readiness item.' },
+      canned_example: {
+        result: {
+          proposal_html: '<article>Proposal</article>',
+          proposal_outline: 'Executive summary; scope; fees; terms',
+          ready: true,
+        },
+        items: ['draft_ready:true'],
+      },
+    });
+
+    expect(() =>
+      assertReasoningContract(contract, {
+        stage: 'draft_assembly',
+        reservedFieldNames: ['ready'],
+        domainSpec,
+      }),
+    ).not.toThrow();
+  });
+
   it('enforces normative domain-spec field names, order, and types when a domain spec is provided', () => {
     const domainSpec = {
       reads: ['inputs.initial_user_text'],
@@ -328,6 +368,124 @@ describe('synthesizeReasoningContract', () => {
       const result = await synthesizeReasoningContract('recommendation', artifact(), { cacheDir, generator });
       expect(result.attempts).toBe(2);
       expect(repairs).toEqual(['initial', expect.stringContaining('200..1600')]);
+    });
+  });
+
+  it('repairs meta-LLM canned examples without weakening contract validation', async () => {
+    await withCache(async (cacheDir) => {
+      const generated = validContract({
+        result_schema: {
+          fields: [
+            { name: 'proposal_html', type: 'string', description: 'Client-ready proposal HTML.' },
+            { name: 'proposal_outline', type: 'string_array', description: 'Ordered proposal sections.' },
+            { name: 'blocker_reason', type: 'string', description: 'Reason the stage would block, when applicable.' },
+            { name: 'ready_flag', type: 'boolean', description: 'Whether the proposal is ready.' },
+          ],
+          allow_extra_fields: true,
+        },
+        items_schema: {
+          templates: ['proposal:<proposal_html>', 'ready:<ready_flag>'],
+          description: 'Proposal readiness item strings.',
+        },
+        canned_example: {
+          result: {
+            proposal_html: '',
+            proposal_outline: [],
+            blocker_reason: '',
+            ready_flag: 'yes',
+          },
+          items: ['proposal:', 'ready:yes'],
+        },
+      });
+      const generator = async () => {
+        const { contract_version, stage, contract_source, ...body } = generated;
+        void contract_version; void stage; void contract_source;
+        return JSON.stringify(body);
+      };
+
+      const result = await synthesizeReasoningContract('recommendation', artifact(), { cacheDir, generator });
+
+      expect(result.contract_source).toBe('meta_llm');
+      expect(result.attempts).toBe(1);
+      expect(result.contract.canned_example.result).toMatchObject({
+        proposal_html: 'sample proposal html',
+        proposal_outline: ['sample proposal outline'],
+        blocker_reason: 'sample blocker reason',
+        ready_flag: true,
+      });
+      expect(result.contract.canned_example.items).toEqual([
+        'proposal:sample proposal html',
+        'ready:true',
+      ]);
+    });
+  });
+
+  it('repairs meta-LLM domain-spec fields that include reserved structural keys', async () => {
+    await withCache(async (cacheDir) => {
+      const withSpec = artifact();
+      withSpec.synthesis_context = {
+        ...withSpec.synthesis_context!,
+        stages: withSpec.synthesis_context!.stages.map((stage) => stage.slug === 'review'
+          ? {
+              ...stage,
+              domain_spec: {
+                reads: ['recommendation.result_json'],
+                produces: {
+                  result_json: {
+                    stage: 'string',
+                    review_verdict: 'string',
+                    review_summary: 'string',
+                    quality_score: 'number',
+                  },
+                  items_json: ['verdict:<review_verdict>'],
+                },
+                rules: ['Review readiness and pricing quality.'],
+                invariants: ['stage must equal review.'],
+              },
+            }
+          : stage),
+      };
+
+      const result = await synthesizeReasoningContract('review', withSpec, {
+        cacheDir,
+        generator: async () => JSON.stringify({
+          reasoning_prompt: [
+            'Review the generated fee proposal using the prior recommendation and draft evidence. Confirm that the proposal is clear,',
+            'commercially coherent, and ready for client delivery. Check pricing math, assumptions, exclusions, payment terms, and',
+            'signature language, then provide a verdict, summary, and numerical quality score grounded only in available facts.',
+          ].join(' '),
+          result_schema: {
+            fields: [
+              { name: 'stage', type: 'string', description: 'Structural stage echo from result_json.' },
+              { name: 'review_verdict', type: 'string', description: 'Partner review verdict.' },
+              { name: 'review_summary', type: 'string', description: 'Partner review summary.' },
+              { name: 'quality_score', type: 'number', description: 'Quality score.' },
+            ],
+            allow_extra_fields: true,
+          },
+          items_schema: {
+            templates: ['verdict:<review_verdict>'],
+            description: 'Review verdict item.',
+          },
+          canned_example: {
+            result: {
+              stage: 'review',
+              review_verdict: 'approved',
+              review_summary: 'Ready for delivery.',
+              quality_score: 95,
+            },
+            items: ['verdict:approved'],
+          },
+        }),
+      });
+
+      expect(result.contract_source).toBe('meta_llm');
+      expect(result.contract.result_schema.fields.map((field) => [field.name, field.type])).toEqual([
+        ['review_verdict', 'string'],
+        ['review_summary', 'string'],
+        ['quality_score', 'number'],
+      ]);
+      expect(result.contract.canned_example.items).toEqual(['verdict:approved']);
     });
   });
 

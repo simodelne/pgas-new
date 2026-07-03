@@ -43,4 +43,31 @@ describe('stage classifier', () => {
       rationale: expect.stringContaining('external'),
     });
   });
+
+  it('honors explicit delegation archetypes before heuristic stage names', () => {
+    const classified = classifyStagesForDomain(domain({
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'scope_definition' },
+        { slug: 'draft_assembly' },
+        { slug: 'fee_modeling' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.delegation_json': JSON.stringify({
+        scope_definition: { kind: 'llm-reasoning', target: 'define_scope' },
+        draft_assembly: { kind: 'llm-reasoning', target: 'assemble_draft' },
+        fee_modeling: { kind: 'pure-compute', target: 'compute_fee_model' },
+      }),
+    }));
+
+    expect(classified.map((stage) => [stage.slug, stage.archetype])).toEqual([
+      ['intake', 'pure-compute'],
+      ['scope_definition', 'llm-reasoning'],
+      ['draft_assembly', 'llm-reasoning'],
+      ['fee_modeling', 'pure-compute'],
+      ['complete', 'pure-compute'],
+    ]);
+    expect(classified.find((stage) => stage.slug === 'scope_definition')?.rationale)
+      .toContain('explicitly marked');
+  });
 });

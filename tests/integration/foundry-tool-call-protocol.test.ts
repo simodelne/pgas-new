@@ -137,6 +137,12 @@ describe('foundry intake tool-call protocol guidance', () => {
       expect(stringPropertyDescription(captured.stagesTool, 'stages_json')).toContain(
         'Array (Q3 stages_json): "[\\"intake\\", \\"analysis\\", \\"complete\\"]"',
       );
+      expect(stringPropertyDescription(captured.stagesTool, 'stages_json')).toContain(
+        'domain_spec',
+      );
+      expect(stringPropertyDescription(captured.stagesTool, 'stages_json')).toContain(
+        'not compress rich stage objects into a bare array of names',
+      );
       expect(stringPropertyDescription(captured.transitionsTool, 'transitions_json')).toContain(
         'Array (Q4 transitions_json): "[{\\"from\\":\\"intake\\",\\"to\\":\\"analysis\\",\\"guard_field\\":\\"intake.ready\\"}]"',
       );
@@ -145,6 +151,12 @@ describe('foundry intake tool-call protocol guidance', () => {
       );
       expect(stringPropertyDescription(captured.completionTool, 'completion_json')).toContain(
         'Object (Q6 completion_json): "{\\"final_stage\\": \\"complete\\", \\"guard_field\\": \\"work.done\\"}"',
+      );
+      expect(stringPropertyDescription(captured.completionTool, 'completion_json')).toContain(
+        'Preserve every user-provided top-level key exactly',
+      );
+      expect(stringPropertyDescription(captured.completionTool, 'completion_json')).toContain(
+        'Rich object (Q6 completion_json)',
       );
       for (const description of [
         stringPropertyDescription(captured.stagesTool, 'stages_json'),

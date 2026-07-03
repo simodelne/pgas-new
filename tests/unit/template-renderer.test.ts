@@ -281,8 +281,59 @@ describe('template renderer', () => {
 
       const registration = readFileSync(join(repoRoot, 'programs/audit-trail/registration.ts'), 'utf8');
       expect(registration).toContain("new URL('./specs.yml', import.meta.url).pathname");
+      expect(registration).toContain("import { auditTrailProjection } from './projection.js';");
+      expect(registration).toContain('projectionBuilder: auditTrailProjection');
+      expect(registration).toContain("frontendSpecPath: 'programs/audit-trail'");
       expect(registration).not.toContain("from 'node:path'");
       expect(registration).not.toContain("from 'node:url'");
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('renders attached user-facing artifacts with projection, export, QC, and deterministic coverage', () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'pgas-new-attached-user-facing-'));
+    try {
+      renderExistingRepoAttachment({
+        repoRoot,
+        manifest: VALID_MANIFEST,
+        slug: 'fee-proposal-drafter',
+        name: 'Fee Proposal Drafter',
+        synthesizedSpecYaml: 'name: fee-proposal-drafter\n',
+        synthesizedContractsTs: 'export const contractSentinel = true;\n',
+        synthesizedHandlersTs: 'export const handlers = {}; export const reactionHandlers = new Map();\n',
+        synthesizedHandlersIndexTs: 'export const handlers = {};\n',
+        synthesizedStageSources: {
+          fee_modelling: 'export async function runStage() { return { result_json: "{}", items_json: "[]", digest: "" }; }\n',
+        },
+        synthesizedToolsTs: 'export function registerFeeProposalDrafterTools() {}\n',
+        synthesizedSmokeTestTs: [
+          "import { describe } from 'vitest';",
+          "import { createFeeProposalDrafterProgramEntry } from '../src/programs/fee-proposal-drafter/registration.js';",
+          "describe('generated program smoke', () => { void createFeeProposalDrafterProgramEntry; });",
+          '',
+        ].join('\n'),
+      });
+
+      const projection = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/projection.ts'), 'utf8');
+      const html = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/export/html.ts'), 'utf8');
+      const docx = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/export/docx.ts'), 'utf8');
+      const frontend = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/frontend.spec.yml'), 'utf8');
+      const deterministic = readFileSync(join(repoRoot, 'tests/fee-proposal-drafter-deterministic.test.ts'), 'utf8');
+      const facts = readFileSync(join(repoRoot, 'qc/facts/fee-proposal-drafter.facts.yml'), 'utf8');
+
+      expect(projection).toContain('feeProposalDrafterProjection');
+      expect(projection).toContain('pricing_cards');
+      expect(projection).toContain('signature_page');
+      expect(html).toContain('renderStructuredHtmlDocument');
+      expect(html).toContain('Acceptance and Signature');
+      expect(docx).toContain('renderStructuredDocxDocument');
+      expect(docx).toContain('word/document.xml');
+      expect(frontend).toContain('document-editor');
+      expect(frontend).toContain('frontend_intake');
+      expect(deterministic).toContain('renderStructuredDocxDocument');
+      expect(deterministic).toContain("expect(docx[0]).toBe(0x50)");
+      expect(facts).toContain('required_derived_keys');
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

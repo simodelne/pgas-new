@@ -1,0 +1,217 @@
+import type { ProjectionBuilder } from '@simodelne/pgas-server/plugin.js';
+
+type DomainReader = { get(path: string): unknown };
+type StageStatus = 'complete' | 'current' | 'pending' | 'blocked';
+
+const PHASES = [
+  ['intake', 'Intake'],
+  ['template_selection', 'Template'],
+  ['scope_definition', 'Scope'],
+  ['assumptions_exclusions', 'Assumptions'],
+  ['effort_estimation', 'Effort'],
+  ['fee_modelling', 'Fees'],
+  ['risk_adjustment', 'Risk'],
+  ['option_packaging', 'Options'],
+  ['draft_assembly', 'Draft'],
+  ['partner_review', 'Review'],
+  ['revision', 'Revision'],
+  ['client_delivery', 'Delivery'],
+  ['complete', 'Complete'],
+  ['blocked', 'Blocked'],
+] as const;
+
+export const {{CAMEL_NAME}}Projection: ProjectionBuilder = (domain, mode) => {
+  return derive{{PASCAL_NAME}}Projection(domain as DomainReader, mode);
+};
+
+export const {{PASCAL_NAME}}Projection = {
+  program: '{{SLUG}}',
+  version: 2,
+  builder: {{CAMEL_NAME}}Projection,
+} as const;
+
+function derive{{PASCAL_NAME}}Projection(domain: DomainReader, mode: string): Record<string, unknown> {
+  const intake = readInitialIntake(domain);
+  const scope = readStageResult(domain, 'scope_definition');
+  const assumptions = readStageResult(domain, 'assumptions_exclusions');
+  const effort = readStageResult(domain, 'effort_estimation');
+  const fees = readStageResult(domain, 'fee_modelling');
+  const risk = readStageResult(domain, 'risk_adjustment');
+  const options = readStageResult(domain, 'option_packaging');
+  const draft = readStageResult(domain, 'draft_assembly');
+  const review = readStageResult(domain, 'partner_review');
+  const delivery = readStageResult(domain, 'client_delivery');
+  const blocked = isTruthy(domain.get('partner_review.blocked')) || mode === 'blocked';
+  const complete = mode === 'complete' || isTruthy(domain.get('client_delivery.finalized'));
+  const proposalHtml = stringField(draft, 'proposal_html') || stringField(delivery, 'proposal_html');
+  const currency = stringField(fees, 'currency') || stringField(risk, 'currency') || stringField(intake, 'currency') || 'USD';
+  const finalQuote = numberField(risk, 'final_quote') || numberField(risk, 'adjusted_quote') || numberField(fees, 'fixed_quote');
+
+  return {
+    program_title: 'Fee Proposal Drafter',
+    program_slug: '{{SLUG}}',
+    mode,
+    status_banner: blocked
+      ? { tone: 'critical', label: 'Blocked', detail: stringField(review, 'review_summary') || 'Partner review blocked delivery.' }
+      : complete
+        ? { tone: 'success', label: 'Ready for delivery', detail: stringField(delivery, 'delivery_summary') || 'Proposal package is finalized.' }
+        : { tone: 'info', label: 'In progress', detail: `Currently in ${mode.replace(/_/g, ' ')}.` },
+    phase_steps: PHASES.map(([id, label]) => ({
+      id,
+      label,
+      status: phaseStatus(id, mode, domain, blocked, complete),
+    })),
+    workspace_checkpoints: [
+      checkpoint('Client intake captured', Object.keys(intake).length > 0 || isTruthy(domain.get('intake.ready'))),
+      checkpoint('Scope defined', Object.keys(scope).length > 0 || isTruthy(domain.get('scope_definition.ready'))),
+      checkpoint('Assumptions and exclusions explicit', Object.keys(assumptions).length > 0 || isTruthy(domain.get('assumptions_exclusions.ready'))),
+      checkpoint('Fee model calculated', hasNumber(fees, 'fixed_quote') || isTruthy(domain.get('fee_modelling.ready'))),
+      checkpoint('Risk adjustment applied', hasNumber(risk, 'final_quote') || isTruthy(domain.get('risk_adjustment.ready'))),
+      checkpoint('Client-ready draft assembled', Boolean(proposalHtml) || isTruthy(domain.get('draft_assembly.ready'))),
+      checkpoint('Partner review complete', Object.keys(review).length > 0 || isTruthy(domain.get('partner_review.approved'))),
+      checkpoint('Exports ready', isTruthyField(delivery, 'html_export_ready') && isTruthyField(delivery, 'docx_export_ready')),
+    ],
+    workspace_metadata: [
+      { label: 'Client', value: stringField(intake, 'client_name') || 'Unspecified client' },
+      { label: 'Service', value: stringField(intake, 'service_type') || 'Professional services' },
+      { label: 'Jurisdiction', value: stringField(intake, 'jurisdiction') || 'Unspecified' },
+      { label: 'Currency', value: currency },
+      { label: 'Fee structure', value: stringField(intake, 'fee_structure') || 'To be selected' },
+    ],
+    pricing_cards: [
+      moneyCard('Hourly estimate', fees.hourly_total, currency, 'Calculated from role hours and rate card.'),
+      moneyCard('Fixed quote', fees.fixed_quote, currency, 'Risk-adjusted fixed-fee anchor.'),
+      moneyCard('Capped quote', fees.capped_quote, currency, 'Maximum fee with cap premium.'),
+      moneyCard('Retainer', fees.retainer_quote, currency, 'Upfront retainer requested.'),
+      moneyCard('Final quote', finalQuote, currency, 'Selected quote after risk, payment, and approval adjustments.'),
+    ],
+    fee_model: {
+      parameters: parseJsonObject(stringField(fees, 'parameters_json')),
+      hourly_total: numberField(fees, 'hourly_total'),
+      fixed_quote: numberField(fees, 'fixed_quote'),
+      capped_quote: numberField(fees, 'capped_quote'),
+      blended_rate: numberField(fees, 'blended_rate'),
+      retainer_quote: numberField(fees, 'retainer_quote'),
+      currency,
+    },
+    risk_adjustment: {
+      final_quote: finalQuote,
+      adjustment_summary: stringField(risk, 'adjustment_summary'),
+      payment_terms: stringField(risk, 'payment_terms'),
+      validity_period: stringField(risk, 'validity_period'),
+      change_control: stringField(risk, 'change_control'),
+    },
+    scope_summary: [
+      detailItem('Phases', stringField(scope, 'phases')),
+      detailItem('Deliverables', stringField(scope, 'deliverables')),
+      detailItem('In scope', stringField(scope, 'in_scope_items')),
+      detailItem('Scope risks', stringField(scope, 'scope_risks')),
+    ],
+    assumptions_summary: [
+      detailItem('Assumptions', stringField(assumptions, 'assumptions')),
+      detailItem('Exclusions', stringField(assumptions, 'exclusions')),
+      detailItem('Dependencies', stringField(assumptions, 'dependencies')),
+      detailItem('Change control', stringField(assumptions, 'change_control')),
+    ],
+    pricing_options: stringField(options, 'options'),
+    recommended_option: stringField(options, 'recommended_option'),
+    pricing_rationale: stringField(options, 'pricing_rationale'),
+    proposal_preview_html: proposalHtml,
+    proposal_outline: stringField(draft, 'proposal_outline'),
+    review_status: {
+      verdict: stringField(review, 'review_verdict') || 'pending',
+      summary: stringField(review, 'review_summary') || '',
+      quality_score: numberField(review, 'quality_score'),
+    },
+    export_actions: [
+      { id: 'proposal_html', label: 'Download HTML', ready: isTruthyField(delivery, 'html_export_ready') || Boolean(proposalHtml) },
+      { id: 'proposal_docx', label: 'Download DOCX', ready: isTruthyField(delivery, 'docx_export_ready') || Boolean(proposalHtml) },
+    ],
+    signature_page: stringField(delivery, 'signature_acceptance_page'),
+    payment_terms: stringField(delivery, 'payment_terms'),
+    composer_placeholder: 'Add client context, pricing instructions, assumptions, or partner-review revisions...',
+  };
+}
+
+function phaseStatus(id: string, mode: string, domain: DomainReader, blocked: boolean, complete: boolean): StageStatus {
+  if (blocked && id === 'blocked') return 'blocked';
+  if (complete && id !== 'blocked') return 'complete';
+  if (id === mode) return 'current';
+  if (isTruthy(domain.get(`${id}.ready`)) || isTruthy(domain.get(`${id}.done`)) || hasStageOutput(domain, id)) return 'complete';
+  return 'pending';
+}
+
+function hasStageOutput(domain: DomainReader, stage: string): boolean {
+  return Boolean(domain.get(`${stage}.output`) || domain.get(`${stage}.result_json`));
+}
+
+function readInitialIntake(domain: DomainReader): Record<string, unknown> {
+  return parseJsonObject(domain.get('inputs.initial_frontend_intake') ?? domain.get('inputs.initial_user_text'));
+}
+
+function readStageResult(domain: DomainReader, stage: string): Record<string, unknown> {
+  const output = domain.get(`${stage}.output`);
+  if (isRecord(output)) {
+    return parseJsonObject(output.result_json);
+  }
+  return parseJsonObject(domain.get(`${stage}.result_json`));
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) return value;
+  if (typeof value !== 'string' || value.trim().length === 0) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function checkpoint(label: string, complete: boolean): Record<string, unknown> {
+  return { label, complete, status: complete ? 'complete' : 'pending' };
+}
+
+function detailItem(label: string, value: string): Record<string, unknown> {
+  return { label, value: value || 'Pending' };
+}
+
+function moneyCard(label: string, value: unknown, currency: string, detail: string): Record<string, unknown> {
+  return {
+    label,
+    value: formatMoney(numberField({ value }, 'value'), currency),
+    raw_value: numberField({ value }, 'value'),
+    detail,
+  };
+}
+
+function formatMoney(value: number, currency: string): string {
+  if (!Number.isFinite(value) || value <= 0) return 'Pending';
+  return `${currency} ${Math.round(value).toLocaleString('en-US')}`;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function numberField(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function hasNumber(record: Record<string, unknown>, key: string): boolean {
+  return numberField(record, key) > 0;
+}
+
+function isTruthyField(record: Record<string, unknown>, key: string): boolean {
+  return isTruthy(record[key]);
+}
+
+function isTruthy(value: unknown): boolean {
+  return value === true || value === 'true' || value === 1;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}

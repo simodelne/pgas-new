@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+import { {{CAMEL_NAME}}Projection } from '../programs/{{SLUG}}/projection.js';
+import { renderHtmlDocument, renderStructuredHtmlDocument } from '../programs/{{SLUG}}/export/html.js';
+import { renderDocxDocument, renderStructuredDocxDocument } from '../programs/{{SLUG}}/export/docx.js';
+
+describe('{{SLUG}} deterministic user-facing artifacts', () => {
+  it('projects fee model, review, and export readiness without provider calls', () => {
+    const domain = new Map<string, unknown>([
+      ['inputs.initial_frontend_intake', JSON.stringify({
+        client_name: 'Aster Holdings',
+        service_type: 'Regulatory advisory',
+        jurisdiction: 'US',
+        currency: 'USD',
+        fee_structure: 'fixed',
+      })],
+      ['scope_definition.output', stage({ phases: 'Discovery, analysis, final advice', deliverables: 'Advice memo and implementation call', in_scope_items: 'Regulatory review', scope_risks: 'Compressed deadline' })],
+      ['assumptions_exclusions.output', stage({ assumptions: 'Client provides complete documents.', exclusions: 'Litigation and tax advice excluded.', dependencies: 'Stakeholder interviews by Friday.', change_control: 'Material scope changes require written approval.' })],
+      ['fee_modelling.output', stage({ parameters_json: JSON.stringify({ risk_contingency_pct: 12, discount_pct: 5 }), hourly_total: 24000, fixed_quote: 25536, capped_quote: 28089.6, blended_rate: 480, retainer_quote: 7660.8, currency: 'USD' })],
+      ['option_packaging.output', stage({ options: 'Hourly, fixed, capped', recommended_option: 'Fixed quote', pricing_rationale: 'Best balance of certainty and risk.' })],
+      ['draft_assembly.output', stage({ proposal_html: '<h1>Fee Proposal</h1><p>Scope and fees.</p>', proposal_outline: 'Scope, fees, terms', ready: true })],
+      ['partner_review.output', stage({ review_verdict: 'approved', review_summary: 'Ready for client delivery.', quality_score: 96 })],
+      ['client_delivery.output', stage({ finalized: true, html_export_ready: true, docx_export_ready: true, payment_terms: '50% upfront, balance net 15.', signature_acceptance_page: 'Accepted by authorized signatory.' })],
+      ['client_delivery.finalized', true],
+    ]);
+
+    const derived = {{CAMEL_NAME}}Projection(domain as never, 'complete', {} as never) as Record<string, unknown>;
+
+    expect(derived.program_slug).toBe('{{SLUG}}');
+    expect(JSON.stringify(derived)).toContain('Fixed quote');
+    expect(JSON.stringify(derived)).toContain('Accepted by authorized signatory');
+    expect(JSON.stringify(derived)).toContain('USD 25,536');
+  });
+
+  it('renders HTML and real DOCX package bytes for download', () => {
+    const html = renderStructuredHtmlDocument({
+      title: 'Fee Proposal',
+      clientName: 'Aster Holdings',
+      serviceType: 'Regulatory advisory',
+      currency: 'USD',
+      scope: ['Discovery', 'Advice memo'],
+      pricingOptions: [{ label: 'Fixed quote', amount: 25536, detail: 'Includes risk contingency.' }],
+      assumptions: ['Client provides complete documents.'],
+      exclusions: ['Litigation excluded.'],
+      dependencies: ['Stakeholder interviews by Friday.'],
+      paymentTerms: '50% upfront, balance net 15.',
+      signaturePage: 'Accepted by authorized signatory.',
+    });
+    const wrapped = renderHtmlDocument('<h1>Fee Proposal</h1>');
+    const docx = renderStructuredDocxDocument({
+      title: 'Fee Proposal',
+      clientName: 'Aster Holdings',
+      serviceType: 'Regulatory advisory',
+      sections: [{ title: 'Fees', body: 'Fixed quote: USD 25,536' }],
+    });
+    const wrappedDocx = renderDocxDocument('Fee Proposal');
+
+    expect(html).toContain('<!doctype html>');
+    expect(html).toContain('Fee Options');
+    expect(html).toContain('Acceptance and Signature');
+    expect(wrapped).toContain('<main>');
+    expect(docx[0]).toBe(0x50);
+    expect(docx[1]).toBe(0x4b);
+    expect(wrappedDocx.length).toBeGreaterThan(1000);
+  });
+});
+
+function stage(result: Record<string, unknown>): Record<string, unknown> {
+  return {
+    result_json: JSON.stringify(result),
+    items_json: '[]',
+    digest: '',
+  };
+}

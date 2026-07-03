@@ -1,0 +1,129 @@
+program: {{SLUG}}
+
+display:
+  title: "{{NAME}}"
+  category: documents
+  shortDescription: "Prepare professional fee proposals from structured intake, fee modelling, review, and export."
+
+modes:
+  intake:
+    layout: workspace-3col
+    side: &side
+      - widget: workspace-sidebar
+        bind:
+          phaseSteps: derived.phase_steps
+          phaseTitle: literal:Proposal workflow
+          checkpoints: derived.workspace_checkpoints
+          saveArtifactOptions: derived.export_actions
+    primary: &primary
+      - widget: intake-form
+        bind:
+          title: literal:Engagement intake
+          fields:
+            - id: client_name
+              label: Client
+              type: text
+              required: true
+            - id: service_type
+              label: Matter or service type
+              type: text
+              required: true
+            - id: jurisdiction
+              label: Jurisdiction
+              type: text
+            - id: complexity_tier
+              label: Complexity
+              type: select
+              options: [simple, standard, complex]
+            - id: budget_signal
+              label: Budget signal
+              type: text
+            - id: currency
+              label: Currency
+              type: text
+            - id: fee_structure
+              label: Fee structure
+              type: select
+              options: [hourly, fixed, capped, blended]
+        actions:
+          - label: Start proposal
+            trigger: { type: channel_publish, channel: frontend_intake }
+            emit: submit
+      - widget: file-upload
+        bind:
+          prompt: literal:Optional template or precedent proposal
+          accept: literal:.doc,.docx,.pdf,.txt,.md,text/*
+          multiple: true
+        actions:
+          - label: Upload
+            trigger: { type: channel_publish, channel: frontend_intake }
+            emit: upload
+      - widget: chat-thread
+        bind:
+          messages: channels.user_messages
+          composerPlaceholder: derived.composer_placeholder
+        actions:
+          - label: Send
+            trigger: { type: channel_publish, channel: user_messages }
+            emit: send
+    secondary: &secondary
+      - widget: workspace-context
+        bind:
+          metadata: derived.workspace_metadata
+          domainContent: derived.scope_summary
+          artifactItems: derived.pricing_cards
+          statItems: derived.assumptions_summary
+
+  template_selection: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  scope_definition: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  assumptions_exclusions: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  effort_estimation: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  fee_modelling: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  option_packaging: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+
+  draft_assembly:
+    layout: workspace-3col
+    side: *side
+    primary:
+      - widget: document-editor
+        bind:
+          title: literal:Proposal draft
+          html: derived.proposal_preview_html
+          outline: derived.proposal_outline
+        actions:
+          - label: Save draft
+            trigger: { type: channel_publish, channel: user_messages }
+            emit: save
+      - widget: chat-thread
+        bind:
+          messages: channels.user_messages
+          composerPlaceholder: derived.composer_placeholder
+        actions:
+          - label: Send
+            trigger: { type: channel_publish, channel: user_messages }
+            emit: send
+    secondary: *secondary
+
+  partner_review:
+    layout: workspace-3col
+    side: *side
+    primary:
+      - widget: approval
+        bind:
+          prompt: literal:Partner review
+          items: derived.scope_summary
+          approveLabel: literal:Approve for delivery
+          rejectLabel: literal:Request revisions
+        actions:
+          - label: Approve
+            trigger: { type: action, name: approved }
+            emit: approve
+          - label: Revise
+            trigger: { type: channel_publish, channel: user_messages }
+            emit: reject
+    secondary: *secondary
+
+  revision: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  client_delivery: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  complete: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }
+  blocked: { layout: workspace-3col, side: *side, primary: *primary, secondary: *secondary }

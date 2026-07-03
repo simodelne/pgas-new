@@ -130,6 +130,100 @@ function artifactWithDomainSpecContext(): SynthesizedArtifact {
   };
 }
 
+function feeProposalArtifact(stage: 'effort_estimation' | 'fee_modelling'): SynthesizedArtifact {
+  const stages = [
+    { slug: 'intake', is_bootstrap: true },
+    {
+      slug: 'scope_definition',
+      domain_spec: {
+        reads: ['intake.output.result_json'],
+        produces: {
+          result_json: {
+            stage: 'string',
+            phases: 'string',
+            deliverables: 'string',
+            in_scope_items: 'string',
+            scope_risks: 'string',
+          },
+          items_json: ['phases:<phases>'],
+        },
+        rules: ['Define precise phases deliverables in-scope work and scope risks.'],
+        invariants: ['result_json.stage must equal scope_definition.'],
+      },
+    },
+    {
+      slug: 'effort_estimation',
+      domain_spec: {
+        reads: ['scope_definition.output.result_json', 'intake.output.result_json'],
+        produces: {
+          result_json: {
+            stage: 'string',
+            phase_hours_json: 'string',
+            role_hours_json: 'string',
+            hours_total: 'number',
+          },
+          items_json: ['hours_total:<hours_total>'],
+        },
+        rules: ['Estimate phase by role hours for partner senior_associate associate paralegal.'],
+        invariants: ['result_json.stage must equal effort_estimation.'],
+      },
+    },
+    {
+      slug: 'fee_modelling',
+      domain_spec: {
+        reads: [
+          'effort_estimation.output.result_json',
+          'inputs.initial_frontend_intake.rate_card',
+          'inputs.initial_frontend_intake.pricing_parameters',
+        ],
+        produces: {
+          result_json: {
+            stage: 'string',
+            parameters_json: 'string',
+            hourly_total: 'number',
+            fixed_quote: 'number',
+            capped_quote: 'number',
+            blended_rate: 'number',
+            retainer_quote: 'number',
+            currency: 'string',
+          },
+          items_json: ['fixed_quote:<fixed_quote>', 'capped_quote:<capped_quote>'],
+        },
+        rules: [
+          'Compute all quotes from rate_card role_hours phase_hours jurisdiction_multiplier risk_contingency_pct discount_pct cap_premium_pct retainer_pct currency.',
+        ],
+        invariants: ['result_json.stage must equal fee_modelling.'],
+      },
+    },
+    { slug: 'complete', is_terminal: true },
+  ] as Array<{ slug: string; is_bootstrap?: boolean; is_terminal?: boolean; domain_spec?: Record<string, unknown> }>;
+
+  return {
+    ...artifactWithContext(),
+    mode_names: ['intake', 'scope_definition', 'effort_estimation', 'fee_modelling', 'complete'],
+    stage_classification: [
+      { slug: 'effort_estimation', archetype: 'pure-compute', rationale: 'deterministic effort estimate' },
+      { slug: 'fee_modelling', archetype: 'pure-compute', rationale: 'deterministic fee model' },
+    ],
+    body_stage_slugs: [stage],
+    synthesis_context: {
+      program_slug: 'fee-proposal-drafter',
+      program_name: 'Fee Proposal Drafter',
+      purpose: 'Prepare professional services fee proposals with parameterized fee modelling.',
+      entry_channel: 'frontend_intake',
+      stages: stages as never,
+      transitions: [
+        { from: 'intake', to: 'scope_definition', trigger: 'started', guard_field: 'intake.ready' },
+        { from: 'scope_definition', to: 'effort_estimation', trigger: 'scoped', guard_field: 'scope_definition.ready' },
+        { from: 'effort_estimation', to: 'fee_modelling', trigger: 'estimated', guard_field: 'effort_estimation.ready' },
+        { from: 'fee_modelling', to: 'complete', trigger: 'modelled', guard_field: 'fee_modelling.ready' },
+      ],
+      delegation: { enabled: false },
+      completion: { final_stage: 'complete', guard_field: 'fee_modelling.ready' },
+    },
+  };
+}
+
 function externalArtifact(stage = 'crm_lookup'): SynthesizedArtifact {
   return {
     ...artifact(),
@@ -483,6 +577,166 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
             'inputs.initial_user_text.delivered_days_ago',
           ]),
           expected_items_templates: ['policy:<policy_code>', 'refund_cents:<refund_cents>'],
+        }),
+      }));
+    });
+  });
+
+  it('rejects fee-proposal effort bodies that collapse seeded scope into zero hours', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const zeroHoursBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const wrongPath = input.domain['scope_definition.output.result_json'];
+  const phases = typeof wrongPath === 'string' ? wrongPath.split(',') : [];
+  const roleHours = { partner: 0, senior_associate: 0, associate: 0, paralegal: 0 };
+  return {
+    result_json: JSON.stringify({ stage: input.stage, phase_hours_json: JSON.stringify(Object.fromEntries(phases.map((phase) => [phase, roleHours]))), role_hours_json: JSON.stringify(roleHours), hours_total: 0 }),
+    items_json: JSON.stringify(['hours_total:0']),
+    digest: '',
+  };
+}
+`;
+      const validEffortBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const scopeOutput = input.domain['scope_definition.output'] as Record<string, unknown>;
+  const scope = JSON.parse(String(scopeOutput.result_json)) as Record<string, unknown>;
+  const intakeOutput = input.domain['intake.output'] as Record<string, unknown> | undefined;
+  const intake = intakeOutput?.result_json ? JSON.parse(String(intakeOutput.result_json)) as Record<string, unknown> : {};
+  const multiplier = String(intake.complexity_tier ?? 'standard').toLowerCase() === 'complex' ? 1.45 : 1;
+  const phases = String(scope.phases ?? 'Discovery, Analysis, Drafting, Review').split(',').map((phase) => phase.trim()).filter(Boolean);
+  const roleHours = { partner: 0, senior_associate: 0, associate: 0, paralegal: 0 };
+  const phaseHours: Record<string, Record<string, number>> = {};
+  for (const phase of phases) {
+    const hours = { partner: Math.ceil(1 * multiplier), senior_associate: Math.ceil(3 * multiplier), associate: Math.ceil(5 * multiplier), paralegal: Math.ceil(1 * multiplier) };
+    phaseHours[phase] = hours;
+    roleHours.partner += hours.partner;
+    roleHours.senior_associate += hours.senior_associate;
+    roleHours.associate += hours.associate;
+    roleHours.paralegal += hours.paralegal;
+  }
+  const hoursTotal = Object.values(roleHours).reduce((sum, value) => sum + value, 0);
+  return {
+    result_json: JSON.stringify({ stage: input.stage, phase_hours_json: JSON.stringify(phaseHours), role_hours_json: JSON.stringify(roleHours), hours_total: hoursTotal }),
+    items_json: JSON.stringify(['hours_total:' + hoursTotal]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(feeProposalArtifact('effort_estimation'), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        maxAttempts: 2,
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? zeroHoursBody : validEffortBody;
+        },
+      });
+
+      expect(attempts[1]).toContain('expected hours_total to be a positive number');
+      expect(result.stage_sources?.effort_estimation).toBe(validEffortBody);
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'effort_estimation',
+        attempts: 2,
+        behavioral_gate: 'passed',
+        behavioral_fixture: expect.objectContaining({
+          available_domain_paths: expect.arrayContaining([
+            'intake.output',
+            'scope_definition.output',
+          ]),
+          expected_positive_fields: ['hours_total'],
+        }),
+      }));
+    });
+  });
+
+  it('rejects fee-proposal models that omit the full parameter set', async () => {
+    await withCache(async (cacheDir) => {
+      const attempts: string[] = [];
+      const incompleteParametersBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, parameters_json: JSON.stringify({ currency: 'USD' }), hourly_total: 100, fixed_quote: 110, capped_quote: 125, blended_rate: 50, retainer_quote: 25, currency: 'USD' }),
+    items_json: JSON.stringify(['fixed_quote:110', 'capped_quote:125']),
+    digest: '',
+  };
+}
+`;
+      const validFeeModelBody = `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const effortOutput = input.domain['effort_estimation.output'] as Record<string, unknown>;
+  const effort = JSON.parse(String(effortOutput.result_json)) as Record<string, unknown>;
+  const roleHours = JSON.parse(String(effort.role_hours_json)) as Record<string, number>;
+  const phaseHours = JSON.parse(String(effort.phase_hours_json)) as Record<string, Record<string, number>>;
+  const intake = JSON.parse(String(input.domain['inputs.initial_frontend_intake'])) as Record<string, unknown>;
+  const rateCard = intake.rate_card as Record<string, number>;
+  const params = intake.pricing_parameters as Record<string, number | string>;
+  const currency = String(params.currency ?? intake.currency ?? 'USD');
+  const jurisdictionMultiplier = Number(params.jurisdiction_multiplier ?? 1);
+  const riskContingencyPct = Number(params.risk_contingency_pct ?? 0);
+  const discountPct = Number(params.discount_pct ?? 0);
+  const capPremiumPct = Number(params.cap_premium_pct ?? 0);
+  const retainerPct = Number(params.retainer_pct ?? 0);
+  const hoursTotal = Number(effort.hours_total);
+  const hourlyTotal = Object.entries(roleHours).reduce((sum, [role, hours]) => sum + Number(hours) * Number(rateCard[role] ?? 0), 0) * jurisdictionMultiplier;
+  const fixedQuote = hourlyTotal * (1 + riskContingencyPct / 100) * (1 - discountPct / 100);
+  const cappedQuote = fixedQuote * (1 + capPremiumPct / 100);
+  const retainerQuote = fixedQuote * (retainerPct / 100);
+  const blendedRate = hourlyTotal / hoursTotal;
+  const parameters = { rate_card: rateCard, role_hours: roleHours, phase_hours: phaseHours, jurisdiction_multiplier: jurisdictionMultiplier, risk_contingency_pct: riskContingencyPct, discount_pct: discountPct, cap_premium_pct: capPremiumPct, retainer_pct: retainerPct, currency };
+  const result = { stage: input.stage, parameters_json: JSON.stringify(parameters), hourly_total: Math.round(hourlyTotal * 100) / 100, fixed_quote: Math.round(fixedQuote * 100) / 100, capped_quote: Math.round(cappedQuote * 100) / 100, blended_rate: Math.round(blendedRate * 100) / 100, retainer_quote: Math.round(retainerQuote * 100) / 100, currency };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify(['fixed_quote:' + result.fixed_quote, 'capped_quote:' + result.capped_quote]),
+    digest: '',
+  };
+}
+`;
+
+      const result = await synthesizeDomainLogic(feeProposalArtifact('fee_modelling'), {
+        cacheDir,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        maxAttempts: 2,
+        generator: async ({ repair }) => {
+          attempts.push(repair?.lastError ?? 'initial');
+          return attempts.length === 1 ? incompleteParametersBody : validFeeModelBody;
+        },
+      });
+
+      expect(attempts[1]).toContain('expected parameters_json to include rate_card');
+      expect(result.stage_sources?.fee_modelling).toBe(validFeeModelBody);
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'fee_modelling',
+        attempts: 2,
+        behavioral_gate: 'passed',
+        behavioral_fixture: expect.objectContaining({
+          available_domain_paths: expect.arrayContaining([
+            'effort_estimation.output',
+            'inputs.initial_frontend_intake',
+          ]),
+          expected_positive_fields: ['hourly_total', 'fixed_quote', 'capped_quote', 'blended_rate', 'retainer_quote'],
+          expected_parameter_fields: [
+            'rate_card',
+            'role_hours',
+            'phase_hours',
+            'jurisdiction_multiplier',
+            'risk_contingency_pct',
+            'discount_pct',
+            'cap_premium_pct',
+            'retainer_pct',
+            'currency',
+          ],
         }),
       }));
     });

@@ -81,17 +81,19 @@ function classifyStage(
   delegation: Record<string, unknown>,
 ): ClassifiedStage {
   const slug = stage.slug;
+  const stageDelegation = delegation[slug];
+  const explicitArchetype = explicitDelegationArchetype(stageDelegation);
   const localStageText = [
     slug,
     words(slug),
   ].join(' ').toLowerCase();
   const externalStageText = [
     localStageText,
-    JSON.stringify(delegation[slug] ?? ''),
+    JSON.stringify(stageDelegation ?? ''),
   ].join(' ').toLowerCase();
   void purpose;
 
-  if (hasAny(externalStageText, EXTERNAL_TERMS) || hasExternalDelegation(delegation[slug])) {
+  if (explicitArchetype === 'external-adapter' || (!explicitArchetype && (hasAny(externalStageText, EXTERNAL_TERMS) || hasExternalDelegation(stageDelegation)))) {
     return {
       slug,
       archetype: 'external-adapter',
@@ -100,19 +102,36 @@ function classifyStage(
     };
   }
 
-  if (hasAny(localStageText, LLM_REASONING_TERMS) && !hasAny(localStageText, COMPUTE_TERMS)) {
+  if (explicitArchetype === 'llm-reasoning' || (!explicitArchetype && hasAny(localStageText, LLM_REASONING_TERMS) && !hasAny(localStageText, COMPUTE_TERMS))) {
     return {
       slug,
       archetype: 'llm-reasoning',
-      rationale: `llm reasoning: ${slug} is framed as natural-language reasoning, classification, drafting, review, or summary work.`,
+      rationale: explicitArchetype === 'llm-reasoning'
+        ? `llm reasoning: ${slug} was explicitly marked as an LLM reasoning stage in Q5 delegation.`
+        : `llm reasoning: ${slug} is framed as natural-language reasoning, classification, drafting, review, or summary work.`,
     };
   }
 
   return {
     slug,
     archetype: 'pure-compute',
-    rationale: `pure compute: ${slug} can be implemented as deterministic local logic against the frozen stage contract.`,
+    rationale: explicitArchetype === 'pure-compute'
+      ? `pure compute: ${slug} was explicitly marked as a deterministic stage in Q5 delegation.`
+      : `pure compute: ${slug} can be implemented as deterministic local logic against the frozen stage contract.`,
   };
+}
+
+function explicitDelegationArchetype(value: unknown): StageArchetype | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const explicit = [record.kind, record.archetype, record.type]
+    .find((candidate): candidate is string => typeof candidate === 'string')
+    ?.toLowerCase();
+  if (!explicit) return undefined;
+  if (['llm-reasoning', 'llm_reasoning', 'reasoning'].includes(explicit)) return 'llm-reasoning';
+  if (['pure-compute', 'pure_compute', 'compute', 'deterministic'].includes(explicit)) return 'pure-compute';
+  if (['external-adapter', 'external_adapter', 'adapter', 'integration'].includes(explicit)) return 'external-adapter';
+  return undefined;
 }
 
 function parseStages(domain: Record<string, unknown>): StageInput[] {

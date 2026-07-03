@@ -530,8 +530,14 @@ action_map:
         Provide a JSON-encoded value. The strict format is required for
         downstream synthesis.
 
-        Valid example:
+        Valid examples:
         - Array (Q3 stages_json): "[\"intake\", \"analysis\", \"complete\"]"
+        - Rich array with per-stage domain specs:
+          "[{\"slug\":\"intake\",\"is_bootstrap\":true},{\"slug\":\"analysis\",\"domain_spec\":{\"reads\":[\"inputs.initial_user_text\"],\"produces\":{\"result_json\":{\"stage\":\"string\",\"decision\":\"string\"},\"items_json\":[\"decision:<decision>\"]},\"rules\":[\"Use only recorded input facts.\"],\"invariants\":[\"result_json.stage must equal analysis.\"]}},{\"slug\":\"complete\",\"is_terminal\":true}]"
+
+        If the user's Q3 answer contains objects, domain_spec, rules,
+        invariants, or produces schemas, preserve those objects exactly. Do
+        not compress rich stage objects into a bare array of names.
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 
@@ -568,6 +574,12 @@ action_map:
 
         Valid example:
         - Object (Q5 delegation_json): "{\"enabled\": false, \"target\": \"team-X\"}"
+        - Per-stage kind control:
+          "{\"scope_definition\":{\"kind\":\"llm-reasoning\",\"target\":\"define_scope\"},\"fee_modelling\":{\"kind\":\"pure-compute\",\"target\":\"compute_fee_model\"}}"
+
+        Use kind when the user explicitly says a stage is deterministic,
+        LLM reasoning, or an external adapter. Valid kind values include
+        llm-reasoning, pure-compute, and external-adapter.
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 
@@ -583,9 +595,13 @@ action_map:
       completion_json: |
         Provide a JSON-encoded value. The strict format is required for
         downstream synthesis.
+        Preserve every user-provided top-level key exactly, including
+        blocked_stage, blocked_guard_field, and outputs. Do not shorten or
+        summarize a richer completion object to only final_stage/guard_field.
 
         Valid example:
         - Object (Q6 completion_json): "{\"final_stage\": \"complete\", \"guard_field\": \"work.done\"}"
+        - Rich object (Q6 completion_json): "{\"final_stage\":\"complete\",\"guard_field\":\"delivery.finalized\",\"blocked_stage\":\"blocked\",\"outputs\":{\"proposal_html\":\"string\",\"docx_export_ready\":\"boolean\"}}"
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 
@@ -1019,7 +1035,7 @@ guidance:
     - "If program.design_path == 'design' and intake.program_intake_finalized is not true: ask the 6 design questions IN ORDER, one question per round, with brief context for each. Call ask_design_question for the question round; wait for the user's answer in inputs.user_text before recording exactly that answer via the next record_qN_<topic> action. Order matters."
     - "Q1 Purpose — one sentence on what the program does. Default if skipped: '<program-name>-driven workflow agent'."
     - "Q2 Entry channel — how does work arrive? (user_text, webhook, scheduled tick, another program delegating). Default if skipped: 'user_text'."
-    - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']."
+    - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']. If the user's answer contains rich stage objects with domain_spec, rules, invariants, or produces schemas, pass that exact rich object array as stages_json; do not simplify it to a string array."
     - "Q4 Decision points — branches, loops, bail-outs; these become extra transitions, optionally with guards. Default if skipped: no extra transitions."
     - "Q5 Delegation — does any stage delegate to a child session / another program? Default if skipped: 'none'."
     - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."

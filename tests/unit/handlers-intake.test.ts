@@ -14,6 +14,56 @@ describe('intake Q-action handlers', () => {
     });
   });
 
+  it('record_q3_stages preserves rich stage objects with domain specs', async () => {
+    const stages = [
+      { slug: 'intake', is_bootstrap: true },
+      {
+        slug: 'fee_modelling',
+        domain_spec: {
+          reads: ['inputs.initial_user_text.rate_card'],
+          produces: {
+            result_json: {
+              stage: 'string',
+              hourly_total: 'number',
+              fixed_quote: 'number',
+            },
+            items_json: ['hourly_total:<hourly_total>', 'fixed_quote:<fixed_quote>'],
+          },
+          rules: ['Compute quotes from the recorded rate card.'],
+          invariants: ['result_json.stage must equal fee_modelling.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ];
+
+    await expect(
+      handlers.record_q3_stages({ stages_json: JSON.stringify(stages) }),
+    ).resolves.toEqual({
+      kind: 'pgas_new_q3_stages_recorded',
+      stages,
+      stages_json: JSON.stringify(stages),
+    });
+  });
+
+  it('record_q3_stages repairs dropped rich-stage boundary braces from tool calls', async () => {
+    const malformed = [
+      '{"slug":"intake","is_bootstrap":true,"domain_spec":{"reads":["inputs.initial_frontend_intake"],"produces":{"result_json":{"stage":"string","client_name":"string"},"items_json":["client:<client_name>"]},"rules":["Parse intake."],"invariants":["stage equals intake."]}',
+      '{"slug":"fee_modelling","domain_spec":{"reads":["intake.output.result_json"],"produces":{"result_json":{"stage":"string","fixed_quote":"number"},"items_json":["fixed_quote:<fixed_quote>"]},"rules":["Compute quote."],"invariants":["stage equals fee_modelling."]}',
+      '{"slug":"complete","is_terminal":true}',
+    ].join(',');
+
+    await expect(
+      handlers.record_q3_stages({ stages_json: `[${malformed}]` }),
+    ).resolves.toMatchObject({
+      kind: 'pgas_new_q3_stages_recorded',
+      stages: [
+        expect.objectContaining({ slug: 'intake', domain_spec: expect.any(Object) }),
+        expect.objectContaining({ slug: 'fee_modelling', domain_spec: expect.any(Object) }),
+        expect.objectContaining({ slug: 'complete', is_terminal: true }),
+      ],
+    });
+  });
+
   it('record_q3_stages accepts bracketed comma-lists via tolerant fallback', async () => {
     await expect(
       handlers.record_q3_stages({

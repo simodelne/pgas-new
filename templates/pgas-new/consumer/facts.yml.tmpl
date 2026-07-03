@@ -1,0 +1,23 @@
+program: {{SLUG}}
+facts:
+  deterministic: true
+  user_facing: true
+  entry_channel: frontend_intake
+  exports:
+    html: programs/{{SLUG}}/export/html.ts
+    docx: programs/{{SLUG}}/export/docx.ts
+  required_derived_keys:
+    - phase_steps
+    - workspace_checkpoints
+    - pricing_cards
+    - fee_model
+    - proposal_preview_html
+    - export_actions
+    - signature_page
+fixtures:
+  client_name: Aster Holdings
+  service_type: Regulatory advisory
+  jurisdiction: US
+  complexity_tier: standard
+  currency: USD
+  fee_structure: fixed

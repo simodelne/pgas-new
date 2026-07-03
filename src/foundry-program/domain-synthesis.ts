@@ -81,6 +81,8 @@ interface StageBehaviorFixture {
   available_domain_paths?: string[];
   domain_spec_reads?: string[];
   expected_items_templates?: string[];
+  expected_positive_fields?: string[];
+  expected_parameter_fields?: string[];
 }
 
 export async function synthesizeDomainLogic(
@@ -1038,9 +1040,11 @@ function behaviorFixtureFor(
 } {
   const expectedAdapterKind = archetype === 'external-adapter' ? { expected_adapter_kind: 'in_memory_mock' as const } : {};
   const requestFacts = seedInitialRequestFacts(domainSpec);
+  const stableInputPaths = stableInitialInputPaths(domainSpec);
   const domain = {
-    'inputs.initial_user_text': JSON.stringify(requestFacts),
+    ...Object.fromEntries(stableInputPaths.map((path) => [path, JSON.stringify(requestFacts)])),
     'inputs.user_text': 'continue',
+    'inputs.frontend_intake': 'continue',
     'account.id': 'acct-behavior-001',
     'record.id': 'record-behavior-001',
     'owner.queue': 'operations',
@@ -1075,12 +1079,34 @@ function behaviorFixtureFor(
       ...(Array.isArray(itemTemplates) && itemTemplates.every((item) => typeof item === 'string')
         ? { expected_items_templates: [...itemTemplates] }
         : {}),
+      ...expectedFeeProposalAuditFields(domainSpec),
     },
   };
 }
 
 function seedInitialRequestFacts(domainSpec?: StageDomainSpec): Record<string, unknown> {
   const facts: Record<string, unknown> = {
+    client_name: 'Aster Holdings',
+    service_type: 'Regulatory advisory',
+    jurisdiction: 'US',
+    complexity_tier: 'standard',
+    budget_signal: 'predictable fixed fee preferred',
+    currency: 'USD',
+    fee_structure: 'fixed',
+    rate_card: {
+      partner: 850,
+      senior_associate: 620,
+      associate: 420,
+      paralegal: 180,
+    },
+    pricing_parameters: {
+      jurisdiction_multiplier: 1.15,
+      risk_contingency_pct: 12,
+      discount_pct: 5,
+      cap_premium_pct: 10,
+      retainer_pct: 30,
+      currency: 'USD',
+    },
     plan: 'pro',
     seats: 2,
     region: 'us',
@@ -1167,13 +1193,20 @@ function seedPriorStageOutputs(
     }
 
     const deterministic = read.match(/^([a-zA-Z0-9_]+)\.output\.result_json(?:\.(.+))?$/u);
-    if (deterministic?.[1] && deterministic[2]) {
+    if (deterministic?.[1]) {
       const outputPath = `${deterministic[1]}.output`;
+      const priorStage = deterministic[1];
       const output = isRecord(seeded[outputPath])
         ? { ...(seeded[outputPath] as Record<string, unknown>) }
-        : stageOutputFixture(deterministic[1], { stage: deterministic[1] }, [`stage:${deterministic[1]}`]);
+        : stageOutputFixture(
+          priorStage,
+          priorStageResultFixture(priorStage, reasoningContracts?.[priorStage]),
+          itemsForResult(priorStageResultFixture(priorStage, reasoningContracts?.[priorStage])),
+        );
       const result = parseRecordJson(output.result_json);
-      setNestedRecord(result, deterministic[2], sampleBehaviorValue(deterministic[2]));
+      if (deterministic[2]) {
+        setNestedRecord(result, deterministic[2], sampleBehaviorValue(deterministic[2]));
+      }
       output.result_json = JSON.stringify(result);
       output.items_json = JSON.stringify(itemsForResult(result));
       seeded[outputPath] = output;
@@ -1196,6 +1229,17 @@ function seedPriorStageOutputs(
   return seeded;
 }
 
+function stableInitialInputPaths(domainSpec?: StageDomainSpec): string[] {
+  const paths = new Set<string>(['inputs.initial_user_text']);
+  for (const read of domainSpec?.reads ?? []) {
+    const match = read.match(/^(inputs\.initial_[a-zA-Z0-9_]+)(?:\.|$)/u);
+    if (match?.[1]) {
+      paths.add(match[1]);
+    }
+  }
+  return [...paths].sort();
+}
+
 function initialInputReadFieldPath(read: string): string | undefined {
   const match = read.match(/^inputs\.initial_[a-zA-Z0-9_]+(?:\.(.+))?$/u);
   return match?.[1];
@@ -1215,8 +1259,104 @@ function stageOutputFixture(
   };
 }
 
+function priorStageResultFixture(stage: string, contract?: ReasoningStageContract): Record<string, unknown> {
+  if (contract) {
+    return contract.canned_example.result;
+  }
+  if (stage === 'intake') {
+    return {
+      stage,
+      client_name: 'Aster Holdings',
+      service_type: 'Regulatory advisory',
+      jurisdiction: 'US',
+      complexity_tier: 'standard',
+      budget_signal: 'predictable fixed fee preferred',
+      currency: 'USD',
+      fee_structure: 'fixed',
+    };
+  }
+  if (stage === 'scope_definition') {
+    return {
+      stage,
+      phases: 'Discovery, Legal analysis, Draft proposal, Partner review',
+      deliverables: 'Fee proposal, assumptions schedule, acceptance page',
+      in_scope_items: 'Regulatory advisory scope definition and proposal drafting',
+      scope_risks: 'Compressed deadline and uncertain client document quality',
+    };
+  }
+  if (stage === 'assumptions_exclusions') {
+    return {
+      stage,
+      assumptions: 'Client provides complete materials and one consolidated comment round.',
+      exclusions: 'Litigation, tax advice, and third-party vendor costs are excluded.',
+      dependencies: 'Client documents by Friday and stakeholder availability next week.',
+      change_control: 'Out-of-scope work requires written approval before commencement.',
+    };
+  }
+  if (stage === 'effort_estimation') {
+    const roleHours = { partner: 8, senior_associate: 18, associate: 26, paralegal: 6 };
+    return {
+      stage,
+      phase_hours_json: JSON.stringify({
+        Discovery: { partner: 2, senior_associate: 4, associate: 6, paralegal: 2 },
+        'Legal analysis': { partner: 4, senior_associate: 10, associate: 14, paralegal: 1 },
+        'Draft proposal': { partner: 1, senior_associate: 3, associate: 5, paralegal: 2 },
+        'Partner review': { partner: 1, senior_associate: 1, associate: 1, paralegal: 1 },
+      }),
+      role_hours_json: JSON.stringify(roleHours),
+      hours_total: Object.values(roleHours).reduce((sum, value) => sum + value, 0),
+    };
+  }
+  if (stage === 'fee_modelling') {
+    return {
+      stage,
+      parameters_json: JSON.stringify({
+        rate_card: { partner: 850, senior_associate: 620, associate: 420, paralegal: 180 },
+        role_hours: { partner: 8, senior_associate: 18, associate: 26, paralegal: 6 },
+        phase_hours: {},
+        jurisdiction_multiplier: 1.15,
+        risk_contingency_pct: 12,
+        discount_pct: 5,
+        cap_premium_pct: 10,
+        retainer_pct: 30,
+        currency: 'USD',
+      }),
+      hourly_total: 34385,
+      fixed_quote: 36591.64,
+      capped_quote: 40250.8,
+      blended_rate: 592.84,
+      retainer_quote: 10977.49,
+      currency: 'USD',
+    };
+  }
+  return { stage, summary: `${stage} behavior fixture`, ready: true };
+}
+
 function sampleBehaviorValue(fieldPath: string): unknown {
   const field = fieldPath.split('.').at(-1)?.toLowerCase() ?? fieldPath.toLowerCase();
+  if (field === 'rate_card') {
+    return { partner: 850, senior_associate: 620, associate: 420, paralegal: 180 };
+  }
+  if (field === 'pricing_parameters') {
+    return {
+      jurisdiction_multiplier: 1.15,
+      risk_contingency_pct: 12,
+      discount_pct: 5,
+      cap_premium_pct: 10,
+      retainer_pct: 30,
+      currency: 'USD',
+    };
+  }
+  if (field === 'client_name') return 'Aster Holdings';
+  if (field === 'service_type') return 'Regulatory advisory';
+  if (field === 'jurisdiction') return 'US';
+  if (field === 'complexity_tier') return 'standard';
+  if (field === 'budget_signal') return 'predictable fixed fee preferred';
+  if (field === 'fee_structure') return 'fixed';
+  if (field === 'phases') return 'Discovery, Legal analysis, Draft proposal, Partner review';
+  if (field === 'deliverables') return 'Fee proposal, assumptions schedule, acceptance page';
+  if (field === 'in_scope_items') return 'Regulatory advisory proposal drafting';
+  if (field === 'scope_risks') return 'Compressed deadline and uncertain client document quality';
   if (field === 'order_id') return 'ORD-BEHAVIOR-001';
   if (field === 'account_id') return 'acct-behavior-001';
   if (field === 'sku') return 'sku-behavior-001';
@@ -1370,6 +1510,10 @@ function assertBehavioralOutput(
   if (schemaError) {
     return schemaError;
   }
+  const feeProposalError = assertFeeProposalComputation(result as Record<string, unknown>, domainSpec);
+  if (feeProposalError) {
+    return feeProposalError;
+  }
   if (!Array.isArray(items) || items.length === 0) {
     return 'expected items_json to encode a non-empty array';
   }
@@ -1385,6 +1529,91 @@ function assertBehavioralOutput(
     }
   }
   return undefined;
+}
+
+function assertFeeProposalComputation(result: Record<string, unknown>, domainSpec?: StageDomainSpec): string | undefined {
+  if (!isFeeProposalDomainSpec(domainSpec)) {
+    return undefined;
+  }
+  for (const field of expectedPositiveFeeFields(domainSpec)) {
+    const value = result[field];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+      return `expected ${field} to be a positive number for the seeded fee-proposal fixture; got ${String(value)}`;
+    }
+  }
+  const parameterFields = expectedFeeParameterFields(domainSpec);
+  if (parameterFields.length > 0) {
+    const rawParameters = result.parameters_json;
+    if (typeof rawParameters !== 'string') {
+      return 'expected parameters_json to be a JSON string containing the full fee model parameter set';
+    }
+    const parameters = parseRecordJson(rawParameters);
+    for (const field of parameterFields) {
+      if (!Object.hasOwn(parameters, field)) {
+        return `expected parameters_json to include ${field} for the full fee model parameter set`;
+      }
+    }
+  }
+  return undefined;
+}
+
+function isFeeProposalDomainSpec(domainSpec?: StageDomainSpec): boolean {
+  if (!domainSpec) {
+    return false;
+  }
+  const haystack = JSON.stringify({
+    reads: domainSpec.reads,
+    rules: domainSpec.rules,
+    produces: domainSpec.produces,
+  }).toLowerCase();
+  return /fee|quote|rate_card|role_hours|phase_hours|proposal|retainer|cap_premium/u.test(haystack);
+}
+
+function expectedPositiveFeeFields(domainSpec?: StageDomainSpec): string[] {
+  const schema = domainSpec?.produces.result_json;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return [];
+  }
+  return [
+    'hours_total',
+    'hourly_total',
+    'fixed_quote',
+    'capped_quote',
+    'blended_rate',
+    'retainer_quote',
+  ].filter((field) => Object.hasOwn(schema, field));
+}
+
+function expectedFeeParameterFields(domainSpec?: StageDomainSpec): string[] {
+  const schema = domainSpec?.produces.result_json;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema) || !Object.hasOwn(schema, 'parameters_json')) {
+    return [];
+  }
+  const haystack = JSON.stringify({
+    reads: domainSpec.reads,
+    rules: domainSpec.rules,
+  }).toLowerCase();
+  const parameterMatchers: Array<[string, RegExp]> = [
+    ['rate_card', /rate_card/u],
+    ['role_hours', /role_hours|role mix|role_mix/u],
+    ['phase_hours', /phase_hours|phase by role|phase x role/u],
+    ['jurisdiction_multiplier', /jurisdiction_multiplier/u],
+    ['risk_contingency_pct', /risk_contingency_pct|risk contingency/u],
+    ['discount_pct', /discount_pct|discount/u],
+    ['cap_premium_pct', /cap_premium_pct|cap premium/u],
+    ['retainer_pct', /retainer_pct|retainer/u],
+    ['currency', /currency/u],
+  ];
+  return parameterMatchers.flatMap(([field, pattern]) => pattern.test(haystack) ? [field] : []);
+}
+
+function expectedFeeProposalAuditFields(domainSpec?: StageDomainSpec): Partial<StageBehaviorFixture> {
+  const positiveFields = expectedPositiveFeeFields(domainSpec);
+  const parameterFields = expectedFeeParameterFields(domainSpec);
+  return {
+    ...(positiveFields.length > 0 ? { expected_positive_fields: positiveFields } : {}),
+    ...(parameterFields.length > 0 ? { expected_parameter_fields: parameterFields } : {}),
+  };
 }
 
 function parseOutputResult(output: unknown): Record<string, unknown> {

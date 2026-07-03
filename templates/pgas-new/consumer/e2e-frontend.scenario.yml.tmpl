@@ -1,0 +1,28 @@
+program: {{SLUG}}
+scenario: attached_fee_proposal_frontend
+deterministic: true
+channels:
+  - frontend_intake
+  - user_messages
+steps:
+  - id: open
+    expect:
+      derived:
+        - phase_steps
+        - workspace_checkpoints
+        - workspace_metadata
+  - id: submit_intake
+    channel: frontend_intake
+    payload:
+      client_name: Aster Holdings
+      service_type: Regulatory advisory
+      jurisdiction: US
+      complexity_tier: standard
+      currency: USD
+      fee_structure: fixed
+  - id: verify_exports
+    expect:
+      derived:
+        - proposal_preview_html
+        - export_actions
+        - signature_page

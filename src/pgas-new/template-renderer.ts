@@ -272,7 +272,7 @@ function templateForFoundryArtifact(artifact: PlannedArtifact, slug: string): Te
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/specs.yml'];
   }
   if (artifact.kind === 'registration') {
-    return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
+    return spec('consumer/registration-attached.ts.tmpl', ['CAMEL_NAME', 'PASCAL_NAME', 'SLUG']);
   }
   if (artifact.kind === 'handler') {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/handlers.ts'];
@@ -310,71 +310,25 @@ function templateForExistingStageArtifact(artifact: PlannedArtifact, slug: strin
 function templateForExistingUserFacingArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
   const path = artifact.path;
   if (path.endsWith(`/${slug}/projection.ts`)) {
-    return inlineTemplate([
-      `export const ${toPascalCase(slug)}Projection = {`,
-      `  program: '${slug}',`,
-      `  version: 1,`,
-      `} as const;`,
-      '',
-    ].join('\n'));
+    return spec('consumer/projection.ts.tmpl', ['CAMEL_NAME', 'PASCAL_NAME', 'SLUG']);
   }
   if (path.endsWith(`/${slug}/frontend.spec.yml`)) {
-    return inlineTemplate([
-      `program: ${slug}`,
-      'surface: attached_program',
-      'projection: projection.ts',
-      'states:',
-      '  - idle',
-      '  - running',
-      '  - complete',
-      '',
-    ].join('\n'));
+    return spec('consumer/frontend.spec.yml.tmpl', ['NAME', 'SLUG']);
   }
   if (path.endsWith(`/${slug}/export/html.ts`)) {
-    return inlineTemplate([
-      'export function renderHtmlDocument(body: string): string {',
-      '  return `<!doctype html><html><body>${body}</body></html>`;',
-      '}',
-      '',
-    ].join('\n'));
+    return spec('consumer/export-html.ts.tmpl', ['NAME']);
   }
   if (path.endsWith(`/${slug}/export/docx.ts`)) {
-    return inlineTemplate([
-      'export function renderDocxDocument(body: string): Uint8Array {',
-      '  return new TextEncoder().encode(body);',
-      '}',
-      '',
-    ].join('\n'));
+    return spec('consumer/export-docx.ts.tmpl', ['NAME']);
   }
   if (path === `tests/${slug}-deterministic.test.ts`) {
-    return inlineTemplate([
-      "import { describe, expect, it } from 'vitest';",
-      '',
-      `describe('${slug} deterministic workflow', () => {`,
-      "  it('keeps generated artifacts testable without live provider calls', () => {",
-      "    expect('deterministic').toBe('deterministic');",
-      '  });',
-      '});',
-      '',
-    ].join('\n'));
+    return spec('consumer/deterministic.test.ts.tmpl', ['CAMEL_NAME', 'SLUG']);
   }
   if (path === `qc/e2e-frontend/${slug}.scenario.yml`) {
-    return inlineTemplate([
-      `program: ${slug}`,
-      'scenario: attached_frontend_smoke',
-      'steps:',
-      '  - open',
-      '  - assert_projection',
-      '',
-    ].join('\n'));
+    return spec('consumer/e2e-frontend.scenario.yml.tmpl', ['SLUG']);
   }
   if (path === `qc/facts/${slug}.facts.yml`) {
-    return inlineTemplate([
-      `program: ${slug}`,
-      'facts:',
-      '  deterministic: true',
-      '',
-    ].join('\n'));
+    return spec('consumer/facts.yml.tmpl', ['SLUG']);
   }
   if (path === 'qc/e2e-coverage.yml') {
     return inlineTemplate(defaultE2eCoverageYaml(slug));
@@ -685,6 +639,9 @@ function templateForSynthesizedArtifact(
     return inlineTemplate(synthesizedSources.specYaml);
   }
   if (artifact.path.endsWith(`/${slug}/registration.ts`)) {
+    if (artifact.path !== `src/programs/${slug}/registration.ts`) {
+      return spec('consumer/registration-attached.ts.tmpl', ['CAMEL_NAME', 'PASCAL_NAME', 'SLUG']);
+    }
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
   if (artifact.path.endsWith(`/${slug}/contracts.ts`) && synthesizedSources.contractsTs) {
@@ -780,6 +737,7 @@ function tokensFor(options: ProgramIdentity & { githubOwner?: string; githubRepo
     GITHUB_REPO: options.githubRepo ?? options.slug,
     MANDATE: options.mandate ?? defaultMandate(options.name),
     NAME: options.name,
+    CAMEL_NAME: toCamelCase(options.slug),
     PASCAL_NAME: toPascalCase(options.slug),
     PGAS_SERVER_VERSION,
     SLUG: options.slug,
@@ -797,4 +755,9 @@ function toPascalCase(value: string): string {
     .filter(Boolean)
     .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
     .join('');
+}
+
+function toCamelCase(value: string): string {
+  const pascal = toPascalCase(value);
+  return `${pascal[0]?.toLowerCase() ?? ''}${pascal.slice(1)}`;
 }
