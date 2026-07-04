@@ -16,7 +16,7 @@ const E2E_ADMIN_EMAIL = 'e2e-admin@example.test';
 const E2E_ADMIN_PASSWORD_FILE = join(UAT, 'e2e-admin-password-current');
 const E2E_JWT_SECRET = randomBytes(32).toString('hex');
 const E2E_ADMIN_PASSWORD = randomBytes(18).toString('base64url');
-const BASE_URL = 'http://100.100.74.6:8000/v1';
+const BASE_URL = 'http://127.0.0.1:8000/v1';
 const MODEL = 'qwen36-27b';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
