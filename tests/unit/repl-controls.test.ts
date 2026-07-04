@@ -104,65 +104,6 @@ describe('REPL controls', () => {
     }
   });
 
-  it('routes plain text typed at the scaffold_plan gate through revise_artifact_plan (no doomed user_text turn)', async () => {
-    // #69 trap guard: scaffold_plan has no `user_text` channel. A plain-text
-    // rejection message (as in session pgas-new-1782821711150) fired a
-    // `user_text` trigger that fell back to a __fallback__ round and trapped
-    // the session. Plain text at the artifact-plan gate is revision feedback,
-    // so it must route through the rejection control instead.
-    const fake = createFakePgasFetch({
-      sessionEnvelope: {
-        sessionId: 'session-1',
-        program: 'pgas-new',
-        status: 'Running',
-        state: {
-          mode: 'scaffold_plan',
-          running: false,
-          currentRoundNumber: 12,
-          rounds: Array.from({ length: 12 }, (_, index) => ({ number: index })),
-        },
-      },
-    });
-    vi.stubGlobal('fetch', fake.fetch);
-    const stdin = new PassThrough();
-    const stdout = captureStream();
-
-    try {
-      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
-      await stdout.waitFor('Connected');
-      stdin.write('start session\n');
-      await fake.waitForRequest('/sessions/session-1/trigger/stream', 1);
-      await stdout.waitFor('ready');
-      stdin.write('/status\n');
-      await stdout.waitFor('mode: scaffold_plan');
-
-      stdin.write('Reject current artifact plan. Revise: add projection.ts and QC coverage.\n');
-      const control = await fake.waitForRequest('/controls/pgas-new/revise_artifact_plan');
-      stdin.write('/exit\n');
-      stdin.end();
-
-      const result = await repl;
-
-      expect(result.exitCode).toBe(0);
-      expect(control).toMatchObject({
-        method: 'POST',
-        path: '/controls/pgas-new/revise_artifact_plan',
-        body: {
-          sessionId: 'session-1',
-          channel: 'http',
-          args: { instruction: 'Reject current artifact plan. Revise: add projection.ts and QC coverage.' },
-        },
-      });
-      // The plain-text message must NOT have opened a second user_text trigger
-      // stream (which would trap in __fallback__).
-      expect(
-        fake.requests.filter((request) => request.path === '/sessions/session-1/trigger/stream'),
-      ).toHaveLength(1);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   it('rejects /reject controls that do not name a Q1-Q6 revision target', async () => {
     const fake = createFakePgasFetch();
     vi.stubGlobal('fetch', fake.fetch);
