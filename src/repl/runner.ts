@@ -379,23 +379,6 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       });
       state.sessionId = created.sessionId;
     }
-
-    // #69 trap guard: scaffold_plan has no `user_text` channel — it only
-    // accepts a user_confirmation (approve/reject). Firing a doomed user_text
-    // trigger there produces a __fallback__ round with no mutation and can
-    // leave the session stuck at a draft artifact plan. Any plain text the user
-    // types at the artifact-plan gate is rejection/revision feedback, so route
-    // it through the rejection control (equivalent to `/reject <text>`) rather
-    // than a doomed user_text turn. `/approve` and `/reject` remain the
-    // explicit paths.
-    if (isArtifactPlanGateMode(state.mode)) {
-      renderer.renderInfo(
-        'At the artifact-plan gate: treating your message as revision feedback (/reject). Type /approve to accept the plan.',
-      );
-      await handleUserConfirmation({ decision: 'reject', instruction: userText });
-      return;
-    }
-
     await runTrigger(state.sessionId, 'user_text', userText);
   }
 
@@ -643,17 +626,6 @@ function buildUserConfirmationPayload(
   instruction: string | undefined,
 ): UserConfirmationPayload {
   return instruction === undefined ? { decision } : { decision, instruction };
-}
-
-/**
- * #69: modes whose only user-driven trigger is a `user_confirmation`
- * (approve/reject) and which do NOT declare a `user_text` channel. Firing a
- * plain `user_text` trigger in one of these traps the session in a
- * `__fallback__` round. `scaffold_plan` gates on approve/reject of the drafted
- * artifact plan.
- */
-export function isArtifactPlanGateMode(mode: string | null): boolean {
-  return mode === 'scaffold_plan';
 }
 
 function parseRejectQuestionNumber(instruction: string | undefined): number | null {
