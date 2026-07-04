@@ -1137,7 +1137,10 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
     expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
     expect(parsed.schema['program.domain_synthesis_complete']).toBe('boolean');
-    expect(parsed.schema['domain_synthesis.audit']).toBe('object');
+    // domain_synthesis.audit was removed from session-state schema together
+    // with synthesize_domain_logic's result_path: the audit is durable in the
+    // synthesizer transit store and surfaced in the widget payload instead.
+    expect(parsed.schema['domain_synthesis.audit']).toBeUndefined();
     expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
     expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
     expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');

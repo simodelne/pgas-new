@@ -70,22 +70,18 @@ describe('foundry artifact-plan approval flow', () => {
       expect(terminalActionNames(planned.rounds)).not.toContain('write_scaffold_artifacts');
 
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
-      const domainReady = await waitForSnapshot(
-        harness,
-        (snapshot) =>
-          snapshot.mode === 'branch_write' &&
-          snapshot.domain['program.domain_synthesis_complete'] === true,
-        'artifact plan approval to domain synthesis completion',
-      );
-      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic']));
-      expect(domainReady.domain['artifacts.written']).not.toBe(true);
-
-      await harness.trigger({ channel: 'system_mode_entry', payload: {} });
+      // After /approve the chain is fully bus-driven: approve_artifact_plan ->
+      // (auto_continuation) synthesize_domain_logic -> (auto_continuation)
+      // write_scaffold_artifacts. NO manual system_mode_entry trigger here —
+      // this is the regression surface of the 2026-07-03 live-UAT stall, where
+      // synthesize_domain_logic emitted on a non-widget channel and the
+      // domain_synthesis -> branch_write continuation never fired.
       const approved = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.domain['artifacts.written'] === true,
-        'artifact plan approval to scaffold write',
+        'artifact plan approval to auto-continued scaffold write',
       );
+      expect(approved.domain['program.domain_synthesis_complete']).toBe(true);
       const terminals = terminalActionNames(approved.rounds);
 
       expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic', 'write_scaffold_artifacts']));
@@ -116,21 +112,13 @@ describe('foundry artifact-plan approval flow', () => {
       await driveToDraftArtifactPlan(harness);
 
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
-      const domainReady = await waitForSnapshot(
-        harness,
-        (snapshot) =>
-          snapshot.mode === 'branch_write' &&
-          snapshot.domain['program.domain_synthesis_complete'] === true,
-        'repair from repeated plan_artifacts to domain synthesis completion',
-      );
-      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic']));
-
-      await harness.trigger({ channel: 'system_mode_entry', payload: {} });
+      // Fully bus-driven after the repair as well — no manual system_mode_entry.
       const approved = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.domain['artifacts.written'] === true,
-        'repair from repeated plan_artifacts to approval write',
+        'repair from repeated plan_artifacts to auto-continued approval write',
       );
+      expect(approved.domain['program.domain_synthesis_complete']).toBe(true);
       const terminals = terminalActionNames(approved.rounds);
 
       expect(terminals).toEqual(expect.arrayContaining(['approve_artifact_plan', 'synthesize_domain_logic', 'write_scaffold_artifacts']));

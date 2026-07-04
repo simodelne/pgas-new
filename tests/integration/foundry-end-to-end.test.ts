@@ -146,16 +146,9 @@ describe('foundry end-to-end acceptance gate', () => {
         'draft artifact plan before approval',
       );
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
-      const domainReady = await waitForSnapshot(
-        harness,
-        (snapshot) =>
-          snapshot.mode === 'branch_write' &&
-          snapshot.domain['program.domain_synthesis_complete'] === true,
-        'domain synthesis completion before composite static checks',
-      );
-      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['synthesize_domain_logic']));
-
-      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
+      // After /approve the chain is fully bus-driven through
+      // synthesize_domain_logic and write_scaffold_artifacts (no manual
+      // system_mode_entry needed — see foundry-approve-flow.test.ts).
       // The opt-in packed action fires in static_verify on the auto-continue
       // chain after write_scaffold_artifacts and writes its combined envelope to
       // the world. It does not force-continue the ladder (single-call
