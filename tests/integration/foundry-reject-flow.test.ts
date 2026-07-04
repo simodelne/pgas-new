@@ -83,13 +83,16 @@ describe('#69 foundry artifact-plan rejection flow', () => {
       expect(terminals).not.toContain('__fallback__');
       expect(rejected.domain['artifacts.written']).not.toBe(true);
 
-      // The re-drafted plan is still approvable — approving now advances.
+      // The re-drafted plan is still approvable — approving now advances. The
+      // chain is fully bus-driven after /approve (approve_artifact_plan ->
+      // synthesize_domain_logic -> write_scaffold_artifacts via
+      // auto_continuation), racing through the transient branch_write mode too
+      // fast to catch. Gate on the durable program.domain_synthesis_complete
+      // fact and confirm the intermediate actions fired via terminalActionNames.
       await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve' } });
       const domainReady = await waitForSnapshot(
         harness,
-        (snapshot) =>
-          snapshot.mode === 'branch_write' &&
-          snapshot.domain['program.domain_synthesis_complete'] === true,
+        (snapshot) => snapshot.domain['program.domain_synthesis_complete'] === true,
         're-approval after rejection to domain synthesis completion',
       );
       expect(terminalActionNames(domainReady.rounds)).toEqual(
@@ -156,12 +159,14 @@ function effect(name: string, payload: Record<string, unknown> = {}): TestHarnes
       {
         kind: 'EffectAction',
         name,
+        // synthesize_domain_logic emits on widget_output (NOT the retired
+        // domain_synthesis_output channel) so the domain_synthesis ->
+        // branch_write auto-continuation fires — see specs.yml action_map and
+        // registration.ts AUTO_CONTINUE_ACTIONS.
         channel:
           name === 'plan_artifacts' || name === 'revise_artifact_plan'
             ? 'artifact_plan_output'
-            : name === 'synthesize_domain_logic'
-              ? 'domain_synthesis_output'
-              : 'widget_output',
+            : 'widget_output',
         payload,
       },
     ],

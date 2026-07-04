@@ -71,16 +71,21 @@ describe('foundry end-to-end acceptance gate', () => {
         'draft artifact plan before approval',
       );
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      // After /approve the chain is fully bus-driven: approve_artifact_plan ->
+      // (auto_continuation) synthesize_domain_logic -> (auto_continuation)
+      // write_scaffold_artifacts and onward. synthesize_domain_logic now emits on
+      // widget_output so the domain_synthesis -> branch_write continuation fires
+      // on its own; the working chain races through the transient branch_write
+      // mode too fast to catch it there. Assert on the durable
+      // program.domain_synthesis_complete fact instead of the transient mode, and
+      // confirm the intermediate action fired via terminalActionNames.
       const domainReady = await waitForSnapshot(
         harness,
-        (snapshot) =>
-          snapshot.mode === 'branch_write' &&
-          snapshot.domain['program.domain_synthesis_complete'] === true,
-        'domain synthesis completion before branch write',
+        (snapshot) => snapshot.domain['program.domain_synthesis_complete'] === true,
+        'domain synthesis completion on the bus-driven approval chain',
       );
       expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['synthesize_domain_logic']));
 
-      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
       const finalSnapshot = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.mode === 'pr_graduation' && snapshot.terminal === true,
@@ -211,13 +216,17 @@ describe('foundry end-to-end acceptance gate', () => {
         'draft artifact plan before status canonicalization regression',
       );
       await triggerAndRecord(harness, seenModes, { channel: 'user_confirmation', payload: { decision: 'approve' } });
-      await waitForSnapshot(
+      // Fully bus-driven after /approve (see the acceptance-gate test above): the
+      // working synthesize_domain_logic auto-continuation races through the
+      // transient branch_write mode, so gate on the durable
+      // program.domain_synthesis_complete fact rather than the transient mode.
+      const domainReady = await waitForSnapshot(
         harness,
-        (snapshot) => snapshot.mode === 'branch_write' && snapshot.domain['program.domain_synthesis_complete'] === true,
+        (snapshot) => snapshot.domain['program.domain_synthesis_complete'] === true,
         'domain synthesis completion before status canonicalization regression',
       );
+      expect(terminalActionNames(domainReady.rounds)).toEqual(expect.arrayContaining(['synthesize_domain_logic']));
 
-      await triggerAndRecord(harness, seenModes, { channel: 'system_mode_entry', payload: {} });
       const finalSnapshot = await waitForSnapshot(
         harness,
         (snapshot) => snapshot.mode === 'pr_graduation' && snapshot.terminal === true,
