@@ -14,7 +14,7 @@ import {
 describe('PGAS server version contract', () => {
   it('pins the published pgas-server version checked for this foundry', () => {
     expect(PGAS_SERVER_PACKAGE).toBe('@simodelne/pgas-server');
-    expect(PGAS_SERVER_VERSION).toBe('3.1.0');
+    expect(PGAS_SERVER_VERSION).toBe('3.3.0');
   });
 
   it('lists the allowed public pgas-server subpath imports', () => {
