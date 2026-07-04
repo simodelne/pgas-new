@@ -108,6 +108,53 @@ describe('runRepl', () => {
     }
   });
 
+  it('coalesces a bracketed paste split across multiple stdin chunks into one turn', async () => {
+    // Real terminals deliver a large paste in several `data` chunks; the paste
+    // end-marker (ESC[201~) can arrive in a later chunk. The buffer must hold
+    // until the end-marker before submitting so the whole brief is one turn.
+    const fake = createFakePgasFetch({
+      sseEvents: [
+        {
+          event: 'round_complete',
+          data: { result: { name: 'record_user_note', payload: { message: 'chunked' } } },
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+    const pastedBrief = [
+      'START NEW DESIGN SESSION.',
+      'Target program slug=minutes-drafter.',
+      'Required artifacts: projection.ts, frontend.spec.yml.',
+    ].join('\n');
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      // Split the paste sequence across three writes, with the end-marker last.
+      stdin.write('\x1b[200~START NEW DESIGN SESSION.\nTarget program slug=minutes-drafter.\n');
+      stdin.write('Required artifacts: projection.ts, frontend.spec.yml.');
+      stdin.write('\x1b[201~');
+      const trigger = await fake.waitForRequest('/sessions/session-1/trigger/stream');
+      await stdout.waitFor('chunked');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: 'session-1', exitCode: 0 });
+      expect(trigger).toMatchObject({
+        method: 'POST',
+        path: '/sessions/session-1/trigger/stream',
+        body: { channel: 'user_text', payload: pastedBrief },
+      });
+      expect(fake.requests.filter((request) => request.path === '/sessions/session-1/trigger/stream')).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reads the cached token and uses it as bearer auth when options.token is absent', async () => {
     const originalHome = process.env.HOME;
     const homeDir = mkdtempSync(join(tmpdir(), 'pgas-new-repl-token-'));
