@@ -100,28 +100,36 @@ function optionalJsonField(
  * rewritten to '{"enabled":false}' when the sentinel matches. Other
  * payload keys pass through unchanged.
  */
+// Normalizes a raw Q5 delegation string to a canonical JSON-object string when
+// it matches a known "no-delegation" sentinel form. Returns the input unchanged
+// for anything that isn't a recognized sentinel (genuinely malformed delegation
+// still rejects loudly downstream). Operates on a raw string so it can run at
+// BOTH the handler-arg layer and the state-ingestion reaction — the latter is
+// where it must run, because record_q5_delegation's action_map mutation stores
+// the raw arg via `from_arg`, bypassing any handler-return normalization.
+export function normalizeDelegationSentinelValue(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === 'none' || trimmed === 'no' || trimmed === 'n/a' || trimmed === '') {
+    return '{"enabled":false}';
+  }
+  // Qwen brace-drop repair (observed live 2026-07-04, UAT scenario A): for the
+  // user reply "none", Qwen sometimes emits the canonical object WITHOUT braces
+  // — "enabled: false" — which fails strict + tolerant parse. If the string is a
+  // bare `key: value` mapping (identifier + colon, no enclosing braces/brackets),
+  // wrap it in braces and let the downstream tolerant parse validate it. Comma-
+  // lists without a leading key ("none, human_review") do not match and still reject.
+  const bare = raw.trim();
+  if (!bare.startsWith('{') && !bare.startsWith('[') && /^[A-Za-z_$][\w$-]*\s*:/.test(bare)) {
+    return `{${bare}}`;
+  }
+  return raw;
+}
+
 function applyOptionalDelegationSentinel(payload: Record<string, unknown>): Record<string, unknown> {
   const raw = payload.delegation_json;
   if (typeof raw !== 'string') return payload;
-  const trimmed = raw.trim().toLowerCase();
-  if (trimmed === 'none' || trimmed === 'no' || trimmed === 'n/a' || trimmed === '') {
-    return { ...payload, delegation_json: '{"enabled":false}' };
-  }
-  // Qwen brace-drop repair (observed live 2026-07-04, UAT scenario A attempt 1):
-  // for the user reply "none", Qwen sometimes emits the canonical object
-  // WITHOUT braces — delegation_json: "enabled: false" — which fails both
-  // strict JSON.parse and the tolerant JSON5-style parse. The same run's
-  // retry emitted "{enabled: false}", which the tolerant parser accepts. If
-  // the string is a bare `key: value` mapping (starts with an identifier
-  // followed by a colon, no enclosing braces/brackets), wrap it in braces and
-  // let the downstream tolerant parse validate it for real. Comma-lists
-  // without a leading key ("none, human_review") do not match and still
-  // reject loudly.
-  const bare = raw.trim();
-  if (!bare.startsWith('{') && !bare.startsWith('[') && /^[A-Za-z_$][\w$-]*\s*:/.test(bare)) {
-    return { ...payload, delegation_json: `{${bare}}` };
-  }
-  return payload;
+  const normalized = normalizeDelegationSentinelValue(raw);
+  return normalized === raw ? payload : { ...payload, delegation_json: normalized };
 }
 
 const intakeJsonPaths = [
@@ -188,13 +196,19 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   ['normalize_rebase_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_verification')],
   ['normalize_intake_json_fields', (snapshot) => {
     const mutations = intakeJsonPaths.flatMap((path) => {
-      const value = snapshot.get(path);
-      if (typeof value !== 'string') return [];
+      const stored = snapshot.get(path);
+      if (typeof stored !== 'string') return [];
+      // record_q5_delegation stores the raw arg via `from_arg`, so a "none"-class
+      // reply reaches this reaction unnormalized. Apply the delegation sentinel on
+      // the state value BEFORE parsing, or the raw "none" fails "expected a JSON
+      // object" here and stalls the intake (observed live 2026-07-04, scenario A
+      // 3/3 at record_q5_delegation). Non-sentinel malformed delegation still rejects.
+      const value = path === 'intake.delegation_json' ? normalizeDelegationSentinelValue(stored) : stored;
       const expectedType = path === 'intake.stages_json' || path === 'intake.transitions_json' ? 'array' : 'object';
       const normalized = parseAndNormalizeJson(value, path);
       assertJsonTopLevelType(normalized.value, expectedType, path);
       const canonical = normalized.canonical;
-      return canonical === value ? [] : [{ op: 'MSet' as const, path, value: canonical }];
+      return canonical === stored ? [] : [{ op: 'MSet' as const, path, value: canonical }];
     });
     const transitionRefresh = staleTransitionRefreshMutation(snapshot);
     const allMutations = [...mutations, ...transitionRefresh];
