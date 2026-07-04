@@ -1115,6 +1115,8 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       action_map: Record<string, {
         arg_descriptions?: Record<string, string>;
         mutations?: Array<{ path: string; value?: unknown; from_arg?: string }>;
+        result_path?: string;
+        channel?: string;
       }>;
       proceed_to: Record<string, string>;
       schema: Record<string, string>;
@@ -1135,7 +1137,10 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
     expect(parsed.schema['graduation.ready_for_live']).toBe('boolean');
     expect(parsed.schema['graduation.rebase_static_evidence_id']).toBe('string');
     expect(parsed.schema['program.domain_synthesis_complete']).toBe('boolean');
-    expect(parsed.schema['domain_synthesis.audit']).toBe('object');
+    // domain_synthesis.audit was removed from session-state schema together
+    // with synthesize_domain_logic's result_path: the audit is durable in the
+    // synthesizer transit store and surfaced in the widget payload instead.
+    expect(parsed.schema['domain_synthesis.audit']).toBeUndefined();
     expect(parsed.proceed_to.load_wiring_manifest).toBeUndefined();
     expect(parsed.proceed_to.confirm_design).toBe('repo_targeting');
     expect(parsed.proceed_to.authorize_standalone_target).toBe('architecture_design');
@@ -1244,9 +1249,14 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       ]),
     );
     expect(parsed.action_map.synthesize_domain_logic).toMatchObject({
-      result_path: 'domain_synthesis.audit',
-      channel: 'domain_synthesis_output',
+      // widget_output is load-bearing: the engine's NoticeContinuation only
+      // auto-continues widget_output effects, and synthesize_domain_logic must
+      // auto-continue into branch_write. No result_path: the engine's ER-2
+      // compiler check forbids result_path on an Async channel; the audit
+      // stays durable in the synthesizer transit store.
+      channel: 'widget_output',
     });
+    expect(parsed.action_map.synthesize_domain_logic.result_path).toBeUndefined();
     expect(parsed.action_map.synthesize_domain_logic.mutations).toEqual([
       expect.objectContaining({ path: 'program.domain_synthesis_complete', value: true }),
     ]);

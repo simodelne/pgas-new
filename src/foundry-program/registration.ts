@@ -9,7 +9,17 @@ import {
 import { handlers, reactionHandlers } from './handlers.js';
 import { registerPgasNewTools } from './tools.js';
 
-const AUTO_CONTINUE_ACTIONS = new Set([
+// Every action in this set MUST declare `channel: widget_output` in
+// specs.yml's action_map. The engine's NoticeContinuation consumer publishes
+// notice_emitted (which fires the system_mode_entry auto_continuation trigger)
+// ONLY for EffectActions on the widget_output channel — an auto-continue
+// action on any other Out channel silently never continues, stalling the
+// session at the next mode entry. This exact stall shipped with the
+// domain_synthesis wiring (synthesize_domain_logic on domain_synthesis_output)
+// and broke live UAT scenarios a/b/c at domain_synthesis -> branch_write on
+// 2026-07-03. tests/unit/foundry-auto-continue-channels.test.ts pins the
+// invariant.
+export const AUTO_CONTINUE_ACTIONS = new Set([
   'confirm_design',
   'reject_design_and_revise_q1',
   'reject_design_and_revise_q2',

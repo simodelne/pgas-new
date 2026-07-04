@@ -146,6 +146,20 @@ describe('intake Q-action handlers', () => {
     });
   });
 
+  it('record_q5_delegation repairs a brace-dropped bare mapping (Qwen live variance)', async () => {
+    // Observed live 2026-07-04 (UAT scenario A attempt 1, Qwen qwen36-27b):
+    // for the user reply "none", Qwen emitted delegation_json "enabled: false"
+    // (no braces) which failed strict + tolerant parsing and burned a full
+    // retry attempt. The brace-drop repair wraps a bare `key: value` mapping
+    // and re-parses tolerantly.
+    await expect(
+      handlers.record_q5_delegation({ delegation_json: 'enabled: false' }),
+    ).resolves.toMatchObject({
+      kind: 'pgas_new_q5_delegation_recorded',
+      delegation: { enabled: false },
+    });
+  });
+
   it('record_q5_delegation rejects bracketed comma-lists and garbled input', async () => {
     await expect(
       handlers.record_q5_delegation({ delegation_json: '[none, human_review]' }),
