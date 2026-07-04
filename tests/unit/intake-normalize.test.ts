@@ -125,6 +125,23 @@ describe('intake JSON normalization', () => {
     });
   });
 
+  it('canonicalizes a raw "none" Q5 delegation reply via state ingestion (does not stall)', async () => {
+    // Regression for the live 2026-07-04 scenario-A 3/3 stall: Qwen forwarded the
+    // literal user reply as delegation_json:"none". record_q5_delegation stores the
+    // RAW arg via from_arg, bypassing the handler sentinel; the normalize_intake_json_fields
+    // reaction must translate "none" -> {"enabled":false} on the state value instead of
+    // throwing "expected a JSON object" (which stalled record_q5_delegation).
+    for (const reply of ['none', 'None', 'N/A', 'enabled: false']) {
+      const expected = reply.trim().toLowerCase() === 'enabled: false' ? { enabled: false } : { enabled: false };
+      const domain = await recordIntake([
+        effect('record_q3_stages', { stages_json: canonicalStages }),
+        effect('record_q4_transitions', { transitions_json: canonicalTransitions }),
+        effect('record_q5_delegation', { delegation_json: reply }),
+      ]);
+      expectCanonicalJson(domain['intake.delegation_json'], expected);
+    }
+  });
+
   it('stores mixed nested Q4 object-literal arrays as valid canonical JSON', async () => {
     const expected = [
       { from: 'triage_intake', to: 'root_cause_analysis', guard_field: 'triage.complete' },
