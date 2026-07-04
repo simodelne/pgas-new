@@ -623,7 +623,15 @@ async function runH() {
   tmuxSendLiteral(ctx, 'Ask Q3.');
   await sleep(100);
   tmuxSendLiteral(ctx, '/abort');
-  await sleep(8000);
+  // Gate the restart on the abort actually LANDING, not a fixed sleep. On slow
+  // lanes (codex-cli) /abort interrupts an in-flight draft and "Session aborted."
+  // can land AFTER a fixed wait — typing the restart prompt before then lets the
+  // aborting session swallow the keystroke, so it never reaches the engine
+  // (session-log shows 0 restart turns; scenario h then times out on
+  // record_program_target). Poll until the abort lands, then settle to a clean
+  // prompt before sending the restart. Fast lanes (vLLM) satisfy this instantly.
+  await waitForPane(ctx, 'Session aborted', 60000);
+  await sleep(1500);
   capturePane(ctx, 'after /abort');
   ctx.abortBeforeActionCount = before;
   ctx.abortAfterActionCount = actionCount(ctx);
