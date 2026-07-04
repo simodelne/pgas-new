@@ -353,6 +353,130 @@ describe('runRepl', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('recovers a round after a transient transport fetch-failed blip (issue #77)', async () => {
+    const fake = createFakePgasFetch({
+      sseEvents: [],
+      triggerScript: [
+        // First attempt: Qwen HTTP blip surfaced as `TypeError: fetch failed`.
+        { kind: 'transport-error', message: 'fetch failed' },
+        // Retry succeeds and the round completes normally.
+        {
+          kind: 'sse',
+          events: [
+            { event: 'step', data: { step: 'execution' } },
+            { event: 'round_complete', data: { result: { name: 'write_scaffold_artifacts', payload: { written: 3 } } } },
+          ],
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write('write the scaffold\n');
+      await stdout.waitFor('retrying round');
+      await stdout.waitFor('write scaffold artifacts');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: 'session-1', exitCode: 0 });
+      // The round was re-triggered (two trigger/stream calls), and no hard
+      // error was surfaced — the recoverable session resumed transparently.
+      expect(fake.requests.filter((r) => r.path === '/sessions/session-1/trigger/stream')).toHaveLength(2);
+      expect(stdout.text()).toContain('write scaffold artifacts');
+      // The blip was surfaced as a benign retry notice (ℹ), not a hard error (✗).
+      expect(stdout.text()).toContain('transient issue (fetch failed) — retrying round');
+      expect(stdout.text()).not.toContain('✗');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('recovers a round cancelled by server_shutdown (retryable round_cancelled event, issue #77)', async () => {
+    const fake = createFakePgasFetch({
+      sseEvents: [],
+      triggerScript: [
+        // First attempt: engine cancels the in-flight round on server_shutdown
+        // but leaves the session Running and marks the error retryable.
+        {
+          kind: 'sse',
+          events: [
+            { event: 'step', data: { step: 'execution' } },
+            { event: 'error', data: { kind: 'round_cancelled', message: 'Round cancelled.', retryable: true } },
+          ],
+        },
+        // Retry resumes the recoverable session and writes the artifacts.
+        {
+          kind: 'sse',
+          events: [
+            { event: 'round_complete', data: { result: { name: 'write_scaffold_artifacts', payload: { written: 3 } } } },
+          ],
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write('write the scaffold\n');
+      await stdout.waitFor('retrying round');
+      await stdout.waitFor('write scaffold artifacts');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: 'session-1', exitCode: 0 });
+      expect(fake.requests.filter((r) => r.path === '/sessions/session-1/trigger/stream')).toHaveLength(2);
+      expect(stdout.text()).toContain('write scaffold artifacts');
+      // The bare "Round cancelled." error must not reach the user as a failure.
+      expect(stdout.text()).not.toMatch(/error.*Round cancelled/i);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('surfaces a recoverable hint when transient retries are exhausted (issue #77)', async () => {
+    const fake = createFakePgasFetch({
+      sseEvents: [],
+      triggerScript: [
+        { kind: 'transport-error', message: 'fetch failed' },
+        { kind: 'transport-error', message: 'fetch failed' },
+        { kind: 'transport-error', message: 'fetch failed' },
+        { kind: 'transport-error', message: 'fetch failed' },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write('write the scaffold\n');
+      await stdout.waitFor('still recoverable');
+      stdin.write('/exit\n');
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: 'session-1', exitCode: 0 });
+      // 4 attempts = initial + TRANSIENT_ROUND_RETRY_LIMIT (3) retries.
+      expect(fake.requests.filter((r) => r.path === '/sessions/session-1/trigger/stream')).toHaveLength(4);
+      expect(stdout.text()).toContain('still recoverable');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 function captureStream(): Writable & { text(): string; waitFor(expected: string): Promise<void> } {
@@ -380,15 +504,25 @@ function captureStream(): Writable & { text(): string; waitFor(expected: string)
   return writable;
 }
 
+type TriggerAttempt =
+  | { kind: 'sse'; events: Array<{ event: string; data: unknown }> }
+  | { kind: 'transport-error'; message?: string }
+  | { kind: 'status'; status: number };
+
 function createFakePgasFetch(options: {
   sseEvents: Array<{ event: string; data: unknown }>;
   beforeRoundComplete?: () => Promise<void>;
   sessionEnvelope?: Record<string, unknown>;
   triggerStatus?: number;
+  // Per-attempt trigger-stream behavior (issue #77 transient-retry tests).
+  // When present, the Nth trigger/stream call uses triggerScript[N]; calls
+  // beyond the script fall back to `sseEvents`.
+  triggerScript?: TriggerAttempt[];
 }): FakeFetch {
   const requests: RequestRecord[] = [];
   const waiters = new Map<string, Array<(record: RequestRecord) => void>>();
   const encoder = new TextEncoder();
+  let triggerAttempt = 0;
 
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
@@ -413,12 +547,24 @@ function createFakePgasFetch(options: {
       return json({ sessionId: 'session-1' });
     }
     if (request.method === 'POST' && url.pathname === '/sessions/session-1/trigger/stream') {
+      const attemptIndex = triggerAttempt;
+      triggerAttempt += 1;
+      const scripted = options.triggerScript?.[attemptIndex];
+      if (scripted?.kind === 'transport-error') {
+        // Model an undici transport blip: a raw `TypeError: fetch failed`
+        // thrown from fetch itself (issue #77 repro shape).
+        throw new TypeError(scripted.message ?? 'fetch failed');
+      }
+      if (scripted?.kind === 'status') {
+        return json({ error: 'transient' }, scripted.status);
+      }
       if (options.triggerStatus !== undefined) {
         return json({ error: 'unauthorized' }, options.triggerStatus);
       }
+      const events = scripted?.kind === 'sse' ? scripted.events : options.sseEvents;
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
-          for (const event of options.sseEvents) {
+          for (const event of events) {
             if (event.event === 'round_complete') {
               await options.beforeRoundComplete?.();
             }
