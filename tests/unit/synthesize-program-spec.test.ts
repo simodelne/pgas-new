@@ -587,6 +587,35 @@ describe('synthesize_program_spec handler', () => {
     expect(artifact?.contracts_ts).toContain('total_fee = per_seat_rate * seats.');
   });
 
+  it('repairs malformed rich stages_json persisted from the raw Q3 arg so domain_spec survives into stageDomainSpecs (issue #92)', () => {
+    // The engine persists intake.stages_json from the raw tool `from_arg`
+    // (there is no `from_result` mutation source), so a rich Q3 stages_json
+    // that arrived with the known dropped-boundary-brace malformation reaches
+    // synthesis unrepaired. Downstream synthesis must apply the same repair the
+    // record_q3_stages handler applies, or every per-stage domain_spec is lost
+    // (empty stageDomainSpecs) and fee-model params are ignored.
+    const rich = (slug: string, param: string): string =>
+      `{"slug":"${slug}","domain_spec":{"reads":["inputs.initial_user_text"],"produces":{"result_json":{"stage":"string","${param}":"number"},"items_json":["${param}:<${param}>"]},"rules":["Apply ${param}."],"invariants":["result_json.stage must equal ${slug}."]}`;
+    // Each rich stage object is missing its OUTER closing brace before the next
+    // `,{"slug":...}` boundary — the exact qwen malformation.
+    const malformedStagesJson = `[{"slug":"intake","is_bootstrap":true},${rich('fee_modelling', 'cap_premium_pct')},{"slug":"complete","is_terminal":true}]`;
+
+    const artifact = synthesizeProgramSpecFromDomain(domain({
+      'intake.stages_json': malformedStagesJson,
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'fee_modelling', trigger: 'ready', guard_field: 'intake.started' },
+        { from: 'fee_modelling', to: 'complete', trigger: 'done', guard_field: 'fee_modelling.ready' },
+      ]),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'fee_modelling.ready' }),
+    }));
+
+    // stageDomainSpecs must be populated with the fee param, not empty.
+    expect(artifact.contracts_ts).toContain('export const stageDomainSpecs');
+    expect(artifact.contracts_ts).toContain('cap_premium_pct');
+    expect(artifact.contracts_ts).toContain('Apply cap_premium_pct.');
+    expect(artifact.contracts_ts).not.toContain('export const stageDomainSpecs = {} as');
+  });
+
   it('emits mixed guarded and unguarded transitions and parses them through the engine loader', async () => {
     const sessionId = 'session-mixed-transition-guards';
     clearSynthesizedArtifact(sessionId);

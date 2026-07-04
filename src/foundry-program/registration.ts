@@ -103,6 +103,7 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
           }
         }
       }
+      normalizeToolArgumentKeysInTerminalPayload(adapters);
       exposeSynthesisMarkerInTerminalPayload(adapters);
       exposeAutoContinueIntentInTerminalPayload(adapters);
       return adapters;
@@ -113,6 +114,79 @@ export function createPgasNewFoundryProgramEntry(): ProgramEntry {
 export const createPgasNewProgramEntry = createPgasNewFoundryProgramEntry;
 
 type ProgramAdapters = ReturnType<typeof createProgramAdapters>;
+
+/**
+ * #68: tool-call argument keys with surrounding whitespace (e.g. `"message "`)
+ * otherwise pass the engine's parse/type/structural gates verbatim and ride
+ * along in the terminal payload. A required field can then appear visually
+ * present in cards/logs under a key that handlers and mutation mappings never
+ * read. We normalize each effect payload's top-level object keys before the
+ * tool adapter builds the terminal payload: whitespace-padded keys are trimmed
+ * to their canonical form. If trimming would collide with an existing distinct
+ * key/value, we reject the call rather than silently pick a winner.
+ */
+export function normalizeToolArgumentKeys(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return payload;
+  }
+  const source = payload as Record<string, unknown>;
+  let mutated = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    const trimmed = key.trim();
+    if (trimmed === key) {
+      assignNormalizedKey(normalized, key, value, key);
+      continue;
+    }
+    if (trimmed.length === 0) {
+      throw new Error(
+        `tool_argument_key_blank_after_trim: argument key ${JSON.stringify(key)} is only whitespace`,
+      );
+    }
+    mutated = true;
+    assignNormalizedKey(normalized, trimmed, value, key);
+  }
+  return mutated ? normalized : source;
+}
+
+function assignNormalizedKey(
+  target: Record<string, unknown>,
+  key: string,
+  value: unknown,
+  originalKey: string,
+): void {
+  if (Object.prototype.hasOwnProperty.call(target, key)) {
+    const existing = target[key];
+    if (!deepEqual(existing, value)) {
+      throw new Error(
+        `tool_argument_key_whitespace_collision: normalized key ${JSON.stringify(key)} ` +
+          `(from ${JSON.stringify(originalKey)}) conflicts with an existing distinct value`,
+      );
+    }
+    return;
+  }
+  target[key] = value;
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function normalizeToolArgumentKeysInTerminalPayload(adapters: ProgramAdapters): void {
+  for (const adapter of adapters.outputs.values()) {
+    const dispatch = adapter.dispatch.bind(adapter) as typeof adapter.dispatch;
+    adapter.dispatch = async (payload: Parameters<typeof adapter.dispatch>[0]) => {
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const effect = payload as { payload?: unknown };
+        if (effect.payload !== undefined) {
+          effect.payload = normalizeToolArgumentKeys(effect.payload) as typeof effect.payload;
+        }
+      }
+      return dispatch(payload);
+    };
+  }
+}
 
 function exposeSynthesisMarkerInTerminalPayload(adapters: ProgramAdapters): void {
   for (const adapter of adapters.outputs.values()) {

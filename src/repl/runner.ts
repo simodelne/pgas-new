@@ -18,6 +18,16 @@ const STEP_LABELS: Record<string, string> = {
 const ALWAYS_AVAILABLE_COMMANDS = new Set(['abort', 'approve', 'exit', 'help', 'history', 'quit', 'reject', 'status']);
 const CONTROL_IDLE_POLL_INTERVAL_MS = 250;
 const CONTROL_IDLE_TIMEOUT_MS = 120_000;
+
+// Transient-round recovery (issue #77): a transport `fetch failed` blip or an
+// engine-signalled recoverable round cancellation (server_shutdown /
+// transient_error — the session is left Running with retryable:true) must not
+// surface as a hard error that leaves the REPL idle. Because the engine keeps
+// the session Running, re-triggering the same round resumes it. We retry the
+// in-flight trigger a bounded number of times with backoff before giving up.
+const TRANSIENT_ROUND_RETRY_LIMIT = 3;
+const TRANSIENT_ROUND_RETRY_BASE_DELAY_MS = 500;
+const TRANSIENT_ROUND_RETRY_MAX_DELAY_MS = 4_000;
 const BRACKETED_PASTE_START = '\x1b[200~';
 const BRACKETED_PASTE_END = '\x1b[201~';
 const ENABLE_BRACKETED_PASTE = '\x1b[?2004h';
@@ -379,6 +389,23 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       });
       state.sessionId = created.sessionId;
     }
+
+    // #69 trap guard: scaffold_plan has no `user_text` channel — it only
+    // accepts a user_confirmation (approve/reject). Firing a doomed user_text
+    // trigger there produces a __fallback__ round with no mutation and can
+    // leave the session stuck at a draft artifact plan. Any plain text the user
+    // types at the artifact-plan gate is rejection/revision feedback, so route
+    // it through the rejection control (equivalent to `/reject <text>`) rather
+    // than a doomed user_text turn. `/approve` and `/reject` remain the
+    // explicit paths.
+    if (isArtifactPlanGateMode(state.mode)) {
+      renderer.renderInfo(
+        'At the artifact-plan gate: treating your message as revision feedback (/reject). Type /approve to accept the plan.',
+      );
+      await handleUserConfirmation({ decision: 'reject', instruction: userText });
+      return;
+    }
+
     await runTrigger(state.sessionId, 'user_text', userText);
   }
 
@@ -473,9 +500,71 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
     activeSpinner = spinner;
 
     try {
+      // Issue #77: the round may be cancelled by a transient transport blip
+      // (Qwen HTTP `fetch failed`) or an engine `round_cancelled_shutdown`
+      // that leaves the session Running (retryable). Re-trigger the same round
+      // up to TRANSIENT_ROUND_RETRY_LIMIT times before surfacing a hard error.
+      for (let attempt = 0; ; attempt += 1) {
+        const outcome = await streamRoundOnce(sessionId, channel, payload, spinner);
+        if (outcome.status === 'unauthorized') {
+          spinner.stop();
+          renderer.renderError('session expired, re-run `pgas-new login`');
+          await finish('error', 1);
+          return;
+        }
+        if (outcome.status === 'transient' && !state.abortRequested && attempt < TRANSIENT_ROUND_RETRY_LIMIT) {
+          const delay = Math.min(
+            TRANSIENT_ROUND_RETRY_MAX_DELAY_MS,
+            TRANSIENT_ROUND_RETRY_BASE_DELAY_MS * 2 ** attempt,
+          );
+          renderer.renderInfo(
+            `transient issue (${outcome.detail}) — retrying round (attempt ${String(attempt + 2)}/${String(
+              TRANSIENT_ROUND_RETRY_LIMIT + 1,
+            )})…`,
+          );
+          await sleep(delay);
+          spinner.update('Reconnecting…');
+          continue;
+        }
+        if (outcome.status === 'transient' && !state.abortRequested) {
+          // Retries exhausted: surface a recoverable-session hint rather than a
+          // bare error so the user knows the session is not terminally failed.
+          spinner.stop();
+          renderer.renderError(
+            `transient issue persisted (${outcome.detail}); the session is still recoverable — retry your last input or use /resume.`,
+          );
+          state.running = false;
+          updatePrompt();
+        } else if (outcome.status === 'error' && !state.abortRequested) {
+          spinner.stop();
+          renderer.renderError(outcome.detail);
+          state.running = false;
+          updatePrompt();
+        }
+        break;
+      }
+    } finally {
+      state.running = false;
+      if (activeSpinner === spinner) activeSpinner = null;
+      drainPendingAfterRound();
+    }
+  }
+
+  /**
+   * Runs a single trigger-stream attempt. Returns a classified outcome so the
+   * caller can decide whether to transparently retry a transient/recoverable
+   * cancellation (issue #77) or surface a hard error.
+   */
+  async function streamRoundOnce(
+    sessionId: string,
+    channel: string,
+    payload: unknown,
+    spinner: { update(message: string): void; stop(): void },
+  ): Promise<RoundOutcome> {
+    try {
       const stream = client.sessions.triggerStream(sessionId, { channel, payload });
       for await (const event of stream as AsyncIterable<ReplStreamEvent>) {
-        if (state.abortRequested) break;
+        if (state.abortRequested) return { status: 'aborted' };
         if (event.event === 'step') {
           const step = String((event.data as Record<string, unknown>).step ?? '');
           spinner.update(STEP_LABELS[step] ?? step);
@@ -485,27 +574,28 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
           renderer.renderAction(result as ActionResult);
           state.running = false;
           updatePrompt();
+          return { status: 'complete' };
         } else if (event.event === 'error') {
-          spinner.stop();
-          renderer.renderError(String((event.data as Record<string, unknown>).message ?? event.data));
-          state.running = false;
-          updatePrompt();
+          const data = (event.data ?? {}) as Record<string, unknown>;
+          const message = String(data.message ?? event.data);
+          if (isRecoverableRoundError(data)) {
+            return { status: 'transient', detail: recoverableDetail(data) };
+          }
+          return { status: 'error', detail: message };
         }
       }
+      // Stream ended without a round_complete or error event: the transport
+      // was dropped mid-round (transient). The session remains recoverable.
+      return state.abortRequested
+        ? { status: 'aborted' }
+        : { status: 'transient', detail: 'stream ended early' };
     } catch (error) {
-      if (!state.abortRequested) {
-        spinner.stop();
-        if (isUnauthorizedError(error)) {
-          renderer.renderError('session expired, re-run `pgas-new login`');
-          await finish('error', 1);
-          return;
-        }
-        renderer.renderError(errorMessage(error));
+      if (state.abortRequested) return { status: 'aborted' };
+      if (isUnauthorizedError(error)) return { status: 'unauthorized' };
+      if (isTransientTransportError(error)) {
+        return { status: 'transient', detail: transientDetail(error) };
       }
-    } finally {
-      state.running = false;
-      if (activeSpinner === spinner) activeSpinner = null;
-      drainPendingAfterRound();
+      return { status: 'error', detail: errorMessage(error) };
     }
   }
 
@@ -580,6 +670,95 @@ function isUnauthorizedError(error: unknown): boolean {
   return maybeStatus?.status === 401;
 }
 
+/**
+ * Classified result of a single trigger-stream attempt. `transient` means the
+ * round was cancelled/dropped in a way the engine left recoverable (session
+ * still Running) — the caller may re-trigger it. See issue #77.
+ */
+type RoundOutcome =
+  | { status: 'complete' }
+  | { status: 'aborted' }
+  | { status: 'unauthorized' }
+  | { status: 'transient'; detail: string }
+  | { status: 'error'; detail: string };
+
+// Engine error `kind`s that leave the session Running / recoverable and are
+// therefore safe to re-trigger. Mirrors the notifications emitted by
+// @simodelne/pgas-server on RoundCancelledError / transient round failure
+// (kind: round_cancelled | transient_error, retryable: true).
+const RECOVERABLE_ERROR_KINDS = new Set(['round_cancelled', 'transient_error']);
+
+// Substrings that identify a transient transport failure (network/HTTP blip)
+// as opposed to a genuine application error. Undici surfaces a dropped fetch
+// as `TypeError: fetch failed`; socket-level drops carry these codes.
+const TRANSIENT_TRANSPORT_MARKERS = [
+  'fetch failed',
+  'econnreset',
+  'econnrefused',
+  'etimedout',
+  'enetunreach',
+  'socket hang up',
+  'network',
+  'terminated',
+];
+
+function isRecoverableRoundError(data: Record<string, unknown>): boolean {
+  if (data.retryable === true) return true;
+  const kind = typeof data.kind === 'string' ? data.kind : undefined;
+  return kind !== undefined && RECOVERABLE_ERROR_KINDS.has(kind);
+}
+
+function recoverableDetail(data: Record<string, unknown>): string {
+  const kind = typeof data.kind === 'string' ? data.kind : undefined;
+  if (kind !== undefined) return kind;
+  const message = typeof data.message === 'string' ? data.message : undefined;
+  return message ?? 'recoverable round cancellation';
+}
+
+function isTransientTransportError(error: unknown): boolean {
+  // A PgasApiError the server explicitly marked retryable (e.g. a 503 with
+  // retryable:true) is transient regardless of message text.
+  const record = error as { retryable?: unknown; kind?: unknown; status?: unknown } | undefined;
+  if (record?.retryable === true) return true;
+  if (typeof record?.kind === 'string' && RECOVERABLE_ERROR_KINDS.has(record.kind)) return true;
+  // 5xx responses from the round dispatch are transient; 4xx (except 401 which
+  // is handled separately) are client errors and not retried here.
+  if (typeof record?.status === 'number' && record.status >= 500) return true;
+
+  const haystack = collectErrorText(error).toLowerCase();
+  return TRANSIENT_TRANSPORT_MARKERS.some((marker) => haystack.includes(marker));
+}
+
+function transientDetail(error: unknown): string {
+  const record = error as { code?: unknown } | undefined;
+  if (typeof record?.code === 'string' && record.code.length > 0) return record.code;
+  const message = errorMessage(error);
+  return message.length > 0 ? message : 'transport failure';
+}
+
+function collectErrorText(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  // Walk the Error.cause chain (undici nests the socket error under `cause`).
+  for (let depth = 0; depth < 5 && current != null; depth += 1) {
+    if (current instanceof Error) {
+      parts.push(current.message);
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'string') parts.push(code);
+      current = (current as { cause?: unknown }).cause;
+    } else if (typeof current === 'string') {
+      parts.push(current);
+      current = undefined;
+    } else {
+      const record = current as { message?: unknown; code?: unknown; cause?: unknown };
+      if (typeof record.message === 'string') parts.push(record.message);
+      if (typeof record.code === 'string') parts.push(record.code);
+      current = record.cause;
+    }
+  }
+  return parts.join(' ');
+}
+
 function readLiveSessionFields(envelope: Record<string, unknown>): {
   mode: string | null;
   running: boolean;
@@ -626,6 +805,17 @@ function buildUserConfirmationPayload(
   instruction: string | undefined,
 ): UserConfirmationPayload {
   return instruction === undefined ? { decision } : { decision, instruction };
+}
+
+/**
+ * #69: modes whose only user-driven trigger is a `user_confirmation`
+ * (approve/reject) and which do NOT declare a `user_text` channel. Firing a
+ * plain `user_text` trigger in one of these traps the session in a
+ * `__fallback__` round. `scaffold_plan` gates on approve/reject of the drafted
+ * artifact plan.
+ */
+export function isArtifactPlanGateMode(mode: string | null): boolean {
+  return mode === 'scaffold_plan';
 }
 
 function parseRejectQuestionNumber(instruction: string | undefined): number | null {
