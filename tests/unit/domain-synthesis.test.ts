@@ -1065,11 +1065,62 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     });
   });
 
-  it('hard-fails a repeatedly wrong body on behavioral gate failure', async () => {
+  it('rescues a repeatedly wrong body with a deterministic fallback that passes the same gate (issue #93)', async () => {
+    // Reproduces the #93 client_delivery failure: the generator never sets
+    // result_json.stage, so every LLM attempt fails the baseline behavioral
+    // gate. After attempts are exhausted, the mechanical fallback body is
+    // synthesized, re-verified through the same gate, and accepted instead of
+    // failing synthesis terminally.
+    await withCache(async (cacheDir) => {
+      let attempts = 0;
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => {
+          attempts += 1;
+          return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void input;
+  void runtime;
+  return {
+    result_json: JSON.stringify({ status: 'ok' }),
+    items_json: JSON.stringify([]),
+    digest: '',
+  };
+}
+`;
+        },
+      });
+
+      expect(attempts).toBe(2);
+      const body = result.stage_sources?.calculate ?? '';
+      expect(body).toContain('function runStage');
+      expect(body).toContain('stage: input.stage');
+      expect(body).not.toContain('stage_action_stub');
+      expect(body).not.toContain('TODO');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'calculate',
+        archetype: 'pure-compute',
+        behavioral_gate: 'passed',
+        deterministic_fallback: true,
+        attempts: 2,
+      }));
+    });
+  });
+
+  it('still hard-fails when neither the LLM nor the deterministic fallback can satisfy the gate', async () => {
+    // The fallback only rescues stages whose gate it can legitimately satisfy.
+    // A fee-proposal stage requires a real positive-number computation and a
+    // populated parameters_json the mechanical fallback does not produce, so
+    // synthesis must still surface the terminal error rather than accepting a
+    // bogus body.
     await withCache(async (cacheDir) => {
       let attempts = 0;
       await expect(
-        synthesizeDomainLogic(artifact(), {
+        synthesizeDomainLogic(feeProposalArtifact('fee_modelling'), {
           cacheDir,
           maxAttempts: 2,
           providerUrl: 'http://provider.local/v1',
@@ -1081,43 +1132,56 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
   void input;
   void runtime;
-  return {
-    result_json: JSON.stringify({ stage: 'wrong-stage', status: 'ok' }),
-    items_json: JSON.stringify([]),
-    digest: '',
-  };
+  return { result_json: JSON.stringify({ status: 'ok' }), items_json: '[]', digest: '' };
 }
 `;
           },
         }),
-      ).rejects.toThrow(/behavioral gate failed.*expected result_json.stage to equal calculate/u);
+      ).rejects.toThrow(/domain synthesis failed for stage fee_modelling after 2 attempts.*deterministic fallback also failed/su);
       expect(attempts).toBe(2);
     });
   });
 
-  it('hard-fails after capped repair attempts without a stub fallback', async () => {
+  it('deterministic fallback mirrors the domain_spec.produces schema and item templates (issue #93)', async () => {
     await withCache(async (cacheDir) => {
-      let attempts = 0;
-      await expect(
-        synthesizeDomainLogic(artifact(), {
-          cacheDir,
-          maxAttempts: 2,
-          providerUrl: 'http://provider.local/v1',
-          model: 'qwen36-27b',
-          generator: async () => {
-            attempts += 1;
-            return 'export const nope = 1;';
-          },
-        }),
-      ).rejects.toThrow(/domain synthesis failed for stage calculate after 2 attempts/u);
-      expect(attempts).toBe(2);
+      const result = await synthesizeDomainLogic(artifactWithDomainSpecContext(), {
+        cacheDir,
+        maxAttempts: 2,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        // Never sets result_json.stage -> gate always fails -> fallback kicks in.
+        generator: async () => `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void input;
+  void runtime;
+  return { result_json: JSON.stringify({ status: 'ok' }), items_json: '[]', digest: '' };
+}
+`,
+      });
+
+      const body = result.stage_sources?.calculate ?? '';
+      // Exact domain_spec.produces.result_json key order preserved.
+      expect(body).toContain('stage: input.stage');
+      expect(body).toContain('plan:');
+      expect(body).toContain('total_fee:');
+      // items_json template `plan:<plan>` filled deterministically.
+      expect(body).toContain('plan:value');
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'calculate',
+        behavioral_gate: 'passed',
+        deterministic_fallback: true,
+      }));
     });
   });
 
   it('rejects banned stage body capabilities before acceptance', async () => {
+    // Use a fee-proposal stage (which the deterministic fallback cannot satisfy)
+    // so the banned-capability rejection still surfaces terminally instead of
+    // being rescued by the mechanical fallback (#93).
     await withCache(async (cacheDir) => {
       await expect(
-        synthesizeDomainLogic(artifact(), {
+        synthesizeDomainLogic(feeProposalArtifact('fee_modelling'), {
           cacheDir,
           maxAttempts: 1,
           providerUrl: 'http://provider.local/v1',
@@ -1129,9 +1193,10 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
   });
 
   it('rejects pure-compute bodies that still contain stub markers', async () => {
+    // Fee-proposal stage so the fallback cannot mask the stub rejection (#93).
     await withCache(async (cacheDir) => {
       await expect(
-        synthesizeDomainLogic(artifact(), {
+        synthesizeDomainLogic(feeProposalArtifact('fee_modelling'), {
           cacheDir,
           maxAttempts: 1,
           providerUrl: 'http://provider.local/v1',

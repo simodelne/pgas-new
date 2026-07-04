@@ -8,6 +8,7 @@ import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
   classifyStagesForDomain,
   type ClassifiedStage,
@@ -107,7 +108,7 @@ export function synthesizeProgramSpecFromDomain(
   const purpose = stringDomainField(domain, 'intake.purpose');
   const entryChannel = normalizePgasChannelId(stringDomainField(domain, 'intake.entry_channel'));
   const initialEntryPath = initialInputPath(entryChannel);
-  const stages = normalizeStages(parseJsonDomainField<StageInput[]>(domain, 'intake.stages_json'));
+  const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
   const completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
@@ -1609,6 +1610,22 @@ function parseJsonDomainField<T>(domain: Record<string, unknown>, path: string):
     throw new Error(`missing JSON-string domain field: ${path}`);
   }
   return JSON.parse(value) as T;
+}
+
+/**
+ * Parse intake.stages_json applying the SAME repair/normalization the
+ * record_q3_stages handler applies (issue #92). Because the engine persists
+ * intake.stages_json from the raw tool `from_arg` (there is no `from_result`
+ * mutation source), a rich Q3 stages_json carrying per-stage domain_spec that
+ * arrives with the known dropped-boundary-brace malformation would otherwise be
+ * strict-parsed here and lose every domain_spec (empty stageDomainSpecs).
+ */
+function parseStagesDomainField(domain: Record<string, unknown>): StageInput[] {
+  const value = domainValue(domain, 'intake.stages_json');
+  if (typeof value !== 'string') {
+    throw new Error('missing JSON-string domain field: intake.stages_json');
+  }
+  return parseAndNormalizeStagesJson(value).value as StageInput[];
 }
 
 function domainValue(domain: Record<string, unknown>, path: string): unknown {
