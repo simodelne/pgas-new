@@ -223,6 +223,20 @@ function applyOptionalDelegationSentinel(payload: Record<string, unknown>): Reco
   if (trimmed === 'none' || trimmed === 'no' || trimmed === 'n/a' || trimmed === '') {
     return { ...payload, delegation_json: '{"enabled":false}' };
   }
+  // Qwen brace-drop repair (observed live 2026-07-04, UAT scenario A attempt 1):
+  // for the user reply "none", Qwen sometimes emits the canonical object
+  // WITHOUT braces — delegation_json: "enabled: false" — which fails both
+  // strict JSON.parse and the tolerant JSON5-style parse. The same run's
+  // retry emitted "{enabled: false}", which the tolerant parser accepts. If
+  // the string is a bare `key: value` mapping (starts with an identifier
+  // followed by a colon, no enclosing braces/brackets), wrap it in braces and
+  // let the downstream tolerant parse validate it for real. Comma-lists
+  // without a leading key ("none, human_review") do not match and still
+  // reject loudly.
+  const bare = raw.trim();
+  if (!bare.startsWith('{') && !bare.startsWith('[') && /^[A-Za-z_$][\w$-]*\s*:/.test(bare)) {
+    return { ...payload, delegation_json: `{${bare}}` };
+  }
   return payload;
 }
 
