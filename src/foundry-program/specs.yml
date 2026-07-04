@@ -23,7 +23,6 @@ channels:
   system_mode_entry: { direction: In, sync: Async }
   widget_output: { direction: Out, sync: Async }
   artifact_plan_output: { direction: Out, sync: Sync }
-  domain_synthesis_output: { direction: Out, sync: Sync }
   composite_checks_output: { direction: Out, sync: Sync }
 
 modes:
@@ -170,7 +169,7 @@ modes:
         guard: { kind: FieldEquals, path: artifact_plan.status, value: approved }
   domain_synthesis:
     vocabulary: [synthesize_domain_logic, record_user_note, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output, domain_synthesis_output]
+    channels: [system_mode_entry, widget_output]
     preconditions:
       synthesize_domain_logic:
         - { kind: FieldEquals, path: artifact_plan.status, value: approved }
@@ -298,10 +297,10 @@ projection:
     include: [program.slug, program.name, program.target_dir, program.synthesis_complete, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized, artifact_plan.awaiting_user_approval, notebook.entries, notebook.pins]
     exclude: []
   domain_synthesis:
-    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, domain_synthesis.audit]
+    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized]
     exclude: []
   branch_write:
-    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, domain_synthesis.audit, artifacts.written, artifacts.generated_paths]
+    include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized, artifacts.written, artifacts.generated_paths]
     exclude: []
   static_verify:
     include: [program.target_dir, graduation.static_verification, graduation.static_evidence_id, graduation.composite_checks]
@@ -802,12 +801,23 @@ action_map:
   synthesize_domain_logic:
     description: |
       Run per-stage domain-logic synthesis against the frozen generated
-      contracts. The handler stores accepted stage bodies in transit; the
-      engine lands the stage-local audit at domain_synthesis.audit.
-    result_path: domain_synthesis.audit
+      contracts. The handler stores accepted stage bodies (and the full
+      stage-local audit) in the synthesizer transit store; the handler's
+      summary payload (status, stage_count, audit, spec sha delta) is
+      presented on widget_output.
     mutations:
       - { op: MSet, path: program.domain_synthesis_complete, value: true }
-    channel: domain_synthesis_output
+    # widget_output (with NO result_path) is REQUIRED for auto-continuation:
+    # the engine's NoticeContinuation consumer only publishes notice_emitted
+    # (and thus the system_mode_entry auto_continuation trigger) for
+    # EffectActions on the widget_output channel, and the engine's ER-2
+    # compiler check forbids result_path on an Async channel. On the former
+    # domain_synthesis_output (Sync) channel the domain_synthesis ->
+    # branch_write transition stalled forever in live sessions (2026-07-03
+    # two-lane UAT: a/b/c stalled after synthesize_domain_logic in 9/9
+    # failing attempts). This mirrors Phase 3.26's architecture: explicit
+    # notice continuations via widget_output for deterministic actions.
+    channel: widget_output
   write_scaffold_artifacts: { description: "Write planned artifacts.", mutations: [{ op: MSet, path: artifacts.written, value: true }], channel: widget_output }
   git_status: { description: "Read git status.", mutations: [], channel: widget_output }
   npm_install: { description: "Install dependencies.", mutations: [], channel: widget_output }
@@ -994,7 +1004,6 @@ schema:
   artifact_plan.approved: boolean
   artifact_plan.write_authorized: boolean
   artifact_plan.awaiting_user_approval: boolean
-  domain_synthesis.audit: object
   artifacts.written: boolean
   artifacts.generated_paths: array
   curator_requests.requests: array

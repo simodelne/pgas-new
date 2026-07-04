@@ -1115,6 +1115,8 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       action_map: Record<string, {
         arg_descriptions?: Record<string, string>;
         mutations?: Array<{ path: string; value?: unknown; from_arg?: string }>;
+        result_path?: string;
+        channel?: string;
       }>;
       proceed_to: Record<string, string>;
       schema: Record<string, string>;
@@ -1244,9 +1246,14 @@ it('declares the foundry intake actions, JSON-string intake recording shape, and
       ]),
     );
     expect(parsed.action_map.synthesize_domain_logic).toMatchObject({
-      result_path: 'domain_synthesis.audit',
-      channel: 'domain_synthesis_output',
+      // widget_output is load-bearing: the engine's NoticeContinuation only
+      // auto-continues widget_output effects, and synthesize_domain_logic must
+      // auto-continue into branch_write. No result_path: the engine's ER-2
+      // compiler check forbids result_path on an Async channel; the audit
+      // stays durable in the synthesizer transit store.
+      channel: 'widget_output',
     });
+    expect(parsed.action_map.synthesize_domain_logic.result_path).toBeUndefined();
     expect(parsed.action_map.synthesize_domain_logic.mutations).toEqual([
       expect.objectContaining({ path: 'program.domain_synthesis_complete', value: true }),
     ]);

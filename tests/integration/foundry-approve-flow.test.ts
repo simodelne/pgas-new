@@ -222,8 +222,6 @@ function effect(name: string, payload: Record<string, unknown> = {}): TestHarnes
         name,
         channel: name === 'plan_artifacts'
           ? 'artifact_plan_output'
-        : name === 'synthesize_domain_logic'
-          ? 'domain_synthesis_output'
           : 'widget_output',
         payload,
       },
