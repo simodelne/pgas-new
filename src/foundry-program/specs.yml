@@ -606,6 +606,12 @@ action_map:
         Valid example:
         - Object (Q6 completion_json): "{\"final_stage\": \"complete\", \"guard_field\": \"work.done\"}"
         - Rich object (Q6 completion_json): "{\"final_stage\":\"complete\",\"guard_field\":\"delivery.finalized\",\"blocked_stage\":\"blocked\",\"outputs\":{\"proposal_html\":\"string\",\"docx_export_ready\":\"boolean\"}}"
+        - Generic collection lifecycle (Q6 completion_json): "{\"final_stage\":\"complete\",\"guard_field\":\"work_units.all_terminal\",\"collection_lifecycle\":{\"version\":1,\"name\":\"work_units\",\"item_label\":\"work unit\",\"storage\":{\"items_path\":\"work_units.items_json\",\"event_path\":\"work_units.pending_event_json\",\"violation_path\":\"work_units.lifecycle_violation_json\"},\"item\":{\"id_field\":\"id\",\"status_field\":\"status\",\"schema\":{\"id\":\"string\",\"title\":\"string\",\"status\":\"string\"}},\"statuses\":[{\"name\":\"pending\",\"initial\":true},{\"name\":\"reviewed\",\"terminal\":true},{\"name\":\"removed\",\"terminal\":true}],\"transitions\":[{\"from\":\"pending\",\"to\":\"reviewed\",\"stage\":\"review_work\",\"action\":\"mark_reviewed\",\"managed_by\":\"llm\"}],\"aggregate\":{\"guard_field\":\"work_units.all_terminal\",\"terminal_statuses\":[\"reviewed\",\"removed\"],\"require_non_empty\":true}}}"
+
+        collection_lifecycle is optional. When provided, keep it generic:
+        neutral names such as items, work_units, or reviewable_records; no
+        domain-specific templates. The aggregate.guard_field is the completion
+        guard the synthesized program uses for the final transition.
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 

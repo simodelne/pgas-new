@@ -24,6 +24,40 @@ export interface SynthesisContext {
   completion: {
     final_stage: string;
     guard_field: string;
+    collection_lifecycle?: {
+      version: number;
+      name: string;
+      item_label: string;
+      storage: {
+        items_path: string;
+        event_path: string;
+        violation_path: string;
+      };
+      item: {
+        id_field: string;
+        status_field: string;
+        schema: Record<string, unknown>;
+      };
+      statuses: Array<{
+        name: string;
+        initial?: boolean;
+        terminal?: boolean;
+      }>;
+      transitions: Array<{
+        from: string;
+        to: string;
+        stage: string;
+        action: string;
+        managed_by: 'llm' | 'reaction';
+        trigger?: string;
+        guard_field?: string;
+      }>;
+      aggregate: {
+        guard_field: string;
+        terminal_statuses: string[];
+        require_non_empty: boolean;
+      };
+    };
   };
 }
 

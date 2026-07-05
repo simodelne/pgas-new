@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, type ReactionHandler } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
@@ -47,6 +47,42 @@ interface IntakeTransition {
 interface Completion {
   final_stage: string;
   guard_field: string;
+  collection_lifecycle?: CollectionLifecycleDescriptor;
+}
+
+interface CollectionLifecycleDescriptor {
+  version: number;
+  name: string;
+  item_label: string;
+  storage: {
+    items_path: string;
+    event_path: string;
+    violation_path: string;
+  };
+  item: {
+    id_field: string;
+    status_field: string;
+    schema: Record<string, unknown>;
+  };
+  statuses: Array<{
+    name: string;
+    initial?: boolean;
+    terminal?: boolean;
+  }>;
+  transitions: Array<{
+    from: string;
+    to: string;
+    stage: string;
+    action: string;
+    managed_by: 'llm' | 'reaction';
+    trigger?: string;
+    guard_field?: string;
+  }>;
+  aggregate: {
+    guard_field: string;
+    terminal_statuses: string[];
+    require_non_empty: boolean;
+  };
 }
 
 export interface SynthesizedSpec {
@@ -111,11 +147,20 @@ export function synthesizeProgramSpecFromDomain(
   const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
-  const completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
+  let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
+  const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
 
   assertStages(stages);
   assertTransitions(transitions);
   assertCompletion(completion);
+  if (collectionLifecycle) {
+    assertCollectionLifecycleDescriptor(collectionLifecycle);
+    completion = {
+      ...completion,
+      guard_field: collectionLifecycle.aggregate.guard_field,
+      collection_lifecycle: collectionLifecycle,
+    };
+  }
   transitions = refreshStaleTransitionsForStages(stages, transitions, completion) ?? transitions;
   const stageClassification = bindRepoIntegrations(
     classifyStagesForDomain({
@@ -268,6 +313,9 @@ export function synthesizeProgramSpecFromDomain(
       write_scope: [initialEntryPath],
     },
   };
+  if (completion.collection_lifecycle) {
+    applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
+  }
 
   spec.channels = {
     ...recordField(spec, 'channels'),
@@ -319,6 +367,9 @@ export function synthesizeProgramSpecFromDomain(
       }
     }
   }
+  if (completion.collection_lifecycle) {
+    applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
+  }
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
 
@@ -338,6 +389,7 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: './stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
+      collectionLifecycle: completion.collection_lifecycle,
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
@@ -346,6 +398,7 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: '../stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
+      collectionLifecycle: completion.collection_lifecycle,
     }, reasoningContractsBySlug),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug),
@@ -511,6 +564,31 @@ function applyControlPlaneEntryChannel(spec: MutableRecord, entryChannel: string
       record.channel = entryChannel;
     }
   }
+}
+
+function applyCollectionLifecycleReactions(
+  reactions: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor,
+): void {
+  reactions[collectionLifecycleReactionName(descriptor)] = {
+    event: 'AfterMutation',
+    watch: [descriptor.storage.items_path],
+    write_scope: [descriptor.aggregate.guard_field],
+  };
+}
+
+function applyCollectionLifecycleSchema(
+  schema: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor,
+): void {
+  schema[descriptor.storage.items_path] = 'string';
+  schema[descriptor.storage.event_path] = 'string';
+  schema[descriptor.storage.violation_path] = 'string';
+  schema[descriptor.aggregate.guard_field] = 'boolean';
+}
+
+function collectionLifecycleReactionName(descriptor: CollectionLifecycleDescriptor): string {
+  return `compute_${safeIdentifier(descriptor.name)}_all_terminal`;
 }
 
 function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
@@ -763,6 +841,7 @@ function renderHandlersSource(
     stageImportPrefix: string;
     initialEntryPath: string;
     entryPath: string;
+    collectionLifecycle?: CollectionLifecycleDescriptor;
   },
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
@@ -850,8 +929,14 @@ ${fieldResolvers}
   },`;
   }).join('\n\n');
   const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
+  const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
+    ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
+    : '';
+  const lifecycleReactionHelper = options.includeReactionHandlers && options.collectionLifecycle
+    ? `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  const raw = snapshot.get(itemsPath);\n  if (typeof raw !== 'string') {\n    return false;\n  }\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(raw) as unknown;\n  } catch {\n    return false;\n  }\n  if (!Array.isArray(parsed)) {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}`
+    : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }],\n]);`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${lifecycleReactionEntries},\n]);${lifecycleReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -916,6 +1001,22 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}
 };${reactionExport}${conformanceHelper}
 `;
+}
+
+function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleDescriptor): string {
+  return `,
+  [${tsString(collectionLifecycleReactionName(descriptor))}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    const allTerminal = collectionLifecycleAllTerminal(
+      snapshot,
+      ${tsString(descriptor.storage.items_path)},
+      ${tsString(descriptor.item.status_field)},
+      [${descriptor.aggregate.terminal_statuses.map(tsString).join(', ')}],
+      ${descriptor.aggregate.require_non_empty ? 'true' : 'false'},
+    );
+    return { mutations: [{ op: 'MSet' as const, path: ${tsString(descriptor.aggregate.guard_field)}, value: allTerminal }] };
+  }]`;
 }
 
 function renderToolsSource(
@@ -1390,6 +1491,57 @@ function normalizeGuardField(field: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+export function createCollectionLifecycleAllTerminalReaction(value: unknown): ReactionHandler {
+  const descriptor = normalizeCollectionLifecycleDescriptor(value);
+  if (!descriptor) {
+    throw new Error('collection_lifecycle descriptor is required');
+  }
+  assertCollectionLifecycleDescriptor(descriptor);
+  return (snapshot) => {
+    const allTerminal = collectionLifecycleAllTerminal(
+      snapshot,
+      descriptor.storage.items_path,
+      descriptor.item.status_field,
+      descriptor.aggregate.terminal_statuses,
+      descriptor.aggregate.require_non_empty,
+    );
+    return { mutations: [{ op: 'MSet' as const, path: descriptor.aggregate.guard_field, value: allTerminal }] };
+  };
+}
+
+function collectionLifecycleAllTerminal(
+  snapshot: ReadonlyMap<string, unknown>,
+  itemsPath: string,
+  statusField: string,
+  terminalStatuses: readonly string[],
+  requireNonEmpty: boolean,
+): boolean {
+  const raw = snapshot.get(itemsPath);
+  if (typeof raw !== 'string') {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed)) {
+    return false;
+  }
+  if (requireNonEmpty && parsed.length === 0) {
+    return false;
+  }
+  const terminal = new Set(terminalStatuses);
+  return parsed.every((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return false;
+    }
+    const status = (item as Record<string, unknown>)[statusField];
+    return typeof status === 'string' && terminal.has(status);
+  });
+}
+
 function promptForStage(
   modeName: string,
   programName: string,
@@ -1590,6 +1742,100 @@ function assertCompletion(completion: Completion): void {
   }
 }
 
+export function normalizeCollectionLifecycleDescriptor(value: unknown): CollectionLifecycleDescriptor | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const descriptor = requiredRecord(value, 'collection_lifecycle');
+  const storage = requiredRecord(descriptor.storage, 'collection_lifecycle.storage');
+  const item = requiredRecord(descriptor.item, 'collection_lifecycle.item');
+  const aggregate = requiredRecord(descriptor.aggregate, 'collection_lifecycle.aggregate');
+  const statuses = requiredArray(descriptor.statuses, 'collection_lifecycle.statuses').map((status, index) => {
+    const record = requiredRecord(status, `collection_lifecycle.statuses[${index}]`);
+    return {
+      name: requiredString(record.name, `collection_lifecycle.statuses[${index}].name`),
+      ...(record.initial === true ? { initial: true } : {}),
+      ...(record.terminal === true ? { terminal: true } : {}),
+    };
+  });
+  const transitions = requiredArray(descriptor.transitions, 'collection_lifecycle.transitions').map((transition, index) => {
+    const record = requiredRecord(transition, `collection_lifecycle.transitions[${index}]`);
+    const managedByRaw = requiredString(record.managed_by, `collection_lifecycle.transitions[${index}].managed_by`);
+    if (managedByRaw !== 'llm' && managedByRaw !== 'reaction') {
+      throw new Error(`collection_lifecycle.transitions[${index}].managed_by must be llm or reaction`);
+    }
+    const managedBy: CollectionLifecycleDescriptor['transitions'][number]['managed_by'] = managedByRaw;
+    return {
+      from: requiredString(record.from, `collection_lifecycle.transitions[${index}].from`),
+      to: requiredString(record.to, `collection_lifecycle.transitions[${index}].to`),
+      stage: requiredString(record.stage, `collection_lifecycle.transitions[${index}].stage`),
+      action: requiredString(record.action, `collection_lifecycle.transitions[${index}].action`),
+      managed_by: managedBy,
+      ...optionalStringProperty(record, 'trigger'),
+      ...optionalStringProperty(record, 'guard_field'),
+    };
+  });
+
+  return {
+    version: requiredNumber(descriptor.version, 'collection_lifecycle.version'),
+    name: requiredString(descriptor.name, 'collection_lifecycle.name'),
+    item_label: requiredString(descriptor.item_label, 'collection_lifecycle.item_label'),
+    storage: {
+      items_path: requiredString(storage.items_path, 'collection_lifecycle.storage.items_path'),
+      event_path: requiredString(storage.event_path, 'collection_lifecycle.storage.event_path'),
+      violation_path: requiredString(storage.violation_path, 'collection_lifecycle.storage.violation_path'),
+    },
+    item: {
+      id_field: requiredString(item.id_field, 'collection_lifecycle.item.id_field'),
+      status_field: requiredString(item.status_field, 'collection_lifecycle.item.status_field'),
+      schema: { ...requiredRecord(item.schema, 'collection_lifecycle.item.schema') },
+    },
+    statuses,
+    transitions,
+    aggregate: {
+      guard_field: requiredString(aggregate.guard_field, 'collection_lifecycle.aggregate.guard_field'),
+      terminal_statuses: requiredStringList(aggregate.terminal_statuses, 'collection_lifecycle.aggregate.terminal_statuses'),
+      require_non_empty: requiredBoolean(aggregate.require_non_empty, 'collection_lifecycle.aggregate.require_non_empty'),
+    },
+  };
+}
+
+export function assertCollectionLifecycleDescriptor(descriptor: CollectionLifecycleDescriptor): void {
+  if (!Array.isArray(descriptor.statuses) || descriptor.statuses.length === 0) {
+    throw new Error('collection_lifecycle.statuses must declare at least one status');
+  }
+  const statusNames = descriptor.statuses.map((status) => status.name);
+  const statusNameSet = new Set(statusNames);
+  if (statusNameSet.size !== statusNames.length) {
+    throw new Error('collection_lifecycle.statuses names must be unique');
+  }
+  if (!descriptor.statuses.some((status) => status.initial === true)) {
+    throw new Error('collection_lifecycle.statuses must declare an initial status');
+  }
+
+  const actionNames = descriptor.transitions.map((transition) => transition.action);
+  if (new Set(actionNames).size !== actionNames.length) {
+    throw new Error('collection_lifecycle.transitions must not contain duplicate action names');
+  }
+
+  for (const transition of descriptor.transitions) {
+    if (!statusNameSet.has(transition.from)) {
+      throw new Error(`collection_lifecycle transition ${transition.action} has unknown from status: ${transition.from}`);
+    }
+    if (!statusNameSet.has(transition.to)) {
+      throw new Error(`collection_lifecycle transition ${transition.action} has unknown to status: ${transition.to}`);
+    }
+  }
+
+  const unknownTerminalStatuses = descriptor.aggregate.terminal_statuses.filter((status) => !statusNameSet.has(status));
+  if (unknownTerminalStatuses.length > 0) {
+    throw new Error(`collection_lifecycle.aggregate.terminal_statuses must be a subset of statuses; unknown: ${unknownTerminalStatuses.join(', ')}`);
+  }
+  if (!normalizeGuardField(descriptor.aggregate.guard_field)) {
+    throw new Error('collection_lifecycle.aggregate.guard_field is required');
+  }
+}
+
 function assertCompletionTransition(transitions: IntakeTransition[], completion: Completion): void {
   if (!transitions.some((transition) => transition.to === completion.final_stage)) {
     throw new Error(`completion.final_stage must have an incoming transition guarded by completion.guard_field; got ${completion.final_stage}`);
@@ -1610,6 +1856,56 @@ function parseJsonDomainField<T>(domain: Record<string, unknown>, path: string):
     throw new Error(`missing JSON-string domain field: ${path}`);
   }
   return JSON.parse(value) as T;
+}
+
+function requiredRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  return value;
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function requiredStringList(value: unknown, label: string): string[] {
+  return requiredArray(value, label).map((item, index) => requiredString(item, `${label}[${index}]`));
+}
+
+function requiredNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite number`);
+  }
+  return value;
+}
+
+function requiredBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function optionalStringProperty(
+  record: Record<string, unknown>,
+  key: 'trigger' | 'guard_field',
+): Partial<Record<'trigger' | 'guard_field', string>> {
+  const value = record[key];
+  if (value === undefined) {
+    return {};
+  }
+  return { [key]: requiredString(value, `collection_lifecycle.transitions[].${key}`) };
 }
 
 /**
