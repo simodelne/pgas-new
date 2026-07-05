@@ -7,6 +7,8 @@ import { renderMissingWiringRequest } from '../pgas-new/curator-request.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import { graduationEvidenceRows, renderFinalizedGraduationAudit } from '../pgas-new/graduation-audit.js';
 import { sanitizedVerificationEnv } from '../pgas-new/verification-env.js';
+import { driveGeneratedProgramLive } from '../pgas-new/generated-live-drive.js';
+import { findExecutedPathStubMarkers } from '../pgas-new/verify.js';
 import {
   WIRING_MANIFEST_PATH,
   isSafeRepoRelativePath,
@@ -192,6 +194,7 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
   ['normalize_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.static_verification')],
   ['normalize_smoke_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.smoke_verification')],
   ['normalize_live_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.live_verification')],
+  ['normalize_generated_live_drive_status', (snapshot) => normalizeGeneratedLiveDriveStatus(snapshot)],
   ['normalize_rebase_status', (snapshot) => normalizeRebaseStatus(snapshot, 'graduation.rebase_status')],
   ['normalize_rebase_static_verification_status', (snapshot) => normalizeVerificationStatus(snapshot, 'graduation.rebase_verification')],
   ['normalize_intake_json_fields', (snapshot) => {
@@ -223,6 +226,40 @@ function normalizeVerificationStatus(snapshot: ReadonlyMap<string, unknown>, sta
   const canonical = canonicalizeVerificationStatus(rawStatus);
   if (!canonical || rawStatus === canonical) return undefined;
   return { mutations: [{ op: 'MSet' as const, path: statusPath, value: canonical }] };
+}
+
+/**
+ * The generated live-drive status is normalized with the DETERMINISTIC handler
+ * report taking precedence over the LLM-echoed `status` arg. The engine model
+ * predicts the `status` arg before the handler runs (see normalizeRebaseStatus
+ * below), so without this a mispredicted arg could fake a pass/fail. The
+ * handler's result envelope lands at graduation.generated_live_drive_report via
+ * result_path and is the authoritative outcome when present.
+ */
+function normalizeGeneratedLiveDriveStatus(snapshot: ReadonlyMap<string, unknown>) {
+  const statusPath = 'graduation.generated_live_drive';
+  const report = snapshot.get('graduation.generated_live_drive_report');
+  const reportRecord = report && typeof report === 'object' && !Array.isArray(report)
+    ? (report as Record<string, unknown>)
+    : undefined;
+  const mutations: Array<{ op: 'MSet'; path: string; value: unknown }> = [];
+
+  const reportStatus = typeof reportRecord?.status === 'string'
+    ? canonicalizeVerificationStatus(reportRecord.status)
+    : undefined;
+  if (reportStatus) {
+    if (snapshot.get(statusPath) !== reportStatus) {
+      mutations.push({ op: 'MSet', path: statusPath, value: reportStatus });
+    }
+    const reportEvidenceId = reportRecord?.evidence_id;
+    if (typeof reportEvidenceId === 'string' && reportEvidenceId.length > 0 &&
+        snapshot.get('graduation.generated_live_drive_evidence_id') !== reportEvidenceId) {
+      mutations.push({ op: 'MSet', path: 'graduation.generated_live_drive_evidence_id', value: reportEvidenceId });
+    }
+    return mutations.length > 0 ? { mutations } : undefined;
+  }
+
+  return normalizeVerificationStatus(snapshot, statusPath);
 }
 
 /**
@@ -903,6 +940,88 @@ export const handlers: Record<string, ToolHandler> = {
   },
 
   /**
+   * run_generated_live_drive_verification
+   * side effects: probes the provider URL, then boots the generated program on
+   * a real engine inside program.target_dir and drives it to its completion
+   * stage with the REAL provider making every stage/reasoning decision (all
+   * provider traffic is counted through an in-process proxy — a canned
+   * fallback cannot fake a pass). Hard graduation gate: the transition to
+   * rebase_verify requires the recorded status to be exactly 'passed'.
+   * secret redaction: provider URL may be returned on SKIP; API keys/env
+   * values are never logged or returned.
+   * cwd safety: cwd must resolve inside program.target_dir.
+   */
+  async run_generated_live_drive_verification(payload) {
+    const cwd = safeCwd(payload);
+    const domain = optionalDomainFromPayload(payload);
+    const requireLive = process.env.PGAS_REQUIRE_LIVE === '1';
+    const providerUrl = process.env.PGAS_OPENAI_BASE_URL ?? 'http://100.100.74.6:8000/v1';
+    const model = process.env.PGAS_OPENAI_MODEL ?? process.env.PGAS_MODEL ?? '';
+    if (model.trim().length === 0) {
+      return {
+        kind: 'generated_live_drive_verification',
+        status: requireLive ? 'failed' : 'skipped',
+        reason: 'no provider model configured (PGAS_OPENAI_MODEL or PGAS_MODEL)',
+      };
+    }
+    if (!(await isReachable(providerUrl))) {
+      return {
+        kind: 'generated_live_drive_verification',
+        status: requireLive ? 'failed' : 'skipped',
+        reason: `provider unreachable: ${providerUrl}`,
+      };
+    }
+
+    const slug = optionalStringPayloadField(payload, 'slug')
+      ?? (domain ? optionalStringDomainField(domain, 'program.slug') : undefined);
+    if (!slug) {
+      throw new Error('run_generated_live_drive_verification requires program.slug in payload or domain snapshot');
+    }
+    const purpose = (domain ? optionalStringDomainField(domain, 'intake.purpose') : undefined)
+      ?? 'the generated program workflow';
+    const completion = parseGeneratedCompletion(domain);
+    const entryChannel = generatedEntryChannel(domain);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir: cwd,
+      slug,
+      providerBaseUrl: providerUrl,
+      model,
+      entryChannel,
+      initialText: `Live graduation drive request. ${purpose}`,
+      finalStage: completion,
+      driveTimeoutMs: 540_000,
+    });
+
+    const stubFindings = generatedStageOutputStubFindings(drive.world);
+    const failureReasons: string[] = [];
+    if (drive.final_mode !== completion) {
+      failureReasons.push(`final mode ${String(drive.final_mode)} did not reach completion stage ${completion}`);
+    }
+    if (drive.provider_hits < 1) {
+      failureReasons.push('no successful provider round trips were observed during the drive');
+    }
+    if (stubFindings.length > 0) {
+      failureReasons.push(`stage outputs contain stub markers: ${stubFindings.slice(0, 3).join('; ')}`);
+    }
+    if (drive.runner_error) {
+      failureReasons.push(`drive runner error: ${tail(drive.runner_error)}`);
+    }
+
+    return {
+      kind: 'generated_live_drive_verification',
+      status: failureReasons.length === 0 ? 'passed' : 'failed',
+      evidence_id: evidenceId('live-drive'),
+      final_mode: drive.final_mode ?? '',
+      terminal: drive.terminal,
+      rounds: drive.rounds,
+      provider_hits: drive.provider_hits,
+      drive_actions: drive.actions.join(','),
+      ...(failureReasons.length > 0 ? { reason: failureReasons.join(' | ') } : {}),
+    };
+  },
+
+  /**
    * web_research
    * side effects: none in v3.0; returns a stub and records integration debt.
    * secret redaction: no env values, API keys, or external results are read.
@@ -1079,6 +1198,8 @@ function finalizeGraduationAudit(
     smoke_evidence_id: optionalStringDomainField(domain, 'graduation.smoke_evidence_id'),
     live_verification: optionalStringDomainField(domain, 'graduation.live_verification'),
     live_evidence_id: optionalStringDomainField(domain, 'graduation.live_evidence_id'),
+    generated_live_drive: optionalStringDomainField(domain, 'graduation.generated_live_drive'),
+    generated_live_drive_evidence_id: optionalStringDomainField(domain, 'graduation.generated_live_drive_evidence_id'),
     rebase_status: optionalStringDomainField(domain, 'graduation.rebase_status'),
     rebase_evidence_id: optionalStringDomainField(domain, 'graduation.rebase_evidence_id'),
     rebase_verification: postRebaseStatus,
@@ -1561,6 +1682,48 @@ function skippedCommandResult(command: string, reason: string, prefix: string): 
 
 function evidenceId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}`;
+}
+
+function parseGeneratedCompletion(domain: Record<string, unknown> | undefined): string {
+  const raw = domain ? optionalStringDomainField(domain, 'intake.completion_json') : undefined;
+  if (!raw) return 'complete';
+  try {
+    const parsed = JSON.parse(raw) as { final_stage?: unknown };
+    return typeof parsed.final_stage === 'string' && parsed.final_stage.trim().length > 0
+      ? parsed.final_stage.trim()
+      : 'complete';
+  } catch {
+    return 'complete';
+  }
+}
+
+/** Mirrors the synthesizer's normalizePgasChannelId semantics for the drive trigger. */
+function generatedEntryChannel(domain: Record<string, unknown> | undefined): string {
+  const raw = domain ? optionalStringDomainField(domain, 'intake.entry_channel') : undefined;
+  if (!raw) return 'user_text';
+  const lowered = raw.trim().toLowerCase();
+  if (/\bfrontend_intake\b/u.test(lowered)) return 'frontend_intake';
+  if (/\buser_text\b/u.test(lowered)) return 'user_text';
+  const slug = lowered.replace(/[^a-z0-9_]+/gu, '_').replace(/_+/gu, '_').replace(/^_+|_+$/gu, '');
+  return slug.length > 0 && slug.length <= 64 ? slug : 'user_text';
+}
+
+/**
+ * Anti-stub scan scoped to executed stage outputs (`<stage>.result_json`,
+ * `<stage>.items_json`, `<stage>.output*`) — the world also carries inputs and
+ * bookkeeping paths that are not executed-path work product.
+ */
+function generatedStageOutputStubFindings(world: Record<string, unknown>): string[] {
+  const findings: string[] = [];
+  for (const [key, value] of Object.entries(world)) {
+    if (!/\.(result_json|items_json|output)($|\.)/u.test(key) && !/\.result($|\.)/u.test(key)) {
+      continue;
+    }
+    for (const finding of findExecutedPathStubMarkers(value)) {
+      findings.push(`${key}${finding.path}: ${finding.marker}`);
+    }
+  }
+  return findings;
 }
 
 function tail(value: string): string {

@@ -45,6 +45,7 @@ const semanticTools = [
   'confirm_live_provider_intent',
   'run_api_blackbox_verification',
   'run_live_provider_verification',
+  'run_generated_live_drive_verification',
   'git_status',
   'git_rebase_latest',
   'run_rebase_static_verification',

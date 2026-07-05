@@ -18,6 +18,8 @@ describe('#100 graduation audit reconciliation', () => {
       smoke_evidence_id: 'smoke-1',
       live_verification: 'passed',
       live_evidence_id: 'live-1',
+      generated_live_drive: 'passed',
+      generated_live_drive_evidence_id: 'live-drive-1',
       rebase_status: 'passed',
       rebase_evidence_id: 'rebase-1',
       rebase_verification: 'passed',
@@ -28,9 +30,15 @@ describe('#100 graduation audit reconciliation', () => {
       { label: 'Static verification', status: 'passed', evidenceId: 'static-1' },
       { label: 'Smoke verification', status: 'passed', evidenceId: 'smoke-1' },
       { label: 'Live provider verification', status: 'passed', evidenceId: 'live-1' },
+      { label: 'Generated live drive', status: 'passed', evidenceId: 'live-drive-1' },
       { label: 'Rebase', status: 'passed', evidenceId: 'rebase-1' },
       { label: 'Post-rebase verification', status: 'passed', evidenceId: 'rebase-static-1' },
     ]);
+  });
+
+  it('renders an unrecorded generated live drive as pending (hard gate stays honest)', () => {
+    const rows = graduationEvidenceRows({ live_verification: 'passed', live_evidence_id: 'live-1' });
+    expect(rows[3]).toEqual({ label: 'Generated live drive', status: 'pending' });
   });
 
   it('renders unrecorded rungs as pending (honest) without a stray evidence id', () => {

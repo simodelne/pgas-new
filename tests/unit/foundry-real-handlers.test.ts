@@ -365,6 +365,59 @@ describe('verification handlers', () => {
       restoreEnv('PGAS_REQUIRE_LIVE', previousRequireLive);
     }
   });
+
+  it('skips the generated live drive when no provider model is configured', async () => {
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    const previousPgasModel = process.env.PGAS_MODEL;
+    delete process.env.PGAS_OPENAI_MODEL;
+    delete process.env.PGAS_MODEL;
+    try {
+      await expect(handlers.run_generated_live_drive_verification(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'skipped',
+        reason: expect.stringContaining('no provider model configured'),
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+      restoreEnv('PGAS_MODEL', previousPgasModel);
+    }
+  });
+
+  it('skips the generated live drive when the provider is unreachable', async () => {
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    try {
+      await expect(handlers.run_generated_live_drive_verification(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'skipped',
+        reason: expect.stringContaining('provider unreachable'),
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
+
+  it('fails the generated live drive when unreachable and PGAS_REQUIRE_LIVE=1 (hard gate stays blocked)', async () => {
+    const previousRequireLive = process.env.PGAS_REQUIRE_LIVE;
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_REQUIRE_LIVE = '1';
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    try {
+      await expect(handlers.run_generated_live_drive_verification(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'failed',
+        reason: expect.stringContaining('provider unreachable'),
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv('PGAS_REQUIRE_LIVE', previousRequireLive);
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
 });
 
 describe('web_research', () => {

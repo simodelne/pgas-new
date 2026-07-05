@@ -52,7 +52,12 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
     'run_parallel_static_checks',
   ],
   smoke_verify: [...SESSION_CONTROL_ACTIONS, 'run_smoke_verification', 'confirm_live_provider_intent'],
-  live_verify: [...SESSION_CONTROL_ACTIONS, 'run_api_blackbox_verification', 'run_live_provider_verification'],
+  live_verify: [
+    ...SESSION_CONTROL_ACTIONS,
+    'run_api_blackbox_verification',
+    'run_live_provider_verification',
+    'run_generated_live_drive_verification',
+  ],
   rebase_verify: [...SESSION_CONTROL_ACTIONS, 'git_status', 'git_rebase_latest', 'run_rebase_static_verification'],
   pr_graduation: [...SESSION_CONTROL_ACTIONS, 'open_pull_request'],
   curator_request: [...SESSION_CONTROL_ACTIONS, 'create_curator_request', 'record_user_note'],
@@ -123,9 +128,14 @@ export function canTransition(
     case 'smoke_verify->live_verify':
       return canEnterLiveVerify(state);
     case 'live_verify->rebase_verify':
-      return state.graduation.live_verification === 'passed'
+      // Hard-required generated live-drive gate: a fail OR skip/absent (pending)
+      // live-drive result BLOCKS graduation — only an explicit 'passed' crosses.
+      if (state.graduation.live_verification !== 'passed') {
+        return deny('rebase_verify_requires_live_verification_passed');
+      }
+      return state.graduation.generated_live_drive === 'passed'
         ? allow()
-        : deny('rebase_verify_requires_live_verification_passed');
+        : deny('rebase_verify_requires_generated_live_drive_passed');
     case 'rebase_verify->pr_graduation':
       return canEnterPrGraduation(state);
     case 'curator_request->repo_targeting':
@@ -176,9 +186,21 @@ function isActionStateAllowed(state: PgasNewState, mode: PgasNewMode, action: Pg
 
   if (
     mode === 'live_verify' &&
-    (action === 'run_api_blackbox_verification' || action === 'run_live_provider_verification')
+    (action === 'run_api_blackbox_verification' ||
+      action === 'run_live_provider_verification' ||
+      action === 'run_generated_live_drive_verification')
   ) {
-    return canEnterLiveVerify(state);
+    const gate = canEnterLiveVerify(state);
+    if (!gate.allowed) {
+      return gate;
+    }
+    // Mirrors the spec precondition: recording live verification is blocked
+    // until the generated live drive has explicitly passed (hard gate — a
+    // failed/skipped/absent drive keeps graduation.live_verification pending).
+    if (action === 'run_live_provider_verification' && state.graduation.generated_live_drive !== 'passed') {
+      return deny('live_provider_verification_requires_generated_live_drive_passed');
+    }
+    return gate;
   }
 
   if (action === 'run_smoke_verification' && state.graduation.static_verification !== 'passed') {

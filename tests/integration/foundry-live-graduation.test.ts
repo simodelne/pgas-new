@@ -51,6 +51,7 @@ const REQUIRED_ACTIONS = [
   'run_static_verification',
   'run_smoke_verification',
   'confirm_live_provider_intent',
+  'run_generated_live_drive_verification',
   'run_live_provider_verification',
   'git_rebase_latest',
   'run_rebase_static_verification',
@@ -112,6 +113,10 @@ describe('live foundry graduation gate', () => {
     expect(result.world['graduation.static_verification']).toBe('passed');
     expect(result.world['graduation.smoke_verification']).toBe('passed');
     expect(result.world['graduation.live_verification']).toBe('passed');
+    // Hard live-drive gate: run_live_provider_verification is
+    // precondition-blocked until the generated live drive records 'passed',
+    // so a graduated session MUST carry this evidence.
+    expect(result.world['graduation.generated_live_drive']).toBe('passed');
     expect(result.world['graduation.rebase_status']).toBe('passed');
     expect(result.world['graduation.rebase_verification']).toBe('passed');
     expect(result.generatedChecks.map((check) => check.status)).toEqual(['passed', 'passed', 'passed', 'passed']);

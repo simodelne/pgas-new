@@ -309,6 +309,10 @@ function successAuthorResponses(targetDir: string): TestHarnessAuthorResponse[] 
     effect('run_static_verification', { status: 'passed', evidence_id: 'static-e2e' }),
     markSmokeVerificationPassed(),
     effect('confirm_live_provider_intent'),
+    // The generated live drive must pass BEFORE live-provider verification:
+    // run_live_provider_verification carries a spec precondition on
+    // graduation.generated_live_drive == passed (the hard live-drive gate).
+    markGeneratedLiveDrivePassed(),
     markLiveVerificationPassed(),
     markRebasePassed(),
     effect('run_rebase_static_verification', { status: 'passed', evidence_id: 'rebase-static-e2e' }),
@@ -339,6 +343,8 @@ function successWithVerificationStatusSynonyms(targetDir: string): TestHarnessAu
         return effect('run_smoke_verification', { status: 'succeeded', evidence_id: 'smoke-synonym' });
       case 'run_live_provider_verification':
         return effect('run_live_provider_verification', { status: 'succeeded', evidence_id: 'live-synonym' });
+      case 'run_generated_live_drive_verification':
+        return markGeneratedLiveDrivePassed('succeeded', 'live-drive-synonym');
       case 'git_rebase_latest':
         return effect('git_rebase_latest', { status: 'succeeded', evidence_id: 'rebase-synonym' });
       case 'run_rebase_static_verification':
@@ -418,6 +424,32 @@ function markLiveVerificationPassed(): TestHarnessAuthorResponse {
     actions: [
       mutation('run_live_provider_verification', 'graduation.live_verification', 'passed'),
       mutation('run_live_provider_verification', 'graduation.live_evidence_id', 'live-e2e'),
+      terminal('session_status', continuationNotice()),
+    ],
+  };
+}
+
+/**
+ * Scripted stand-in for the generated live-drive gate (hard-required for
+ * live_verify -> rebase_verify). Hermetic flows mark the status by direct
+ * mutation — mirroring markLiveVerificationPassed — because the real handler
+ * boots the generated program against a live provider, which the hermetic
+ * suite must never do. The derive_live_gate_passed reaction ANDs this with
+ * graduation.live_verification to unlock rebase_verify.
+ */
+function markGeneratedLiveDrivePassed(
+  status = 'passed',
+  evidenceId = 'live-drive-e2e',
+): TestHarnessAuthorResponse {
+  return {
+    actions: [
+      mutation('run_generated_live_drive_verification', 'graduation.generated_live_drive', status),
+      mutation('run_generated_live_drive_verification', 'graduation.generated_live_drive_evidence_id', evidenceId),
+      // The recorded flag is what the normalize reaction watches (RC-4 forbids
+      // watching the status path itself) — without it a status synonym would
+      // never canonicalize and the run_live_provider_verification precondition
+      // (FieldEquals 'passed') would stall the ladder.
+      mutation('run_generated_live_drive_verification', 'graduation.generated_live_drive_recorded', true),
       terminal('session_status', continuationNotice()),
     ],
   };

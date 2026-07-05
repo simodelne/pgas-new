@@ -3,7 +3,7 @@ import type { CommandRequest, CommandResult, CommandRunner, SemanticCommandId } 
 export type VerificationStatus = 'pass' | 'fail' | 'skip';
 
 export interface VerificationEvidence {
-  command_id: SemanticCommandId | 'antiStubScan' | 'liveProviderRoundTrip';
+  command_id: SemanticCommandId | 'antiStubScan' | 'liveProviderRoundTrip' | 'generatedLiveDrive';
   cwd: string;
   exit_code: number | null;
   duration_ms: number;
@@ -145,6 +145,87 @@ export async function runLiveProviderVerification(
     {
       ...result,
       command_id: 'liveProviderRoundTrip',
+      cwd: options.cwd,
+    },
+  ];
+}
+
+export interface GeneratedLiveDriveVerifier {
+  verify(request: {
+    cwd: string;
+    env: Record<string, string | undefined>;
+  }): Promise<Omit<VerificationEvidence, 'command_id' | 'cwd'>>;
+}
+
+/**
+ * Generated-program live-drive rung (hard-required for graduation): a rendered
+ * generated program must be driven to its completion stage by a REAL provider
+ * making the per-stage/reasoning decisions. Mirrors runLiveProviderVerification:
+ * missing env skips (or fails under PGAS_REQUIRE_LIVE=1); env present without a
+ * verifier fails — graduation must never silently pass this rung.
+ */
+export async function runGeneratedLiveDriveVerification(
+  options: { cwd: string; env: Record<string, string | undefined>; verifier?: GeneratedLiveDriveVerifier },
+): Promise<VerificationEvidence[]> {
+  const requireLive = options.env.PGAS_REQUIRE_LIVE === '1';
+  const model = nonEmpty(options.env.PGAS_OPENAI_MODEL) ?? nonEmpty(options.env.PGAS_MODEL);
+  if (!nonEmpty(options.env.PGAS_OPENAI_BASE_URL) || !model) {
+    if (requireLive) {
+      return [
+        {
+          command_id: 'generatedLiveDrive',
+          cwd: options.cwd,
+          duration_ms: 0,
+          exit_code: 1,
+          status: 'fail',
+          stderr_excerpt: 'PGAS_REQUIRE_LIVE=1 requires PGAS_OPENAI_BASE_URL and PGAS_OPENAI_MODEL (or PGAS_MODEL)',
+        },
+      ];
+    }
+    return [
+      {
+        command_id: 'generatedLiveDrive',
+        cwd: options.cwd,
+        duration_ms: 0,
+        exit_code: null,
+        status: 'skip',
+        stdout_excerpt: 'missing PGAS_OPENAI_BASE_URL or PGAS_OPENAI_MODEL/PGAS_MODEL',
+      },
+    ];
+  }
+
+  if (!options.verifier) {
+    return [
+      {
+        command_id: 'generatedLiveDrive',
+        cwd: options.cwd,
+        duration_ms: 0,
+        exit_code: null,
+        status: 'fail',
+        stderr_excerpt:
+          'generated live-drive env present (PGAS_OPENAI_BASE_URL + model) but verifier not configured — graduation cannot proceed',
+      },
+    ];
+  }
+
+  const result = await options.verifier.verify({ cwd: options.cwd, env: options.env });
+  if (requireLive && result.status === 'skip') {
+    return [
+      {
+        ...result,
+        command_id: 'generatedLiveDrive',
+        cwd: options.cwd,
+        exit_code: result.exit_code === null || result.exit_code === 0 ? 1 : result.exit_code,
+        status: 'fail',
+        stderr_excerpt: result.stderr_excerpt ?? 'PGAS_REQUIRE_LIVE=1 forbids skipped generated live-drive verification',
+      },
+    ];
+  }
+
+  return [
+    {
+      ...result,
+      command_id: 'generatedLiveDrive',
       cwd: options.cwd,
     },
   ];
