@@ -146,6 +146,42 @@ describe('intake Q-action handlers', () => {
     });
   });
 
+  it('record_q5_delegation accepts per-stage execution model payloads', async () => {
+    const delegation = {
+      stages: {
+        draft: { kind: 'llm-reasoning', reasoning_per_turn: true },
+        fee_model: { kind: 'pure-compute' },
+        crm_lookup: { kind: 'external-adapter' },
+      },
+    };
+
+    await expect(
+      handlers.record_q5_delegation({ delegation_json: JSON.stringify(delegation) }),
+    ).resolves.toEqual({
+      kind: 'pgas_new_q5_delegation_recorded',
+      delegation,
+      delegation_json: JSON.stringify(delegation),
+    });
+  });
+
+  it('record_q5_delegation keeps legacy empty-delegation shapes backward compatible', async () => {
+    const cases = [
+      { raw: '{}', expected: {} },
+      { raw: '{"enabled":false}', expected: { enabled: false } },
+      { raw: 'none', expected: { enabled: false } },
+    ];
+
+    for (const { raw, expected } of cases) {
+      await expect(
+        handlers.record_q5_delegation({ delegation_json: raw }),
+      ).resolves.toMatchObject({
+        kind: 'pgas_new_q5_delegation_recorded',
+        delegation: expected,
+        delegation_json: JSON.stringify(expected),
+      });
+    }
+  });
+
   it('record_q5_delegation repairs a brace-dropped bare mapping (Qwen live variance)', async () => {
     // Observed live 2026-07-04 (UAT scenario A attempt 1, Qwen qwen36-27b):
     // for the user reply "none", Qwen emitted delegation_json "enabled: false"

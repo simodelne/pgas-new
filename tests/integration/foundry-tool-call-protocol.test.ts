@@ -146,9 +146,14 @@ describe('foundry intake tool-call protocol guidance', () => {
       expect(stringPropertyDescription(captured.transitionsTool, 'transitions_json')).toContain(
         'Array (Q4 transitions_json): "[{\\"from\\":\\"intake\\",\\"to\\":\\"analysis\\",\\"guard_field\\":\\"intake.ready\\"}]"',
       );
-      expect(stringPropertyDescription(captured.delegationTool, 'delegation_json')).toContain(
-        'Object (Q5 delegation_json): "{\\"enabled\\": false, \\"target\\": \\"team-X\\"}"',
+      const delegationDescription = stringPropertyDescription(captured.delegationTool, 'delegation_json');
+      expect(delegationDescription).toContain(
+        'No explicit per-stage override: "{}" or "{\\"enabled\\": false}".',
       );
+      expect(delegationDescription).toContain('Optional per-stage execution model:');
+      expect(delegationDescription).toContain('\\"stages\\":{\\"scope_definition\\"');
+      expect(delegationDescription).toContain('Legacy direct per-stage kind control is still accepted');
+      expect(delegationDescription).toContain('reasoning_per_turn=true');
       expect(stringPropertyDescription(captured.completionTool, 'completion_json')).toContain(
         'Object (Q6 completion_json): "{\\"final_stage\\": \\"complete\\", \\"guard_field\\": \\"work.done\\"}"',
       );
