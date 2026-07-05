@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { loadSpecWithPatterns, type ReactionHandler } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
@@ -129,6 +129,8 @@ interface PlannedTransitionAction {
 }
 
 const PGAS_CHANNEL_ID_MAX_LENGTH = 64;
+const COLLECTION_LIFECYCLE_EVENT_CHANNEL = 'lifecycle_event';
+const COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE = '';
 
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -240,6 +242,9 @@ export function synthesizeProgramSpecFromDomain(
   applyTransitions(synthesizedModes, transitionActions, modeNames);
   applyModeVocabularies(synthesizedModes, transitionActionsBySource, terminalModeSet);
   applyStageOutputChannels(synthesizedModes, transitionActions);
+  if (completion.collection_lifecycle) {
+    applyCollectionLifecycleIntentModeWiring(synthesizedModes, completion.collection_lifecycle);
+  }
   spec.modes = synthesizedModes;
 
   spec.proceed_to = Object.fromEntries(transitionActions.map((action) => [action.name, action.target]));
@@ -322,6 +327,9 @@ export function synthesizeProgramSpecFromDomain(
     [entryChannel]: { direction: 'In', sync: 'Async' },
     stage_output: { direction: 'Out', sync: 'Sync' },
   };
+  if (completion.collection_lifecycle) {
+    applyCollectionLifecycleIntentChannel(recordField(spec, 'channels'), completion.collection_lifecycle);
+  }
   applyControlPlaneEntryChannel(spec, entryChannel);
 
   const actionMap = recordField(spec, 'action_map');
@@ -332,6 +340,9 @@ export function synthesizeProgramSpecFromDomain(
   }
   for (const action of transitionActions) {
     actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source), reasoningContractsBySlug.get(action.source));
+  }
+  if (completion.collection_lifecycle) {
+    applyCollectionLifecycleIntentActions(actionMap, completion.collection_lifecycle);
   }
 
   const schema = recordField(spec, 'schema');
@@ -400,7 +411,7 @@ export function synthesizeProgramSpecFromDomain(
       entryPath: `inputs.${entryChannel}`,
       collectionLifecycle: completion.collection_lifecycle,
     }, reasoningContractsBySlug),
-    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug),
+    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
@@ -570,9 +581,20 @@ function applyCollectionLifecycleReactions(
   reactions: MutableRecord,
   descriptor: CollectionLifecycleDescriptor,
 ): void {
+  const hasLlmTransitions = collectionLifecycleLlmTransitions(descriptor).length > 0;
+  if (hasLlmTransitions) {
+    reactions[collectionLifecycleApplyReactionName(descriptor)] = {
+      event: 'AfterRound',
+      write_scope: [
+        descriptor.storage.items_path,
+        descriptor.storage.event_path,
+        descriptor.storage.violation_path,
+      ],
+    };
+  }
   reactions[collectionLifecycleReactionName(descriptor)] = {
-    event: 'AfterMutation',
-    watch: [descriptor.storage.items_path],
+    event: hasLlmTransitions ? 'AfterRound' : 'AfterMutation',
+    ...(hasLlmTransitions ? {} : { watch: [descriptor.storage.items_path] }),
     write_scope: [descriptor.aggregate.guard_field],
   };
 }
@@ -589,6 +611,60 @@ function applyCollectionLifecycleSchema(
 
 function collectionLifecycleReactionName(descriptor: CollectionLifecycleDescriptor): string {
   return `compute_${safeIdentifier(descriptor.name)}_all_terminal`;
+}
+
+function collectionLifecycleApplyReactionName(descriptor: CollectionLifecycleDescriptor): string {
+  return `apply_${safeIdentifier(descriptor.name)}_lifecycle_event`;
+}
+
+function collectionLifecycleLlmTransitions(
+  descriptor: CollectionLifecycleDescriptor,
+): CollectionLifecycleDescriptor['transitions'] {
+  return descriptor.transitions.filter((transition) => transition.managed_by === 'llm');
+}
+
+function applyCollectionLifecycleIntentChannel(
+  channels: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor,
+): void {
+  if (collectionLifecycleLlmTransitions(descriptor).length === 0) {
+    return;
+  }
+  channels[COLLECTION_LIFECYCLE_EVENT_CHANNEL] = { direction: 'Out', sync: 'Sync' };
+}
+
+function applyCollectionLifecycleIntentModeWiring(
+  modes: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor,
+): void {
+  const transitions = collectionLifecycleLlmTransitions(descriptor);
+  if (transitions.length === 0) {
+    return;
+  }
+  for (const transition of transitions) {
+    const mode = recordField(modes, transition.stage);
+    const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
+    const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+    mode.vocabulary = unique([...vocabulary, transition.action]);
+    mode.channels = unique([...channels, COLLECTION_LIFECYCLE_EVENT_CHANNEL]);
+  }
+}
+
+function applyCollectionLifecycleIntentActions(
+  actionMap: MutableRecord,
+  descriptor: CollectionLifecycleDescriptor,
+): void {
+  for (const transition of collectionLifecycleLlmTransitions(descriptor)) {
+    if (Object.prototype.hasOwnProperty.call(actionMap, transition.action)) {
+      throw new Error(`collection_lifecycle transition action collides with generated action_map: ${transition.action}`);
+    }
+    actionMap[transition.action] = {
+      description: `Record a lifecycle intent for ${descriptor.item_label} status ${transition.to}.`,
+      result_path: descriptor.storage.event_path,
+      mutations: [],
+      channel: COLLECTION_LIFECYCLE_EVENT_CHANNEL,
+    };
+  }
 }
 
 function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
@@ -854,6 +930,9 @@ function renderHandlersSource(
   },`
     : '';
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
+  const lifecycleTransitions = options.collectionLifecycle
+    ? collectionLifecycleLlmTransitions(options.collectionLifecycle)
+    : [];
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
@@ -928,12 +1007,26 @@ ${fieldResolvers}
     return normalizeStageOutput(output, ${tsString(action.source)}, ${tsString(action.archetype)}, ${action.adapter_kind ? tsString(action.adapter_kind) : 'undefined'});
   },`;
   }).join('\n\n');
+  const lifecycleActionHandlers = lifecycleTransitions.map((transition) => `  async ${transition.action}(payload) {
+    return collectionLifecycleIntentEvent(payload as HandlerPayload, ${tsString(transition.action)}, ${tsString(transition.to)}, ${tsString(transition.from)});
+  },`).join('\n\n');
   const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
+  const lifecycleIntentHelper = lifecycleTransitions.length > 0
+    ? `
+
+function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string, to: string, from: string): string {
+  const itemId = resolveDomainValue<string>(payload, 'item_id', '').trim();
+  if (itemId.length === 0) {
+    throw new Error(\`\${action} requires item_id\`);
+  }
+  return JSON.stringify({ item_id: itemId, action, to, from });
+}`
+    : '';
   const lifecycleReactionHelper = options.includeReactionHandlers && options.collectionLifecycle
-    ? `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  const raw = snapshot.get(itemsPath);\n  if (typeof raw !== 'string') {\n    return false;\n  }\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(raw) as unknown;\n  } catch {\n    return false;\n  }\n  if (!Array.isArray(parsed)) {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}`
+    ? `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  const raw = snapshot.get(itemsPath);\n  if (typeof raw !== 'string') {\n    return false;\n  }\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(raw) as unknown;\n  } catch {\n    return false;\n  }\n  if (!Array.isArray(parsed)) {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}${lifecycleTransitions.length > 0 ? renderCollectionLifecycleApplyHelper() : ''}`
     : '';
   const reactionExport = options.includeReactionHandlers
     ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${lifecycleReactionEntries},\n]);${lifecycleReactionHelper}`
@@ -998,13 +1091,34 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
     };
   },
 
-${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}
-};${reactionExport}${conformanceHelper}
+${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}
+};${lifecycleIntentHelper}${reactionExport}${conformanceHelper}
 `;
 }
 
 function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleDescriptor): string {
-  return `,
+  const applyEntry = collectionLifecycleLlmTransitions(descriptor).length > 0
+    ? `,
+  [${tsString(collectionLifecycleApplyReactionName(descriptor))}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return collectionLifecycleApplyEvent(
+      snapshot,
+      ${tsString(descriptor.storage.items_path)},
+      ${tsString(descriptor.storage.event_path)},
+      ${tsString(descriptor.storage.violation_path)},
+      ${tsString(descriptor.item.id_field)},
+      ${tsString(descriptor.item.status_field)},
+      ${JSON.stringify(collectionLifecycleLlmTransitions(descriptor).map((transition) => ({
+        action: transition.action,
+        from: transition.from,
+        to: transition.to,
+        ...(transition.guard_field ? { guard_field: transition.guard_field } : {}),
+      })))},
+    );
+  }]`
+    : '';
+  return `${applyEntry},
   [${tsString(collectionLifecycleReactionName(descriptor))}, (snapshot, trigger, mode) => {
     void trigger;
     void mode;
@@ -1019,16 +1133,113 @@ function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleD
   }]`;
 }
 
+function renderCollectionLifecycleApplyHelper(): string {
+  return `
+
+function collectionLifecycleApplyEvent(
+  snapshot: ReadonlyMap<string, unknown>,
+  itemsPath: string,
+  eventPath: string,
+  violationPath: string,
+  idField: string,
+  statusField: string,
+  transitions: readonly { action: string; from: string; to: string; guard_field?: string }[],
+) {
+  const rawEvent = snapshot.get(eventPath);
+  if (typeof rawEvent !== 'string' || rawEvent.trim().length === 0) {
+    return undefined;
+  }
+
+  let parsedEvent: unknown;
+  try {
+    parsedEvent = JSON.parse(rawEvent) as unknown;
+  } catch {
+    return {
+      mutations: [
+        { op: 'MSet' as const, path: violationPath, value: JSON.stringify({ item_id: '', from: '', attempted_to: '', reason: 'invalid_event' }) },
+        { op: 'MSet' as const, path: eventPath, value: '' },
+      ],
+    };
+  }
+  if (!parsedEvent || typeof parsedEvent !== 'object' || Array.isArray(parsedEvent)) {
+    return {
+      mutations: [
+        { op: 'MSet' as const, path: violationPath, value: JSON.stringify({ item_id: '', from: '', attempted_to: '', reason: 'invalid_event' }) },
+        { op: 'MSet' as const, path: eventPath, value: '' },
+      ],
+    };
+  }
+
+  const event = parsedEvent as Record<string, unknown>;
+  const itemId = typeof event.item_id === 'string' ? event.item_id : '';
+  const action = typeof event.action === 'string' ? event.action : '';
+  const attemptedTo = typeof event.to === 'string' ? event.to : '';
+  const eventFrom = typeof event.from === 'string' ? event.from : '';
+  const violation = (reason: string, from: string) => ({
+    mutations: [
+      { op: 'MSet' as const, path: violationPath, value: JSON.stringify({ item_id: itemId, from, attempted_to: attemptedTo, reason }) },
+      { op: 'MSet' as const, path: eventPath, value: '' },
+    ],
+  });
+  if (itemId.length === 0 || action.length === 0 || attemptedTo.length === 0) {
+    return violation('invalid_event', eventFrom);
+  }
+
+  const rawItems = snapshot.get(itemsPath);
+  if (typeof rawItems !== 'string') {
+    return violation('missing_item', eventFrom);
+  }
+  let parsedItems: unknown;
+  try {
+    parsedItems = JSON.parse(rawItems) as unknown;
+  } catch {
+    return violation('missing_item', eventFrom);
+  }
+  if (!Array.isArray(parsedItems)) {
+    return violation('missing_item', eventFrom);
+  }
+  const items = parsedItems.filter((item): item is Record<string, unknown> =>
+    !!item && typeof item === 'object' && !Array.isArray(item),
+  );
+  const itemIndex = items.findIndex((item) => item[idField] === itemId);
+  if (itemIndex < 0) {
+    return violation('missing_item', eventFrom);
+  }
+
+  const currentStatus = items[itemIndex]?.[statusField];
+  const from = typeof currentStatus === 'string' ? currentStatus : '';
+  const transition = transitions.find((candidate) =>
+    candidate.action === action && candidate.from === from && candidate.to === attemptedTo);
+  if (!transition) {
+    return violation('undeclared_transition', from);
+  }
+  if (transition.guard_field && !snapshot.get(transition.guard_field)) {
+    return violation('guard_false', from);
+  }
+
+  const nextItems = items.map((item, index) =>
+    index === itemIndex ? { ...item, [statusField]: attemptedTo } : item,
+  );
+  return {
+    mutations: [
+      { op: 'MSet' as const, path: itemsPath, value: JSON.stringify(nextItems) },
+      { op: 'MSet' as const, path: eventPath, value: '' },
+    ],
+  };
+}`;
+}
+
 function renderToolsSource(
   slug: string,
   transitionActions: TransitionAction[],
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
+  collectionLifecycle?: CollectionLifecycleDescriptor,
 ): string {
   const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
-  const metadata = stageActions.length === 0
-    ? '{}'
-    : `{
-${stageActions.map((action) => {
+  const lifecycleTransitions = collectionLifecycle
+    ? collectionLifecycleLlmTransitions(collectionLifecycle)
+    : [];
+  const stageMetadata = stageActions.map((action) => {
   const reasoningContract = action.archetype === 'llm-reasoning' ? reasoningContractsBySlug.get(action.source) : undefined;
   const reasoningLines = reasoningContract
     ? `
@@ -1044,14 +1255,35 @@ ${stageActions.map((action) => {
     items_path: ${tsString(action.archetype === 'llm-reasoning' ? `${action.source}.items_json` : `${action.source}.output.items_json`)},${reasoningLines}
     description: ${tsString(`Generated stage action metadata for ${action.source}.`)},
   },`;
-}).join('\n')}\n}`;
+}).join('\n');
+  const metadata = stageActions.length === 0
+    ? '{}'
+    : `{
+${stageMetadata}\n}`;
+  const lifecycleMetadata = lifecycleTransitions.length === 0
+    ? ''
+    : `
+
+export const lifecycleActionTools = {
+${lifecycleTransitions.map((transition) => `  ${transition.action}: {
+    mode: ${tsString(transition.stage)},
+    action: ${tsString(transition.action)},
+    from: ${tsString(transition.from)},
+    to: ${tsString(transition.to)},
+    event_path: ${tsString(collectionLifecycle?.storage.event_path ?? '')},
+    items_path: ${tsString(collectionLifecycle?.storage.items_path ?? '')},
+    item_id_arg: 'item_id',
+    guard_paths: [${transition.guard_field ? tsString(transition.guard_field) : ''}],
+    description: ${tsString(`Generated lifecycle intent action metadata for ${collectionLifecycle?.item_label ?? 'item'}.`)},
+  },`).join('\n')}
+} as const;`;
 
   return `import type { ToolRegistry } from '@simodelne/pgas-server/plugin.js';
 
 // Native stage actions are declared in specs.yml action_map. This metadata gives
 // implementers one fillable local-tool slot per synthesized stage without adding
 // extra invoke_tool_* actions to the engine topology.
-export const stageActionTools = ${metadata} as const;
+export const stageActionTools = ${metadata} as const;${lifecycleMetadata}
 
 export function register${toPascalCase(slug)}Tools(_registry: ToolRegistry): void {
   // Stage actions are native action_map entries. Real service adapters belong
@@ -1506,6 +1738,120 @@ export function createCollectionLifecycleAllTerminalReaction(value: unknown): Re
       descriptor.aggregate.require_non_empty,
     );
     return { mutations: [{ op: 'MSet' as const, path: descriptor.aggregate.guard_field, value: allTerminal }] };
+  };
+}
+
+export function createCollectionLifecycleApplyReaction(value: unknown): ReactionHandler {
+  const descriptor = normalizeCollectionLifecycleDescriptor(value);
+  if (!descriptor) {
+    throw new Error('collection_lifecycle descriptor is required');
+  }
+  assertCollectionLifecycleDescriptor(descriptor);
+  return (snapshot) => collectionLifecycleApplyEvent(snapshot, descriptor);
+}
+
+function collectionLifecycleApplyEvent(
+  snapshot: ReadonlyMap<string, unknown>,
+  descriptor: CollectionLifecycleDescriptor,
+): ReactionResult | undefined {
+  const rawEvent = snapshot.get(descriptor.storage.event_path);
+  if (typeof rawEvent !== 'string' || rawEvent.trim().length === 0) {
+    return undefined;
+  }
+
+  let parsedEvent: unknown;
+  try {
+    parsedEvent = JSON.parse(rawEvent) as unknown;
+  } catch {
+    return collectionLifecycleViolation(descriptor, '', '', '', 'invalid_event');
+  }
+  if (!parsedEvent || typeof parsedEvent !== 'object' || Array.isArray(parsedEvent)) {
+    return collectionLifecycleViolation(descriptor, '', '', '', 'invalid_event');
+  }
+
+  const event = parsedEvent as Record<string, unknown>;
+  const itemId = typeof event.item_id === 'string' ? event.item_id : '';
+  const action = typeof event.action === 'string' ? event.action : '';
+  const attemptedTo = typeof event.to === 'string' ? event.to : '';
+  const eventFrom = typeof event.from === 'string' ? event.from : '';
+  if (itemId.length === 0 || action.length === 0 || attemptedTo.length === 0) {
+    return collectionLifecycleViolation(descriptor, itemId, eventFrom, attemptedTo, 'invalid_event');
+  }
+
+  const parsedItems = parseCollectionLifecycleItems(snapshot.get(descriptor.storage.items_path));
+  if (!parsedItems) {
+    return collectionLifecycleViolation(descriptor, itemId, eventFrom, attemptedTo, 'missing_item');
+  }
+  const itemIndex = parsedItems.findIndex((item) =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
+      (item as Record<string, unknown>)[descriptor.item.id_field] === itemId);
+  if (itemIndex < 0) {
+    return collectionLifecycleViolation(descriptor, itemId, eventFrom, attemptedTo, 'missing_item');
+  }
+
+  const currentItem = parsedItems[itemIndex] as Record<string, unknown>;
+  const currentStatus = currentItem[descriptor.item.status_field];
+  const from = typeof currentStatus === 'string' ? currentStatus : '';
+  const transition = collectionLifecycleLlmTransitions(descriptor).find((candidate) =>
+    candidate.action === action && candidate.from === from && candidate.to === attemptedTo);
+  if (!transition) {
+    return collectionLifecycleViolation(descriptor, itemId, from, attemptedTo, 'undeclared_transition');
+  }
+  if (transition.guard_field && !snapshot.get(transition.guard_field)) {
+    return collectionLifecycleViolation(descriptor, itemId, from, attemptedTo, 'guard_false');
+  }
+
+  const updatedItems = parsedItems.map((item, index) =>
+    index === itemIndex && item && typeof item === 'object' && !Array.isArray(item)
+      ? { ...item as Record<string, unknown>, [descriptor.item.status_field]: attemptedTo }
+      : item,
+  );
+  return {
+    mutations: [
+      { op: 'MSet' as const, path: descriptor.storage.items_path, value: JSON.stringify(updatedItems) },
+      { op: 'MSet' as const, path: descriptor.storage.event_path, value: COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE },
+    ],
+  };
+}
+
+function parseCollectionLifecycleItems(value: unknown): unknown[] | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+  return Array.isArray(parsed) ? parsed : undefined;
+}
+
+function collectionLifecycleViolation(
+  descriptor: CollectionLifecycleDescriptor,
+  itemId: string,
+  from: string,
+  attemptedTo: string,
+  reason: string,
+): ReactionResult {
+  return {
+    mutations: [
+      {
+        op: 'MSet' as const,
+        path: descriptor.storage.violation_path,
+        value: JSON.stringify({
+          item_id: itemId,
+          from,
+          attempted_to: attemptedTo,
+          reason,
+        }),
+      },
+      {
+        op: 'MSet' as const,
+        path: descriptor.storage.event_path,
+        value: COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE,
+      },
+    ],
   };
 }
 
