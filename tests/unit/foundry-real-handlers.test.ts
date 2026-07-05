@@ -349,6 +349,22 @@ describe('verification handlers', () => {
     });
     expect(spawnMock).not.toHaveBeenCalled();
   });
+
+  it('fails live provider verification when provider URL is unreachable and PGAS_REQUIRE_LIVE=1', async () => {
+    const previousRequireLive = process.env.PGAS_REQUIRE_LIVE;
+    process.env.PGAS_REQUIRE_LIVE = '1';
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    try {
+      await expect(handlers.run_live_provider_verification(payload({ cwd: '/tmp/out' }))).resolves.toMatchObject({
+        kind: 'live_provider_verification',
+        status: 'failed',
+        reason: expect.stringContaining('provider unreachable'),
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv('PGAS_REQUIRE_LIVE', previousRequireLive);
+    }
+  });
 });
 
 describe('web_research', () => {
@@ -374,6 +390,14 @@ function payload(args: Record<string, unknown>) {
       ...domain,
     },
   };
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
 }
 
 function fakeChild(options: { code?: number; stdout?: string; stderr?: string; hang?: boolean }) {

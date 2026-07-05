@@ -519,6 +519,7 @@ describe('template renderer', () => {
     expect(spec).not.toContain('authorize_existing_repo_target');
     expect(tests.join('\n')).toContain('real provider round trip through the external API');
     expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER');
+    expect(tests.join('\n')).toContain('PGAS_REQUIRE_LIVE');
     expect(tests.join('\n')).toContain('LIVE_PROVIDER_TIMEOUT_MS');
     expect(tests.join('\n')).toContain('PGAS_LIVE_PROVIDER_TIMEOUT_MS');
   } finally {

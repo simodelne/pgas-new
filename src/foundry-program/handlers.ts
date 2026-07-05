@@ -892,7 +892,11 @@ export const handlers: Record<string, ToolHandler> = {
     const cwd = safeCwd(payload);
     const providerUrl = process.env.PGAS_OPENAI_BASE_URL ?? 'http://100.100.74.6:8000/v1';
     if (!(await isReachable(providerUrl))) {
-      return { kind: 'live_provider_verification', status: 'skipped', reason: `provider unreachable: ${providerUrl}` };
+      return {
+        kind: 'live_provider_verification',
+        status: process.env.PGAS_REQUIRE_LIVE === '1' ? 'failed' : 'skipped',
+        reason: `provider unreachable: ${providerUrl}`,
+      };
     }
     const result = await runCommand('npm', ['test', '--', 'tests/live-provider.test.ts'], cwd, 600_000);
     return { ...commandResult('npm test -- tests/live-provider.test.ts', result, 'live'), kind: 'live_provider_verification' };
