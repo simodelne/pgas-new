@@ -6,6 +6,7 @@ import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { loadSpecWithPatterns } from '@simodelne/pgas-server/plugin.js';
 import {
+  createCollectionLifecycleApplyReaction,
   createCollectionLifecycleAllTerminalReaction,
   synthesizeProgramSpecFromDomain,
   type SynthesizedSpec,
@@ -69,10 +70,19 @@ const genericLifecycle = {
 };
 
 interface ParsedSpec {
-  modes: Record<string, { transitions?: Array<{ target: string; guard?: { kind: string; path: string } }> }>;
+  channels: Record<string, { direction: string; sync: string }>;
+  modes: Record<string, {
+    channels?: string[];
+    transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
+    vocabulary?: string[];
+  }>;
   schema: Record<string, string>;
-  reactions: Record<string, { event: string; watch: string[]; write_scope: string[] }>;
-  action_map: Record<string, unknown>;
+  reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
+  action_map: Record<string, {
+    channel?: string;
+    result_path?: string;
+    mutations?: Array<{ op: string; path: string; value?: unknown; from_arg?: string }>;
+  }>;
 }
 
 describe('collection_lifecycle descriptor synthesis', () => {
@@ -99,7 +109,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
     }
   });
 
-  it('emits lifecycle state paths, aggregate reaction, and completion guard wiring', () => {
+  it('emits lifecycle state paths, reactions, lifecycle intent actions, and completion guard wiring', () => {
     const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(genericLifecycle));
     const parsed = load(artifact.spec_yaml) as ParsedSpec;
 
@@ -110,21 +120,143 @@ describe('collection_lifecycle descriptor synthesis', () => {
       'work_units.all_terminal': 'boolean',
     });
     expect(parsed.reactions.compute_work_units_all_terminal).toEqual({
-      event: 'AfterMutation',
-      watch: ['work_units.items_json'],
+      event: 'AfterRound',
       write_scope: ['work_units.all_terminal'],
+    });
+    expect(parsed.reactions.apply_work_units_lifecycle_event).toEqual({
+      event: 'AfterRound',
+      write_scope: [
+        'work_units.items_json',
+        'work_units.pending_event_json',
+        'work_units.lifecycle_violation_json',
+      ],
     });
     expect(parsed.modes.review_work.transitions).toEqual([
       { target: 'complete', guard: { kind: 'FieldTruthy', path: 'work_units.all_terminal' } },
     ]);
-    expect(parsed.action_map).not.toHaveProperty('start_review');
+    expect(parsed.channels.lifecycle_event).toEqual({ direction: 'Out', sync: 'Sync' });
+    expect(parsed.modes.review_work.vocabulary).toEqual(expect.arrayContaining(['start_review', 'reopen_work_unit']));
+    expect(parsed.modes.review_work.channels).toEqual(expect.arrayContaining(['lifecycle_event']));
+    expect(parsed.action_map.start_review).toEqual({
+      description: 'Record a lifecycle intent for work unit status in_review.',
+      result_path: 'work_units.pending_event_json',
+      mutations: [],
+      channel: 'lifecycle_event',
+    });
+    expect(parsed.action_map.reopen_work_unit).toEqual({
+      description: 'Record a lifecycle intent for work unit status in_review.',
+      result_path: 'work_units.pending_event_json',
+      mutations: [],
+      channel: 'lifecycle_event',
+    });
+    expect(parsed.action_map.start_review.mutations?.map((mutation) => mutation.path)).not.toContain('work_units.items_json');
     expect(parsed.action_map).not.toHaveProperty('accept_work_unit');
-    expect(parsed.action_map).not.toHaveProperty('reopen_work_unit');
+    expect(artifact.tools_ts).toContain('lifecycleActionTools');
+    expect(artifact.tools_ts).toContain('start_review');
+    expect(artifact.handlers_ts).toContain('async start_review(payload)');
+    expect(artifact.handlers_ts).toContain("return collectionLifecycleIntentEvent(payload as HandlerPayload, 'start_review', 'in_review', 'pending');");
+    expect(artifact.handlers_ts).toContain("['apply_work_units_lifecycle_event', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain("['compute_work_units_all_terminal', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain("'work_units.items_json'");
     expect(artifact.handlers_ts).toContain("'work_units.all_terminal'");
     expect(artifact.handlers_ts).toContain("return { mutations: [{ op: 'MSet' as const, path: 'work_units.all_terminal', value: allTerminal }] };");
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('writes a managed-by-llm lifecycle intent event without changing item status', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(genericLifecycle));
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(parsed.action_map.start_review.result_path).toBe('work_units.pending_event_json');
+    expect(parsed.action_map.start_review.mutations).toEqual([]);
+    expect(parsed.action_map.start_review.result_path).not.toBe('work_units.items_json');
+
+    const event = JSON.parse(lifecycleIntentEvent('wu-1', 'start_review', 'in_review', 'pending')) as Record<string, unknown>;
+    expect(event).toEqual({
+      item_id: 'wu-1',
+      action: 'start_review',
+      to: 'in_review',
+      from: 'pending',
+    });
+  });
+
+  it('applies a valid pending lifecycle event and clears it', () => {
+    const result = runApplyReaction(
+      [
+        { id: 'wu-1', status: 'pending', title: 'One' },
+        { id: 'wu-2', status: 'accepted', title: 'Two' },
+      ],
+      lifecycleIntentEvent('wu-1', 'start_review', 'in_review', 'pending'),
+    );
+
+    expect(result.items).toEqual([
+      { id: 'wu-1', status: 'in_review', title: 'One' },
+      { id: 'wu-2', status: 'accepted', title: 'Two' },
+    ]);
+    expect(result.event).toBe('');
+    expect(result.violation).toBeUndefined();
+  });
+
+  it('records a violation and leaves status unchanged for an undeclared transition', () => {
+    const result = runApplyReaction(
+      [{ id: 'wu-1', status: 'pending', title: 'One' }],
+      lifecycleIntentEvent('wu-1', 'start_review', 'accepted', 'pending'),
+    );
+
+    expect(result.items).toEqual([{ id: 'wu-1', status: 'pending', title: 'One' }]);
+    expect(result.event).toBe('');
+    expect(result.violation).toEqual({
+      item_id: 'wu-1',
+      from: 'pending',
+      attempted_to: 'accepted',
+      reason: 'undeclared_transition',
+    });
+  });
+
+  it('records a violation and leaves status unchanged when a transition guard is false', () => {
+    const result = runApplyReaction(
+      [{ id: 'wu-1', status: 'accepted', title: 'One' }],
+      lifecycleIntentEvent('wu-1', 'reopen_work_unit', 'in_review', 'accepted'),
+      [['review_work.reopen_requested', false]],
+    );
+
+    expect(result.items).toEqual([{ id: 'wu-1', status: 'accepted', title: 'One' }]);
+    expect(result.event).toBe('');
+    expect(result.violation).toEqual({
+      item_id: 'wu-1',
+      from: 'accepted',
+      attempted_to: 'in_review',
+      reason: 'guard_false',
+    });
+  });
+
+  it('lets the aggregate guard recompute true after lifecycle application makes all items terminal', () => {
+    const terminalLlmLifecycle = {
+      ...clone(genericLifecycle),
+      transitions: genericLifecycle.transitions.map((transition) =>
+        transition.action === 'accept_work_unit'
+          ? { ...transition, managed_by: 'llm' as const }
+          : transition,
+      ),
+    };
+    const applyResult = runApplyReaction(
+      [
+        { id: 'wu-1', status: 'in_review', title: 'One' },
+        { id: 'wu-2', status: 'removed', title: 'Two' },
+      ],
+      lifecycleIntentEvent('wu-1', 'accept_work_unit', 'accepted', 'in_review'),
+      [],
+      terminalLlmLifecycle,
+    );
+    const allTerminal = createCollectionLifecycleAllTerminalReaction(terminalLlmLifecycle);
+
+    expect(
+      allTerminal(
+        new Map([['work_units.items_json', JSON.stringify(applyResult.items)]]),
+        'AfterMutation',
+        'review_work',
+      )?.mutations?.find((mutation) => mutation.path === 'work_units.all_terminal')?.value,
+    ).toBe(true);
   });
 
   it('sets the aggregate guard true only for non-empty all-terminal collections', () => {
@@ -153,7 +285,63 @@ describe('collection_lifecycle descriptor synthesis', () => {
       smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
     });
   });
+
+  it('keeps descriptors with no llm-managed transitions byte-identical to the Phase 1 baseline', () => {
+    const noLlmLifecycle = {
+      ...clone(genericLifecycle),
+      transitions: [
+        {
+          from: 'in_review',
+          to: 'accepted',
+          stage: 'review_work',
+          action: 'accept_work_unit',
+          managed_by: 'reaction',
+          trigger: 'user_confirmation',
+        },
+      ],
+    };
+
+    expect(hashArtifact(synthesizeProgramSpecFromDomain(domainWithLifecycle(noLlmLifecycle)))).toEqual({
+      spec_yaml: '45116c560ca1d62b69c103f97f5b12f458f8f6222037b8ad6eb7d45673d4247c',
+      contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
+      handlers_ts: '12b3a449739578f1d5bf6e59a820e1d9251bb1a4eef0352efa1226e6e843b3d2',
+      handlers_index_ts: '3fb01bfefde1d5a455f7ff53fbf48333c0e36dc9b49f7e82e6a3e5e56f342531',
+      tools_ts: 'ba348055c634de2e2f58dd88a696d53614266b13c29ed03a9568cf3a3545bfe7',
+      smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
+    });
+  });
 });
+
+function lifecycleIntentEvent(itemId: string, action: string, to: string, from?: string): string {
+  return JSON.stringify({
+    item_id: itemId,
+    action,
+    to,
+    ...(from ? { from } : {}),
+  });
+}
+
+function runApplyReaction(
+  items: unknown[],
+  event: string,
+  extraSnapshot: Array<[string, unknown]> = [],
+  lifecycle: unknown = genericLifecycle,
+): { items: unknown; event: unknown; violation?: unknown } {
+  const reaction = createCollectionLifecycleApplyReaction(lifecycle);
+  const result = reaction(new Map<string, unknown>([
+    ['work_units.items_json', JSON.stringify(items)],
+    ['work_units.pending_event_json', event],
+    ...extraSnapshot,
+  ]), 'AfterMutation', 'review_work');
+  const values = new Map(result?.mutations?.map((mutation) => [mutation.path, mutation.value]));
+  return {
+    items: JSON.parse(String(values.get('work_units.items_json') ?? JSON.stringify(items))) as unknown,
+    event: values.get('work_units.pending_event_json'),
+    violation: values.has('work_units.lifecycle_violation_json')
+      ? JSON.parse(String(values.get('work_units.lifecycle_violation_json'))) as unknown
+      : undefined,
+  };
+}
 
 function domainWithLifecycle(lifecycle: unknown): Record<string, unknown> {
   return {
