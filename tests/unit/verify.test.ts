@@ -3,6 +3,7 @@ import {
   assertNoExecutedPathStubs,
   createMockCommandRunner,
   findExecutedPathStubMarkers,
+  runGeneratedLiveDriveVerification,
   runLiveProviderVerification,
   runPostRebaseVerification,
   runSmokeVerification,
@@ -167,6 +168,113 @@ describe('verification runner', () => {
 
     expect(evidence[0].command_id).toBe('liveProviderRoundTrip');
     expect(evidence[0].cwd).toBe('/repo');
+  });
+
+  it('skips generated live-drive verification with explicit evidence when provider env is absent', async () => {
+    const evidence = await runGeneratedLiveDriveVerification({ cwd: '/repo', env: {} });
+
+    expect(evidence).toEqual([
+      {
+        command_id: 'generatedLiveDrive',
+        cwd: '/repo',
+        duration_ms: 0,
+        exit_code: null,
+        status: 'skip',
+        stdout_excerpt: 'missing PGAS_OPENAI_BASE_URL or PGAS_OPENAI_MODEL/PGAS_MODEL',
+      },
+    ]);
+  });
+
+  it('fails generated live-drive verification instead of skipping when PGAS_REQUIRE_LIVE=1', async () => {
+    const evidence = await runGeneratedLiveDriveVerification({
+      cwd: '/repo',
+      env: { PGAS_REQUIRE_LIVE: '1' },
+    });
+
+    expect(evidence).toEqual([
+      {
+        command_id: 'generatedLiveDrive',
+        cwd: '/repo',
+        duration_ms: 0,
+        exit_code: 1,
+        status: 'fail',
+        stderr_excerpt: 'PGAS_REQUIRE_LIVE=1 requires PGAS_OPENAI_BASE_URL and PGAS_OPENAI_MODEL (or PGAS_MODEL)',
+      },
+    ]);
+  });
+
+  it('fails generated live-drive verification when provider env is present but no verifier is configured', async () => {
+    const evidence = await runGeneratedLiveDriveVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_OPENAI_BASE_URL: 'http://provider.local/v1',
+        PGAS_OPENAI_MODEL: 'qwen36-27b',
+      },
+    });
+
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      command_id: 'generatedLiveDrive',
+      cwd: '/repo',
+      status: 'fail',
+    });
+    expect(evidence[0].stderr_excerpt).toContain('verifier not configured');
+  });
+
+  it('promotes generated live-drive verifier skips to failures when PGAS_REQUIRE_LIVE=1', async () => {
+    const evidence = await runGeneratedLiveDriveVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_REQUIRE_LIVE: '1',
+        PGAS_OPENAI_BASE_URL: 'http://provider.local/v1',
+        PGAS_MODEL: 'qwen36-27b',
+      },
+      verifier: {
+        verify: async () => ({
+          duration_ms: 5,
+          exit_code: null,
+          status: 'skip',
+          stdout_excerpt: 'provider unreachable',
+        }),
+      },
+    });
+
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({
+      command_id: 'generatedLiveDrive',
+      cwd: '/repo',
+      exit_code: 1,
+      status: 'fail',
+    });
+  });
+
+  it('returns the generated live-drive verifier result when env is present and the drive passes', async () => {
+    const evidence = await runGeneratedLiveDriveVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_OPENAI_BASE_URL: 'http://provider.local/v1',
+        PGAS_OPENAI_MODEL: 'qwen36-27b',
+      },
+      verifier: {
+        verify: async () => ({
+          duration_ms: 1234,
+          exit_code: 0,
+          status: 'pass',
+          stdout_excerpt: 'final_mode=complete provider_hits=5',
+        }),
+      },
+    });
+
+    expect(evidence).toEqual([
+      {
+        command_id: 'generatedLiveDrive',
+        cwd: '/repo',
+        duration_ms: 1234,
+        exit_code: 0,
+        status: 'pass',
+        stdout_excerpt: 'final_mode=complete provider_hits=5',
+      },
+    ]);
   });
 
   it('reruns the full static ladder after rebasing latest', async () => {

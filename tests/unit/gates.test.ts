@@ -83,7 +83,11 @@ describe('pgas-new gates', () => {
 
     const livePassed = {
       ...withMode(smokePassed, 'live_verify'),
-      graduation: { ...smokePassed.graduation, live_verification: 'passed' },
+      graduation: {
+        ...smokePassed.graduation,
+        live_verification: 'passed',
+        generated_live_drive: 'passed',
+      },
     } satisfies PgasNewState;
     expect(canTransition(livePassed, 'live_verify', 'rebase_verify')).toMatchObject({ allowed: true });
 
@@ -362,6 +366,62 @@ describe('pgas-new gates', () => {
     expect(() => assertActionAllowed(staticPassedInLiveMode, 'live_verify', 'run_api_blackbox_verification')).toThrow(
       /live_verify_requires_smoke_passed/,
     );
+  });
+
+  it('hard-blocks live_verify -> rebase_verify unless the generated live drive explicitly passed', () => {
+    const base = {
+      ...withMode(existingRepoState(), 'live_verify'),
+      artifacts: { written: true, generated_paths: ['programs/legal-rag/specs.yml'] },
+    } satisfies PgasNewState;
+    const withGraduation = (
+      live_verification: PgasNewState['graduation']['live_verification'],
+      generated_live_drive: PgasNewState['graduation']['generated_live_drive'],
+    ): PgasNewState => ({
+      ...base,
+      graduation: {
+        ...base.graduation,
+        static_verification: 'passed',
+        smoke_verification: 'passed',
+        live_provider_intent: true,
+        ready_for_live: true,
+        live_verification,
+        generated_live_drive,
+      },
+    });
+
+    // Live provider rung still gates first.
+    expect(canTransition(withGraduation('pending', 'passed'), 'live_verify', 'rebase_verify')).toEqual({
+      allowed: false,
+      reason: 'rebase_verify_requires_live_verification_passed',
+    });
+
+    // Hard requirement: absent (pending), skipped, and failed live-drive
+    // evidence ALL deny — only an explicit 'passed' crosses.
+    for (const blockedStatus of ['pending', 'skipped', 'failed'] as const) {
+      expect(canTransition(withGraduation('passed', blockedStatus), 'live_verify', 'rebase_verify')).toEqual({
+        allowed: false,
+        reason: 'rebase_verify_requires_generated_live_drive_passed',
+      });
+    }
+
+    expect(canTransition(withGraduation('passed', 'passed'), 'live_verify', 'rebase_verify')).toEqual({ allowed: true });
+
+    // The action is legal in live_verify once the live rung prerequisites hold.
+    expect(legalActionsForMode(withGraduation('pending', 'pending'), 'live_verify')).toContain(
+      'run_generated_live_drive_verification',
+    );
+
+    // Mirrors the spec precondition: recording live verification is blocked
+    // until the drive passed, so a skipped/failed drive can never be papered
+    // over by running the live-provider rung alone.
+    for (const blockedStatus of ['pending', 'skipped', 'failed'] as const) {
+      expect(() =>
+        assertActionAllowed(withGraduation('pending', blockedStatus), 'live_verify', 'run_live_provider_verification'),
+      ).toThrow(/live_provider_verification_requires_generated_live_drive_passed/);
+    }
+    expect(() =>
+      assertActionAllowed(withGraduation('pending', 'passed'), 'live_verify', 'run_live_provider_verification'),
+    ).not.toThrow();
   });
 
   it('requires post-rebase verification before opening a pull request', () => {

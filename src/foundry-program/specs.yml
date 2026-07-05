@@ -24,6 +24,7 @@ channels:
   widget_output: { direction: Out, sync: Async }
   artifact_plan_output: { direction: Out, sync: Sync }
   composite_checks_output: { direction: Out, sync: Sync }
+  live_drive_output: { direction: Out, sync: Sync }
 
 modes:
   intake_intelligence:
@@ -208,12 +209,23 @@ modes:
       - target: live_verify
         guard: { kind: FieldTruthy, path: graduation.ready_for_live }
   live_verify:
-    vocabulary: [run_api_blackbox_verification, run_live_provider_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
-    channels: [system_mode_entry, widget_output]
+    vocabulary: [run_api_blackbox_verification, run_live_provider_verification, run_generated_live_drive_verification, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    channels: [system_mode_entry, widget_output, live_drive_output]
     preconditions:
       run_api_blackbox_verification:
         - { kind: FieldTruthy, path: graduation.live_provider_intent }
+      # run_live_provider_verification is the sole writer of
+      # graduation.live_verification (plus its normalize reaction), so gating it
+      # on a passed generated live drive makes the drive HARD-required for
+      # graduation: a failed/skipped/absent drive blocks the live rung from
+      # ever recording 'passed', which blocks the rebase_verify transition.
+      # (Reaction-derived transition flags cannot work here: the engine never
+      # re-evaluates a transition guard that only became true via a
+      # reaction-written mutation.)
       run_live_provider_verification:
+        - { kind: FieldTruthy, path: graduation.live_provider_intent }
+        - { kind: FieldEquals, path: graduation.generated_live_drive, value: passed }
+      run_generated_live_drive_verification:
         - { kind: FieldTruthy, path: graduation.live_provider_intent }
     transitions:
       - target: rebase_verify
@@ -249,6 +261,7 @@ proceed_to:
   run_static_verification: smoke_verify
   confirm_live_provider_intent: live_verify
   run_live_provider_verification: rebase_verify
+  run_generated_live_drive_verification: rebase_verify
   run_rebase_static_verification: pr_graduation
 
 projection:
@@ -309,7 +322,7 @@ projection:
     include: [program.target_dir, graduation.static_verification, graduation.smoke_verification, graduation.smoke_evidence_id, graduation.live_provider_intent, graduation.ready_for_live]
     exclude: []
   live_verify:
-    include: [program.target_dir, graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id]
+    include: [program.target_dir, graduation.live_verification, graduation.live_provider_intent, graduation.live_evidence_id, graduation.generated_live_drive, graduation.generated_live_drive_evidence_id]
     exclude: []
   rebase_verify:
     include: [program.target_dir, graduation.rebase_status, graduation.rebase_evidence_id, graduation.rebase_verification, graduation.rebase_static_evidence_id]
@@ -445,7 +458,7 @@ prompts:
   branch_write: "Write only planned artifacts after domain_synthesis has accepted all generated bodies."
   static_verify: "Run static verification and record evidence."
   smoke_verify: "Run deterministic generated-program smoke verification before live-provider verification."
-  live_verify: "Run real-provider verification through the external API."
+  live_verify: "Run run_generated_live_drive_verification FIRST (drives the generated program to its completion stage against the live provider), then run_live_provider_verification (real provider round trip). run_live_provider_verification is precondition-blocked until the generated live drive has recorded 'passed'."
   rebase_verify: "Rebase on latest target repo state and rerun static verification."
   pr_graduation: "Open the PR after post-rebase verification."
   curator_request: "Prepare a curator request for missing repo wiring."
@@ -877,6 +890,22 @@ action_map:
       - { op: MSet, path: graduation.live_evidence_id, from_arg: evidence_id }
       - { op: MSet, path: graduation.live_verification_recorded, value: true }
     channel: widget_output
+  run_generated_live_drive_verification:
+    description: |
+      Drive the just-generated program to its completion stage against the REAL
+      provider (no canned fallback) and record evidence. The handler boots the
+      generated program's own registration on a real engine and reports a
+      deterministic result envelope to graduation.generated_live_drive_report;
+      the normalize reaction applies the handler-reported status over the
+      LLM-echoed `status` arg, so a mispredicted arg cannot fake a pass.
+      Rides the Sync live_drive_output channel because result_path requires a
+      Sync Out channel (ER-2) — same pattern as run_parallel_static_checks.
+    result_path: graduation.generated_live_drive_report
+    mutations:
+      - { op: MSet, path: graduation.generated_live_drive, from_arg: status }
+      - { op: MSet, path: graduation.generated_live_drive_evidence_id, from_arg: evidence_id }
+      - { op: MSet, path: graduation.generated_live_drive_recorded, value: true }
+    channel: live_drive_output
   git_rebase_latest:
     description: "Rebase on latest target repo state and record rebase status."
     mutations:
@@ -938,6 +967,18 @@ reactions:
       - graduation.live_verification_recorded
     write_scope:
       - graduation.live_verification
+  # RC-4 forbids watching the written path itself, so (like the other
+  # normalize_* reactions) this watches the recorded flag + the deterministic
+  # handler report. Scripted/live writers must set
+  # graduation.generated_live_drive_recorded to trigger normalization.
+  normalize_generated_live_drive_status:
+    event: AfterMutation
+    watch:
+      - graduation.generated_live_drive_recorded
+      - graduation.generated_live_drive_report
+    write_scope:
+      - graduation.generated_live_drive
+      - graduation.generated_live_drive_evidence_id
   normalize_rebase_status:
     event: AfterMutation
     watch:
@@ -1029,6 +1070,10 @@ schema:
   graduation.live_provider_intent: boolean
   graduation.ready_for_live: boolean
   graduation.live_evidence_id: string
+  graduation.generated_live_drive: string
+  graduation.generated_live_drive_recorded: boolean
+  graduation.generated_live_drive_evidence_id: string
+  graduation.generated_live_drive_report: object
   graduation.rebase_status: string
   graduation.rebase_recorded: boolean
   graduation.rebase_evidence_id: string

@@ -25,6 +25,8 @@ export interface GraduationStateSnapshot {
   smoke_evidence_id?: string;
   live_verification?: string;
   live_evidence_id?: string;
+  generated_live_drive?: string;
+  generated_live_drive_evidence_id?: string;
   rebase_status?: string;
   rebase_evidence_id?: string;
   rebase_verification?: string;
@@ -57,6 +59,7 @@ export function graduationEvidenceRows(state: GraduationStateSnapshot): Graduati
     row('Static verification', state.static_verification, state.static_evidence_id),
     row('Smoke verification', state.smoke_verification, state.smoke_evidence_id),
     row('Live provider verification', state.live_verification, state.live_evidence_id),
+    row('Generated live drive', state.generated_live_drive, state.generated_live_drive_evidence_id),
     row('Rebase', state.rebase_status, state.rebase_evidence_id),
     row('Post-rebase verification', state.rebase_verification, state.rebase_static_evidence_id),
   ];

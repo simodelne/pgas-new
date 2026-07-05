@@ -86,15 +86,26 @@ export type {
 export {
   assertNoExecutedPathStubs,
   findExecutedPathStubMarkers,
+  runGeneratedLiveDriveVerification,
   runLiveProviderVerification,
   runPostRebaseVerification,
   runSmokeVerification,
   runStaticVerification,
   createMockCommandRunner,
   type AntiStubFinding,
+  type GeneratedLiveDriveVerifier,
   type VerificationEvidence,
   type VerificationStatus,
 } from "./pgas-new/verify.js";
+
+export {
+  driveGeneratedProgramLive,
+  startCountingProviderProxy,
+  type CountingProviderProxy,
+  type GeneratedLiveDriveOptions,
+  type GeneratedLiveDriveResult,
+  type ProviderExchange,
+} from "./pgas-new/generated-live-drive.js";
 
 export {
   type CommandRequest,

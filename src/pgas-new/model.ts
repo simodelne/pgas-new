@@ -66,6 +66,7 @@ export const PGAS_NEW_ACTIONS = [
   'confirm_live_provider_intent',
   'run_api_blackbox_verification',
   'run_live_provider_verification',
+  'run_generated_live_drive_verification',
   'git_status',
   'git_rebase_latest',
   'run_rebase_static_verification',
@@ -137,12 +138,14 @@ export interface PgasNewState {
     static_verification: VerificationStatus;
     smoke_verification: VerificationStatus;
     live_verification: VerificationStatus;
+    generated_live_drive: VerificationStatus;
     rebase_status: VerificationStatus;
     rebase_verification: VerificationStatus;
     live_provider_intent: boolean;
     ready_for_live: boolean;
     static_evidence_id?: string;
     live_evidence_id?: string;
+    generated_live_drive_evidence_id?: string;
     rebase_evidence_id?: string;
     rebase_static_evidence_id?: string;
   };
@@ -203,6 +206,7 @@ export function createInitialState(): PgasNewState {
       static_verification: 'pending',
       smoke_verification: 'pending',
       live_verification: 'pending',
+      generated_live_drive: 'pending',
       rebase_status: 'pending',
       rebase_verification: 'pending',
       live_provider_intent: false,

@@ -38,6 +38,12 @@ export const AUTO_CONTINUE_ACTIONS = new Set([
   'run_smoke_verification',
   'confirm_live_provider_intent',
   'run_live_provider_verification',
+  // run_generated_live_drive_verification is deliberately NOT auto-continue:
+  // it declares result_path, which requires the Sync live_drive_output channel
+  // (ER-2), and NoticeContinuation only fires for widget_output effects — an
+  // auto-continue action on any other channel silently never continues (see
+  // the invariant note above). The graduation driver's system_mode_entry loop
+  // advances past it instead.
   'git_rebase_latest',
   'run_rebase_static_verification',
 ]);
