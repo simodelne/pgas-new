@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   BANNED_IMPORT_PATTERNS,
@@ -14,7 +16,19 @@ import {
 describe('PGAS server version contract', () => {
   it('pins the published pgas-server version checked for this foundry', () => {
     expect(PGAS_SERVER_PACKAGE).toBe('@simodelne/pgas-server');
-    expect(PGAS_SERVER_VERSION).toBe('3.3.0');
+    expect(PGAS_SERVER_VERSION).toBe('3.5.0');
+  });
+
+  it('keeps version.ts in lockstep with the package.json dependency pin (no skew)', () => {
+    // Guards against the 2026-07 skew where the dependency pin moved to ^3.5.0
+    // (PR #130) but version.ts stayed at 3.3.0, so generated scaffolds pinned a
+    // stale server. version.ts is the authoritative "checked published version";
+    // it MUST match the caret pin the foundry actually depends on.
+    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(pkg.dependencies?.[PGAS_SERVER_PACKAGE]).toBe(`^${PGAS_SERVER_VERSION}`);
   });
 
   it('lists the allowed public pgas-server subpath imports', () => {
