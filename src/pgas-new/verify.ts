@@ -87,7 +87,20 @@ export async function runPostRebaseVerification(
 export async function runLiveProviderVerification(
   options: { cwd: string; env: Record<string, string | undefined>; verifier?: LiveProviderVerifier },
 ): Promise<VerificationEvidence[]> {
-  if (!options.env.PGAS_LIVE_PROVIDER || !options.env.PGAS_API_BASE || !options.env.PGAS_API_TOKEN) {
+  const requireLive = options.env.PGAS_REQUIRE_LIVE === '1';
+  if (!nonEmpty(options.env.PGAS_LIVE_PROVIDER) || !nonEmpty(options.env.PGAS_API_BASE) || !nonEmpty(options.env.PGAS_API_TOKEN)) {
+    if (requireLive) {
+      return [
+        {
+          command_id: 'liveProviderRoundTrip',
+          cwd: options.cwd,
+          duration_ms: 0,
+          exit_code: 1,
+          status: 'fail',
+          stderr_excerpt: 'PGAS_REQUIRE_LIVE=1 requires PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN',
+        },
+      ];
+    }
     return [
       {
         command_id: 'liveProviderRoundTrip',
@@ -115,6 +128,18 @@ export async function runLiveProviderVerification(
   }
 
   const result = await options.verifier.verify({ cwd: options.cwd, env: options.env });
+  if (requireLive && result.status === 'skip') {
+    return [
+      {
+        ...result,
+        command_id: 'liveProviderRoundTrip',
+        cwd: options.cwd,
+        exit_code: result.exit_code === null || result.exit_code === 0 ? 1 : result.exit_code,
+        status: 'fail',
+        stderr_excerpt: result.stderr_excerpt ?? 'PGAS_REQUIRE_LIVE=1 forbids skipped live-provider verification',
+      },
+    ];
+  }
 
   return [
     {
@@ -123,6 +148,11 @@ export async function runLiveProviderVerification(
       cwd: options.cwd,
     },
   ];
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function createMockCommandRunner(): CommandRunner & { calls: SemanticCommandId[] } {

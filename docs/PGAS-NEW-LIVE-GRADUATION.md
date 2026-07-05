@@ -34,6 +34,11 @@ The generated live test is intentionally skipped unless these variables exist:
 - `PGAS_API_BASE`
 - `PGAS_API_TOKEN`
 
+Set `PGAS_REQUIRE_LIVE=1` when a live check is a graduation gate. In that mode
+missing live env or an unreachable provider is a failure, not a skip. Use
+`npm run test:live-graduation` for the foundry live paths and `npm run sota:live`
+for the SOTA harness; both keep default `npm test` and CI behavior unchanged.
+
 The live test creates a session through `createPgasClient(fetchTransport(...))`, triggers `user_text` through the external API, reads the session back, and records that a real provider-backed round trip happened. Hermetic in-process API tests are useful but do not count as live graduation.
 
 Example shape:

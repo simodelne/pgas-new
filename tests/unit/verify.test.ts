@@ -44,6 +44,60 @@ describe('verification runner', () => {
     ]);
   });
 
+  it('fails live-provider verification instead of skipping when PGAS_REQUIRE_LIVE=1', async () => {
+    const evidence = await runLiveProviderVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_REQUIRE_LIVE: '1',
+      },
+    });
+
+    expect(evidence).toEqual([
+      {
+        command_id: 'liveProviderRoundTrip',
+        cwd: '/repo',
+        duration_ms: 0,
+        exit_code: 1,
+        status: 'fail',
+        stderr_excerpt: 'PGAS_REQUIRE_LIVE=1 requires PGAS_LIVE_PROVIDER, PGAS_API_BASE, and PGAS_API_TOKEN',
+      },
+    ]);
+  });
+
+  it('promotes live-provider verifier skips to failures when PGAS_REQUIRE_LIVE=1', async () => {
+    const evidence = await runLiveProviderVerification({
+      cwd: '/repo',
+      env: {
+        PGAS_REQUIRE_LIVE: '1',
+        PGAS_LIVE_PROVIDER: 'openai',
+        PGAS_API_BASE: 'http://127.0.0.1:3000',
+        PGAS_API_TOKEN: 'token',
+      },
+      verifier: {
+        async verify() {
+          return {
+            duration_ms: 5,
+            exit_code: null,
+            status: 'skip',
+            stdout_excerpt: 'provider unreachable',
+          };
+        },
+      },
+    });
+
+    expect(evidence).toEqual([
+      {
+        command_id: 'liveProviderRoundTrip',
+        cwd: '/repo',
+        duration_ms: 5,
+        exit_code: 1,
+        status: 'fail',
+        stdout_excerpt: 'provider unreachable',
+        stderr_excerpt: 'PGAS_REQUIRE_LIVE=1 forbids skipped live-provider verification',
+      },
+    ]);
+  });
+
   it('runs live-provider verification separately from static evidence when env is present', async () => {
     const evidence = await runLiveProviderVerification({
       cwd: '/repo',

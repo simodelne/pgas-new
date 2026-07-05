@@ -10,8 +10,10 @@
     "test:manifest": "bash tests/plugin-manifest.test.sh",
     "test:static": "bash tests/pgas-new-static.test.sh",
     "test": "npm run typecheck && npm run test:manifest && npm run test:unit && npm run test:static",
+    "test:live-graduation": "PGAS_REQUIRE_LIVE=1 PGAS_LIVE_GRADUATION=1 PGAS_LIVE_SYNTH=1 vitest run --config tests/vitest.config.ts tests/integration/foundry-live-graduation.test.ts tests/integration/domain-synthesis-live.test.ts",
     "pgas-new": "node --import tsx src/cli.ts",
-    "sota:harness": "node --import tsx tests/sota/harness.ts"
+    "sota:harness": "node --import tsx tests/sota/harness.ts",
+    "sota:live": "PGAS_REQUIRE_LIVE=1 PGAS_LIVE_SYNTH=1 node --import tsx tests/sota/harness.ts --scorecard-dir /tmp/pgas-new-sota-live-scorecard --output-dir /tmp/pgas-new-sota-live-generated"
   },
   "bin": {
     "pgas-new": "./bin/pgas-new"
