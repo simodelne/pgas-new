@@ -1,0 +1,33 @@
+{
+  "body": "import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';\n\nexport async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {\n  const domain = input.domain as Record<string, unknown>;\n  const rawInput = domain['inputs.initial_user_text'];\n\n  let plan: string | undefined;\n  let seats: number | undefined;\n  let region: string | undefined;\n\n  if (typeof rawInput === 'string') {\n    try {\n      const parsed = JSON.parse(rawInput) as Record<string, unknown>;\n      if (typeof parsed.plan === 'string') plan = parsed.plan;\n      if (typeof parsed.seats === 'number') seats = parsed.seats;\n      if (typeof parsed.region === 'string') region = parsed.region;\n    } catch {\n      // Ignore parse errors, fields remain undefined\n    }\n  }\n\n  const pricingTable: Record<string, { base_usd: number; seat_rate_usd: number }> = {\n    starter: { base_usd: 40, seat_rate_usd: 5 },\n    pro: { base_usd: 100, seat_rate_usd: 7 },\n    enterprise: { base_usd: 500, seat_rate_usd: 12 },\n  };\n\n  const regionMultiplierTable: Record<string, number> = {\n    us: 1,\n    eu: 1.2,\n    apac: 1.1,\n  };\n\n  const pricing = plan ? pricingTable[plan] : undefined;\n  const base_usd = pricing ? pricing.base_usd : 0;\n  const seat_rate_usd = pricing ? pricing.seat_rate_usd : 0;\n  const seatCount = seats ?? 0;\n  const subtotal_usd = base_usd + seatCount * seat_rate_usd;\n  const regionMultiplier = region ? (regionMultiplierTable[region] ?? 1) : 1;\n  const total_usd = Math.round(subtotal_usd * regionMultiplier);\n  const priced_at = runtime.now();\n\n  const resultObj = {\n    stage: 'calculate_fee',\n    plan: plan ?? '',\n    seats: seatCount,\n    region: region ?? '',\n    base_usd,\n    seat_rate_usd,\n    subtotal_usd,\n    region_multiplier: regionMultiplier,\n    total_usd,\n    currency: 'USD',\n    priced_at,\n  };\n\n  const itemsObj = [\n    `plan:${resultObj.plan}`,\n    `seats:${resultObj.seats}`,\n    `total_usd:${resultObj.total_usd}`,\n  ];\n\n  return {\n    result_json: JSON.stringify(resultObj),\n    items_json: JSON.stringify(itemsObj),\n    digest: '',\n  };\n}",
+  "body_hash": "f04780174b1b91e268122b6b7dc4b2b788230a4435fb79f89b878dc35fa5f595",
+  "behavioral_gate": "passed",
+  "behavioral_fixture": {
+    "input_stage": "calculate_fee",
+    "expected_result_stage": "calculate_fee",
+    "expected_items_non_empty": true,
+    "available_domain_paths": [
+      "account.id",
+      "apply_discount.output",
+      "crm_lookup.output",
+      "estimate_fee.output",
+      "inputs.frontend_intake",
+      "inputs.initial_user_text",
+      "inputs.user_text",
+      "owner.queue",
+      "record.id",
+      "score_risk.output"
+    ],
+    "domain_spec_reads": [
+      "inputs.initial_user_text.plan",
+      "inputs.initial_user_text.seats",
+      "inputs.initial_user_text.region",
+      "runtime.now"
+    ],
+    "expected_items_templates": [
+      "plan:<plan>",
+      "seats:<seats>",
+      "total_usd:<total_usd>"
+    ]
+  }
+}
