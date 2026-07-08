@@ -146,12 +146,23 @@ describe('synthesize_program_spec handler', () => {
       'triage.output': 'object',
       'triage.output.result_json': 'string',
       'triage.output.items_json': 'string',
+      'triage.result_json': 'string',
+      'triage.items_json': 'string',
     });
     expect(parsed.projection.triage.include).toContain('inputs.initial_user_text');
+    expect(parsed.projection.triage.include).toEqual(expect.arrayContaining([
+      'triage.output',
+      'triage.result_json',
+      'triage.items_json',
+    ]));
     expect(parsed.reactions.capture_initial_entry_input).toEqual({
       event: 'AfterIngestion',
       watch: ['inputs.user_text'],
       write_scope: ['inputs.initial_user_text'],
+    });
+    expect(parsed.reactions.mirror_triage_output).toEqual({
+      event: 'AfterRound',
+      write_scope: ['triage.result_json', 'triage.items_json'],
     });
     expect(parsed.modes.triage.vocabulary).toEqual(expect.arrayContaining(['complete_triage']));
     expect(parsed.modes.triage.vocabulary).not.toContain('example_action');
@@ -171,6 +182,7 @@ describe('synthesize_program_spec handler', () => {
     expect(artifact?.handlers_ts).toContain('runTriage');
     expect(artifact?.handlers_ts).toContain('async begin_work(payload)');
     expect(artifact?.handlers_ts).toContain('capture_initial_entry_input');
+    expect(artifact?.handlers_ts).toContain("['mirror_triage_output', (snapshot) => mirrorStageOutput(snapshot, 'triage.output', 'triage.result_json', 'triage.items_json')]");
     expect(artifact?.handlers_ts).toContain('inputs.initial_user_text');
     expect(artifact?.handlers_ts).toContain('async session_status(payload)');
     expect(artifact?.handlers_ts).toContain("control: 'session_status'");

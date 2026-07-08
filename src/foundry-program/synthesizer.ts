@@ -318,6 +318,7 @@ export function synthesizeProgramSpecFromDomain(
       write_scope: [initialEntryPath],
     },
   };
+  applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, stageClassificationBySlug);
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
@@ -373,6 +374,8 @@ export function synthesizeProgramSpecFromDomain(
       schema[`${modeName}.output.result_json`] = 'string';
       schema[`${modeName}.output.items_json`] = 'string';
       schema[`${modeName}.output.digest`] = 'string';
+      schema[`${modeName}.result_json`] = 'string';
+      schema[`${modeName}.items_json`] = 'string';
       if (classification?.archetype === 'external-adapter') {
         schema[`${modeName}.output.adapter_kind`] = 'string';
       }
@@ -599,6 +602,26 @@ function applyCollectionLifecycleReactions(
   };
 }
 
+function applyStageOutputMirrorReactions(
+  reactions: MutableRecord,
+  intermediateModes: string[],
+  stageClassificationBySlug: Map<string, ClassifiedStage>,
+): void {
+  for (const modeName of intermediateModes) {
+    if (stageClassificationBySlug.get(modeName)?.archetype === 'llm-reasoning') {
+      continue;
+    }
+    reactions[stageOutputMirrorReactionName(modeName)] = {
+      event: 'AfterRound',
+      write_scope: [`${modeName}.result_json`, `${modeName}.items_json`],
+    };
+  }
+}
+
+function stageOutputMirrorReactionName(stage: string): string {
+  return `mirror_${safeIdentifier(stage)}_output`;
+}
+
 function applyCollectionLifecycleSchema(
   schema: MutableRecord,
   descriptor: CollectionLifecycleDescriptor,
@@ -809,7 +832,7 @@ function outputProjectionFields(
 ): string[] {
   const classification = stageClassificationBySlug.get(modeName);
   if (classification?.archetype !== 'llm-reasoning') {
-    return [`${modeName}.output`];
+    return [`${modeName}.output`, `${modeName}.result_json`, `${modeName}.items_json`];
   }
   return reasoningContractsBySlug.has(modeName)
     ? [`${modeName}.result_json`, `${modeName}.items_json`, `${modeName}.result`]
@@ -1010,7 +1033,14 @@ ${fieldResolvers}
   const lifecycleActionHandlers = lifecycleTransitions.map((transition) => `  async ${transition.action}(payload) {
     return collectionLifecycleIntentEvent(payload as HandlerPayload, ${tsString(transition.action)}, ${tsString(transition.to)}, ${tsString(transition.from)});
   },`).join('\n\n');
-  const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
+  const stageOutputMirrorReactionEntries = options.includeReactionHandlers
+    ? bodyActions.map((stage) => `,
+  [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
+    : '';
+  const reactionImport = options.includeReactionHandlers
+    ? `ReactionHandler, ${stageOutputMirrorReactionEntries ? 'ReactionResult, ' : ''}`
+    : '';
+  const reactionMapConstructor = stageOutputMirrorReactionEntries ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
@@ -1029,7 +1059,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  const raw = snapshot.get(itemsPath);\n  if (typeof raw !== 'string') {\n    return false;\n  }\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(raw) as unknown;\n  } catch {\n    return false;\n  }\n  if (!Array.isArray(parsed)) {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}${lifecycleTransitions.length > 0 ? renderCollectionLifecycleApplyHelper() : ''}`
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${lifecycleReactionEntries},\n]);${lifecycleReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -1094,6 +1124,31 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}
 };${lifecycleIntentHelper}${reactionExport}${conformanceHelper}
 `;
+}
+
+function stageOutputMirrorReactionHelper(): string {
+  return `
+
+function mirrorStageOutput(
+  snapshot: ReadonlyMap<string, unknown>,
+  outputPath: string,
+  resultPath: string,
+  itemsPath: string,
+): ReactionResult | undefined {
+  const output = snapshot.get(outputPath);
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return undefined;
+  }
+  const record = output as Record<string, unknown>;
+  const mutations: ReactionResult['mutations'] = [];
+  if (typeof record.result_json === 'string' && snapshot.get(resultPath) !== record.result_json) {
+    mutations.push({ op: 'MSet' as const, path: resultPath, value: record.result_json });
+  }
+  if (typeof record.items_json === 'string' && snapshot.get(itemsPath) !== record.items_json) {
+    mutations.push({ op: 'MSet' as const, path: itemsPath, value: record.items_json });
+  }
+  return mutations.length > 0 ? { mutations } : undefined;
+}`;
 }
 
 function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleDescriptor): string {
