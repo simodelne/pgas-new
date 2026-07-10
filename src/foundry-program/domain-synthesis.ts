@@ -335,7 +335,7 @@ function verifyStageBody(
     allowedProcessEnv: options.integration?.kind === 'http_api' ? options.integration.config_env : [],
   });
   if (safetyError) {
-    return Promise.resolve({ ok: false, error: safetyError });
+    return Promise.resolve({ ok: false, error: formatSafetyGateFailure(safetyError) });
   }
 
   if (!exportsRunStage(source)) {
@@ -1479,6 +1479,40 @@ function formatBehavioralGateFailure(stage: string, behaviorError: string, fixtu
     "Stateful repair hint: read request JSON from input.domain['inputs.initial_user_text']; for deterministic prior output reads like prior_stage.output.result_json.field, read input.domain['prior_stage.output'].result_json and JSON.parse it before using field.",
     'For items_json, emit one string per domain_spec.produces.items_json template even when a computed value is 0 or false; do not return an empty array for declared item templates.',
   );
+  return lines.join('\n');
+}
+
+/**
+ * Enrich raw safety-scan errors with ACTIONABLE repair guidance before they
+ * reach the repair prompt. The raw scanSafety strings (e.g. "banned capability:
+ * require") tell the model what is wrong but not what to do instead, so temp-0
+ * models re-emit the same class of violation (observed: require -> dynamic
+ * import -> identical retries -> wasted budget). The dominant real-world wedge is
+ * models gratuitously computing a `digest` via node:crypto; steer them to the
+ * self-contained, import-free, `digest: ''` shape the engine actually expects.
+ */
+export function formatSafetyGateFailure(safetyError: string): string {
+  const lines = [`safety scan failed: ${safetyError}`];
+  const lower = safetyError.toLowerCase();
+  if (
+    lower.includes('require') ||
+    lower.includes('dynamic import') ||
+    lower.includes('node:crypto') ||
+    lower.startsWith('banned import:')
+  ) {
+    lines.push(
+      "The stage body must be self-contained: the ONLY allowed import is the type-only `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js'`. Do not use require, dynamic import(), or import any other module.",
+      "In particular, do NOT compute a hash or digest and do NOT import 'node:crypto' — set `digest: ''` in the returned object; the engine computes the digest itself.",
+    );
+  } else if (lower.includes('fetch')) {
+    lines.push('Do not call fetch or perform any network I/O; the stage body must be a pure deterministic transform of input.domain.');
+  } else if (lower.includes('process.env')) {
+    lines.push('Do not read process.env; derive every value from input.domain.');
+  } else if (lower.includes('eval') || lower.includes('function constructor')) {
+    lines.push('Do not use eval or the Function constructor; write the logic directly.');
+  } else {
+    lines.push("The stage body must be self-contained and side-effect-free: the only allowed import is the type-only contracts import; no require, dynamic import, eval, Function constructor, fetch, or process.env.");
+  }
   return lines.join('\n');
 }
 
