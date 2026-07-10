@@ -972,6 +972,114 @@ describe('synthesize_program_spec handler', () => {
       }),
     ).rejects.toThrow(/missing JSON-string domain field: intake\.transitions_json/);
   });
+
+  describe('demand-driven flat stage-output mirror', () => {
+    function flatMirrorDomain(applyPolicyReads: string[]): Record<string, unknown> {
+      return {
+        'program.slug': 'flat-mirror-demand',
+        'program.name': 'Flat Mirror Demand',
+        'program.target_dir': '/tmp/flat-mirror-demand',
+        'program.design_path': 'design',
+        'intake.purpose': 'Normalize an input, apply a policy, update a ledger, and complete.',
+        'intake.entry_channel': 'user_text',
+        'intake.stages_json': JSON.stringify([
+          { slug: 'intake', is_bootstrap: true },
+          { slug: 'normalize_request' },
+          {
+            slug: 'apply_policy',
+            domain_spec: {
+              reads: applyPolicyReads,
+              produces: {
+                result_json: { stage: 'string', order_id: 'string' },
+                items_json: 'string[]',
+              },
+              rules: ['Apply the policy to the normalized request.'],
+              invariants: ['result_json.stage must equal apply_policy.'],
+            },
+          },
+          { slug: 'update_ledger' },
+          { slug: 'complete', is_terminal: true },
+        ]),
+        'intake.transitions_json': JSON.stringify([
+          { from: 'intake', to: 'normalize_request', trigger: 'started', guard_field: 'intake.started' },
+          { from: 'normalize_request', to: 'apply_policy', trigger: 'normalized', guard_field: 'normalize_request.ready' },
+          { from: 'apply_policy', to: 'update_ledger', trigger: 'applied', guard_field: 'apply_policy.ready' },
+          { from: 'update_ledger', to: 'complete', trigger: 'done', guard_field: 'update_ledger.ready' },
+        ]),
+        'intake.delegation_json': JSON.stringify({
+          normalize_request: { kind: 'pure-compute' },
+          apply_policy: { kind: 'pure-compute' },
+          update_ledger: { kind: 'pure-compute' },
+        }),
+        'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'update_ledger.ready' }),
+      };
+    }
+
+    interface ParsedFlatMirrorSpec {
+      reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
+      schema: Record<string, string>;
+      projection: Record<string, { include: string[]; exclude: string[] }>;
+    }
+
+    it('stays inert when no stage references a flat path: nested-only reads emit no mirror surface', () => {
+      const artifact = synthesizeProgramSpecFromDomain(
+        flatMirrorDomain(['normalize_request.output.result_json.order_id']),
+      );
+      const parsed = load(artifact.spec_yaml) as ParsedFlatMirrorSpec;
+
+      expect(artifact.stage_classification).toContainEqual(
+        expect.objectContaining({ slug: 'normalize_request', archetype: 'pure-compute' }),
+      );
+      expect(Object.keys(parsed.reactions).filter((name) => name.startsWith('mirror_'))).toEqual([]);
+      expect(parsed.schema['normalize_request.output.result_json']).toBe('string');
+      expect(parsed.schema).not.toHaveProperty('normalize_request.result_json');
+      expect(parsed.schema).not.toHaveProperty('normalize_request.items_json');
+      expect(parsed.schema).not.toHaveProperty('apply_policy.result_json');
+      expect(parsed.schema).not.toHaveProperty('update_ledger.result_json');
+      expect(parsed.projection.apply_policy?.include).toContain('normalize_request.output');
+      expect(parsed.projection.apply_policy?.include).not.toContain('normalize_request.result_json');
+      expect(parsed.projection.normalize_request?.include).not.toContain('normalize_request.result_json');
+      expect(artifact.handlers_ts).not.toContain('mirrorStageOutput');
+      expect(artifact.handlers_ts).not.toContain('ReactionResult');
+    });
+
+    it('emits the flat mirror only for the pure-compute stage a flat read demands', () => {
+      const artifact = synthesizeProgramSpecFromDomain(
+        flatMirrorDomain(['normalize_request.result_json.order_id']),
+      );
+      const parsed = load(artifact.spec_yaml) as ParsedFlatMirrorSpec;
+
+      expect(parsed.reactions.mirror_normalize_request_output).toEqual({
+        event: 'AfterRound',
+        write_scope: ['normalize_request.result_json', 'normalize_request.items_json'],
+      });
+      expect(parsed.reactions).not.toHaveProperty('mirror_apply_policy_output');
+      expect(parsed.reactions).not.toHaveProperty('mirror_update_ledger_output');
+
+      expect(parsed.schema['normalize_request.result_json']).toBe('string');
+      expect(parsed.schema['normalize_request.items_json']).toBe('string');
+      expect(parsed.schema['normalize_request.output.result_json']).toBe('string');
+      expect(parsed.schema).not.toHaveProperty('apply_policy.result_json');
+      expect(parsed.schema).not.toHaveProperty('update_ledger.result_json');
+
+      expect(parsed.projection.normalize_request?.include).toEqual(
+        expect.arrayContaining(['normalize_request.output', 'normalize_request.result_json', 'normalize_request.items_json']),
+      );
+      expect(parsed.projection.apply_policy?.include).toContain('normalize_request.result_json');
+      expect(parsed.projection.apply_policy?.include).not.toContain('apply_policy.result_json');
+      expect(parsed.projection.update_ledger?.include).not.toContain('update_ledger.result_json');
+
+      expect(artifact.handlers_ts).toContain('mirror_normalize_request_output');
+      expect(artifact.handlers_ts).toContain('function mirrorStageOutput(');
+      expect(artifact.handlers_ts).toContain('ReactionResult');
+      expect(artifact.handlers_ts).toContain('new Map<string, ReactionHandler>');
+      expect(artifact.handlers_ts).not.toContain('mirror_apply_policy_output');
+      expect(artifact.handlers_ts).not.toContain('mirror_update_ledger_output');
+      expect(artifact.handlers_index_ts).not.toContain('mirrorStageOutput');
+
+      expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+    });
+  });
 });
 
 async function synthesizeStageGraph(sessionId: string, stageNames: string[]) {

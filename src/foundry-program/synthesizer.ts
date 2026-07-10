@@ -181,6 +181,7 @@ export function synthesizeProgramSpecFromDomain(
       .filter((stage): stage is Stage & { domain_spec: StageDomainSpec } => !!stage.domain_spec)
       .map((stage) => [stage.slug, stage.domain_spec]),
   );
+  const flatMirrorStages = collectFlatMirrorStages(stages, stageClassificationBySlug);
 
   const modeNames = stages.map((stage) => stage.slug);
   const firstMode = modeNames[0] as string;
@@ -251,7 +252,7 @@ export function synthesizeProgramSpecFromDomain(
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
-  const intermediateJsonFields = intermediateModes.flatMap((modeName) => outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug));
+  const intermediateJsonFields = intermediateModes.flatMap((modeName) => outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug, flatMirrorStages));
   const intermediateGuardFields = unique(
     intermediateModes.flatMap((modeName) => guardFieldsByMode.get(modeName) ?? []),
   );
@@ -262,7 +263,7 @@ export function synthesizeProgramSpecFromDomain(
     }
     return intermediateModes
       .filter((candidate) => modeNames.indexOf(candidate) < modeIndex)
-      .flatMap((candidate) => outputProjectionFields(candidate, stageClassificationBySlug, reasoningContractsBySlug));
+      .flatMap((candidate) => outputProjectionFields(candidate, stageClassificationBySlug, reasoningContractsBySlug, flatMirrorStages));
   };
 
   const projection: MutableRecord = {
@@ -286,7 +287,7 @@ export function synthesizeProgramSpecFromDomain(
         'notebook.pins',
         ...(guardFieldsByMode.get(modeName) ?? []),
         ...accumulatedOutputFieldsBefore(modeName),
-        ...outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug),
+        ...outputProjectionFields(modeName, stageClassificationBySlug, reasoningContractsBySlug, flatMirrorStages),
       ]),
       exclude: [],
     };
@@ -318,6 +319,7 @@ export function synthesizeProgramSpecFromDomain(
       write_scope: [initialEntryPath],
     },
   };
+  applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, flatMirrorStages);
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
@@ -376,6 +378,10 @@ export function synthesizeProgramSpecFromDomain(
       if (classification?.archetype === 'external-adapter') {
         schema[`${modeName}.output.adapter_kind`] = 'string';
       }
+      if (flatMirrorStages.has(modeName)) {
+        schema[`${modeName}.result_json`] = 'string';
+        schema[`${modeName}.items_json`] = 'string';
+      }
     }
   }
   if (completion.collection_lifecycle) {
@@ -400,6 +406,7 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: './stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
+      flatMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
@@ -409,6 +416,7 @@ export function synthesizeProgramSpecFromDomain(
       stageImportPrefix: '../stages',
       initialEntryPath,
       entryPath: `inputs.${entryChannel}`,
+      flatMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
     }, reasoningContractsBySlug),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle),
@@ -575,6 +583,50 @@ function applyControlPlaneEntryChannel(spec: MutableRecord, entryChannel: string
       record.channel = entryChannel;
     }
   }
+}
+
+// Demand-driven flat mirror: a pure-compute/external-adapter stage earns a
+// flat `<stage>.result_json`/`<stage>.items_json` mirror of its nested
+// `<stage>.output.*` record ONLY when some stage's domain_spec.reads
+// references the flat path (`<stage>.result_json...` / `<stage>.items_json...`,
+// not `<stage>.output....`). With no such reference the set is empty and the
+// synthesized contract is byte-identical to the mirror-free output.
+function collectFlatMirrorStages(
+  stages: Stage[],
+  stageClassificationBySlug: Map<string, ClassifiedStage>,
+): Set<string> {
+  const flatMirrorStages = new Set<string>();
+  for (const readPath of stages.flatMap((stage) => stage.domain_spec?.reads ?? [])) {
+    const [stageSlug, flatField] = readPath.split('.');
+    if (!stageSlug || (flatField !== 'result_json' && flatField !== 'items_json')) {
+      continue;
+    }
+    const archetype = stageClassificationBySlug.get(stageSlug)?.archetype;
+    if (archetype !== undefined && archetype !== 'llm-reasoning') {
+      flatMirrorStages.add(stageSlug);
+    }
+  }
+  return flatMirrorStages;
+}
+
+function applyStageOutputMirrorReactions(
+  reactions: MutableRecord,
+  intermediateModes: string[],
+  flatMirrorStages: ReadonlySet<string>,
+): void {
+  for (const modeName of intermediateModes) {
+    if (!flatMirrorStages.has(modeName)) {
+      continue;
+    }
+    reactions[stageOutputMirrorReactionName(modeName)] = {
+      event: 'AfterRound',
+      write_scope: [`${modeName}.result_json`, `${modeName}.items_json`],
+    };
+  }
+}
+
+function stageOutputMirrorReactionName(stage: string): string {
+  return `mirror_${safeIdentifier(stage)}_output`;
 }
 
 function applyCollectionLifecycleReactions(
@@ -806,10 +858,13 @@ function outputProjectionFields(
   modeName: string,
   stageClassificationBySlug: Map<string, ClassifiedStage>,
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
+  flatMirrorStages: ReadonlySet<string>,
 ): string[] {
   const classification = stageClassificationBySlug.get(modeName);
   if (classification?.archetype !== 'llm-reasoning') {
-    return [`${modeName}.output`];
+    return flatMirrorStages.has(modeName)
+      ? [`${modeName}.output`, `${modeName}.result_json`, `${modeName}.items_json`]
+      : [`${modeName}.output`];
   }
   return reasoningContractsBySlug.has(modeName)
     ? [`${modeName}.result_json`, `${modeName}.items_json`, `${modeName}.result`]
@@ -917,6 +972,7 @@ function renderHandlersSource(
     stageImportPrefix: string;
     initialEntryPath: string;
     entryPath: string;
+    flatMirrorStages: ReadonlySet<string>;
     collectionLifecycle?: CollectionLifecycleDescriptor;
   },
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
@@ -1010,7 +1066,14 @@ ${fieldResolvers}
   const lifecycleActionHandlers = lifecycleTransitions.map((transition) => `  async ${transition.action}(payload) {
     return collectionLifecycleIntentEvent(payload as HandlerPayload, ${tsString(transition.action)}, ${tsString(transition.to)}, ${tsString(transition.from)});
   },`).join('\n\n');
-  const reactionImport = options.includeReactionHandlers ? 'ReactionHandler, ' : '';
+  const stageOutputMirrorReactionEntries = options.includeReactionHandlers
+    ? bodyActions.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
+  [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
+    : '';
+  const reactionImport = options.includeReactionHandlers
+    ? `ReactionHandler, ${stageOutputMirrorReactionEntries ? 'ReactionResult, ' : ''}`
+    : '';
+  const reactionMapConstructor = stageOutputMirrorReactionEntries ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
@@ -1029,7 +1092,7 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
     ? `\n\nfunction collectionLifecycleAllTerminal(\n  snapshot: ReadonlyMap<string, unknown>,\n  itemsPath: string,\n  statusField: string,\n  terminalStatuses: readonly string[],\n  requireNonEmpty: boolean,\n): boolean {\n  const raw = snapshot.get(itemsPath);\n  if (typeof raw !== 'string') {\n    return false;\n  }\n  let parsed: unknown;\n  try {\n    parsed = JSON.parse(raw) as unknown;\n  } catch {\n    return false;\n  }\n  if (!Array.isArray(parsed)) {\n    return false;\n  }\n  if (requireNonEmpty && parsed.length === 0) {\n    return false;\n  }\n  const terminal = new Set(terminalStatuses);\n  return parsed.every((item) => {\n    if (!item || typeof item !== 'object' || Array.isArray(item)) {\n      return false;\n    }\n    const status = (item as Record<string, unknown>)[statusField];\n    return typeof status === 'string' && terminal.has(status);\n  });\n}${lifecycleTransitions.length > 0 ? renderCollectionLifecycleApplyHelper() : ''}`
     : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = new Map([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${lifecycleReactionEntries},\n]);${lifecycleReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -1094,6 +1157,31 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}
 };${lifecycleIntentHelper}${reactionExport}${conformanceHelper}
 `;
+}
+
+function stageOutputMirrorReactionHelper(): string {
+  return `
+
+function mirrorStageOutput(
+  snapshot: ReadonlyMap<string, unknown>,
+  outputPath: string,
+  resultPath: string,
+  itemsPath: string,
+): ReactionResult | undefined {
+  const output = snapshot.get(outputPath);
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return undefined;
+  }
+  const record = output as Record<string, unknown>;
+  const mutations: ReactionResult['mutations'] = [];
+  if (typeof record.result_json === 'string' && snapshot.get(resultPath) !== record.result_json) {
+    mutations.push({ op: 'MSet' as const, path: resultPath, value: record.result_json });
+  }
+  if (typeof record.items_json === 'string' && snapshot.get(itemsPath) !== record.items_json) {
+    mutations.push({ op: 'MSet' as const, path: itemsPath, value: record.items_json });
+  }
+  return mutations.length > 0 ? { mutations } : undefined;
+}`;
 }
 
 function renderCollectionLifecycleReactionEntry(descriptor: CollectionLifecycleDescriptor): string {
