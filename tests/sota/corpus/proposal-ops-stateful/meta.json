@@ -11,10 +11,10 @@
     "stage_archetypes": {
       "estimate_fee": "pure-compute",
       "apply_discount": "pure-compute",
-      "approval_summary": "llm-reasoning"
+      "approval_summary": "pure-compute"
     },
-    "body_stages": ["estimate_fee", "apply_discount"],
-    "llm_stages": ["approval_summary"],
+    "body_stages": ["estimate_fee", "apply_discount", "approval_summary"],
+    "llm_stages": [],
     "external_adapter_stages": []
   }
 }

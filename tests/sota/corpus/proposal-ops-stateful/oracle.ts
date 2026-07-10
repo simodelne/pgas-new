@@ -7,18 +7,20 @@ import {
   type SotaStageActual,
 } from '../../oracle-types.js';
 
-const TYPED_FIELDS = ['approved', 'basis', 'discounted_total_usd', 'budget_usd'] as const;
-
+// approval_summary is a DETERMINISTIC pure-compute stage (its domain-spec is a
+// threshold check: approved = discounted_total <= budget). The foundry classifies
+// it pure-compute (correctly, per the determinism-debias), so it emits a computed
+// body whose output lands at approval_summary.output.result_json — this oracle
+// verifies that deterministic computation rather than an llm-reasoning projection.
 function expected(input: Parameters<SotaOracle['expected']>[0]): SotaFunctionalActual {
   const subtotal = Number(input.domain.base_hours) * Number(input.domain.hourly_rate_usd);
   const discounted = Math.round(subtotal * (1 - Number(input.domain.discount_pct) / 100));
   const budget = Number(input.domain.budget_usd);
-  const summary = JSON.parse(input.llm_outputs?.approval_summary?.result_json ?? '{}') as Record<string, unknown>;
-  const summaryItems = JSON.parse(input.llm_outputs?.approval_summary?.items_json ?? '[]') as unknown[];
+  const approved = discounted <= budget;
+  const basis = approved ? 'discounted_total_within_budget' : 'discounted_total_exceeds_budget';
   return {
     final_stage: 'complete',
-    // Woven reasoning contracts write one GKType-typed flat key per core field.
-    domain: Object.fromEntries(TYPED_FIELDS.map((field) => [`approval_summary.result.${field}`, summary[field]])),
+    domain: {},
     stages: {
       estimate_fee: stage('estimate_fee', {
         stage: 'estimate_fee',
@@ -32,7 +34,13 @@ function expected(input: Parameters<SotaOracle['expected']>[0]): SotaFunctionalA
         discount_pct: input.domain.discount_pct,
         discounted_total_usd: discounted,
       }, [`previous_total_usd:${subtotal}`, `discounted_total_usd:${discounted}`]),
-      approval_summary: stage('approval_summary', summary, summaryItems),
+      approval_summary: stage('approval_summary', {
+        stage: 'approval_summary',
+        approved,
+        basis,
+        discounted_total_usd: discounted,
+        budget_usd: budget,
+      }, [`approved:${approved}`, `discounted_total_usd:${discounted}`]),
     },
   };
 }
@@ -49,19 +57,14 @@ function assertOutput(input: Parameters<SotaOracle['assertOutput']>[0], actual: 
     assertStage(actual, 'estimate_fee').result.subtotal_usd,
     'cross-stage previous_total_usd',
   );
-  for (const field of TYPED_FIELDS) {
-    assertEqual(actual.domain[`approval_summary.result.${field}`], want.domain[`approval_summary.result.${field}`], `approval_summary.result.${field}`);
-  }
 }
 
 function mutations(_input: Parameters<SotaOracle['mutations']>[0], good: SotaFunctionalActual): SotaFunctionalActual[] {
   const brokenDependency = cloneActual(good);
   brokenDependency.stages.apply_discount.result.previous_total_usd = 999;
   const wrongApproval = cloneActual(good);
-  wrongApproval.stages.approval_summary.result.approved = false;
-  const divergedTypedField = cloneActual(good);
-  divergedTypedField.domain['approval_summary.result.approved'] = false;
-  return [brokenDependency, wrongApproval, divergedTypedField];
+  wrongApproval.stages.approval_summary.result.approved = !(wrongApproval.stages.approval_summary.result.approved as boolean);
+  return [brokenDependency, wrongApproval];
 }
 
 function stage(stageName: string, result: Record<string, unknown>, items: unknown[]): SotaStageActual {
