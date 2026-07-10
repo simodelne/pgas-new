@@ -21,8 +21,8 @@ else
   fail ".claude-plugin/plugin.json missing or invalid JSON"
 fi
 
-echo "[2/5] plugin.json + package.json version pinned to 3.14.0"
-EXPECTED_VERSION="3.14.0"
+echo "[2/5] plugin.json + package.json version pinned to 3.15.0"
+EXPECTED_VERSION="3.15.0"
 MANIFEST_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')).version ?? '')" 2>/dev/null)
 PKG_VERSION=$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('package.json','utf8')).version ?? '')" 2>/dev/null)
 if [[ "$MANIFEST_VERSION" == "$EXPECTED_VERSION" ]]; then
