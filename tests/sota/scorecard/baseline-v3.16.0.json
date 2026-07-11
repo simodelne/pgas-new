@@ -1,0 +1,836 @@
+{
+  "schema_version": 1,
+  "run_id": "sota-2026-07-11T02-28-30-359Z",
+  "created_at": "2026-07-11T02:28:30.359Z",
+  "model_id": "qwen36-27b",
+  "provider_url": "http://100.100.74.6:8000/v1",
+  "prompt_hash": "32d9e1d8fb137fb87f620caf2ae946ce3126cccd5196e2de0ca8bc56071b1039",
+  "baseline_scorecard": "/home/simone/pgas-new/tests/sota/scorecard/baseline-v3.5.0.json",
+  "aggregate": {
+    "total": 13,
+    "passed": 13,
+    "failed": 0,
+    "pass_at_1": 1,
+    "task_success_rate": 1,
+    "attempts_total": 42,
+    "latency_ms": 701535,
+    "holdout": {
+      "total": 8,
+      "passed": 8,
+      "task_success_rate": 1
+    },
+    "dev": {
+      "total": 5,
+      "passed": 5,
+      "task_success_rate": 1
+    },
+    "failure_taxonomy": {}
+  },
+  "benchmarks": [
+    {
+      "slug": "ambiguous-policy-refusal",
+      "holdout": true,
+      "archetype_tags": [
+        "adversarial-negative",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1238,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1317,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-ambiguous-policy-refusal-DMjqKp\n\n{\"level\":30,\"time\":1783736953155,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783736953156,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783736953156,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783736953175,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-ambiguous-policy-refusal-DMjqKp/session-logs\"},\"programs\":[\"ambiguous-policy-refusal\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783736953248,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783736953262,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:29:12\n   Duration  812ms (transform 72ms, setup 0ms, import 469ms, tests 178ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 214
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "intake": 2,
+        "surface_gap": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "surface_gap": false
+      },
+      "latency_ms": 43151,
+      "body_hashes": {
+        "intake": "4c823488ad37b5a60bbbd3eae995be5f8520bbb2f51a031f2bc861dd68e2f613",
+        "surface_gap": "f961d6c1e7790a74611a4bc6aa7c89175526553ad97903ce2860dd2cbdd07f92"
+      },
+      "prompt_hash": "802293b6187edf5748a8650ff386d8c489ca966b50f13ed0bd82886b80281a96",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "The model correctly refused the ambiguous policy request, surfacing missing fields without inventing approval thresholds or authorized actors, and terminated in the refusal stage as required.",
+        "latency_ms": 1584
+      }
+    },
+    {
+      "slug": "brief-summarizer",
+      "holdout": false,
+      "archetype_tags": [
+        "llm-reasoning"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1084,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1074,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-brief-summarizer-jgyeJi\n\n{\"level\":30,\"time\":1783736987089,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783736987090,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783736987090,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783736987103,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-brief-summarizer-jgyeJi/session-logs\"},\"programs\":[\"brief-summarizer\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783736987153,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783736987163,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:29:46\n   Duration  617ms (transform 68ms, setup 0ms, import 348ms, tests 114ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 103
+        }
+      },
+      "attempts_total": 2,
+      "stage_attempts": {
+        "intake": 1,
+        "brief_summary": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "brief_summary": false
+      },
+      "latency_ms": 32210,
+      "body_hashes": {
+        "intake": "e7e8cb3bd91d37a24abcada2b17c0f37efa8c8a4e5931ea33bff0040eb59a664",
+        "brief_summary": "1ec4b60be94238f2cb87058dd8e62d9ecb3b19c920ab1b8ac52f6ef2d98c6827"
+      },
+      "prompt_hash": "5b878193e705f758b03edf2d34615d7487eb0b4eee0fb6b7eb4fefffa26306f9",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; valid JSON output.",
+        "latency_ms": 951
+      }
+    },
+    {
+      "slug": "credit-memo-stateful",
+      "holdout": true,
+      "archetype_tags": [
+        "multi-stage",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1058,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1096,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-credit-memo-stateful-XmbXSW\n\n{\"level\":30,\"time\":1783737051810,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737051811,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737051811,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737051823,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-credit-memo-stateful-XmbXSW/session-logs\"},\"programs\":[\"credit-memo-stateful\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737051881,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737051891,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:30:51\n   Duration  654ms (transform 66ms, setup 0ms, import 365ms, tests 127ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 143
+        }
+      },
+      "attempts_total": 4,
+      "stage_attempts": {
+        "intake": 1,
+        "normalize_credit": 1,
+        "calculate_credit": 1,
+        "memo_posting": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "normalize_credit": false,
+        "calculate_credit": false,
+        "memo_posting": false
+      },
+      "latency_ms": 63815,
+      "body_hashes": {
+        "intake": "e9c23c72954decc40b04cbfcc83e95961f939c890575396a710575034685e90a",
+        "normalize_credit": "c4d7f7bcdd4665cf3be090b1e53dc44c6d0f2f528e7eecb1fdefe61322545e95",
+        "calculate_credit": "be50efebfe7080273917eba0d4497edfa53d98e85d3adc4c1f2b2b9cf8d7b97c",
+        "memo_posting": "e1bbe51bf88c4273c0383e2929b8adf062ea64002bca89aa31e864a46d993229"
+      },
+      "prompt_hash": "3a613fc1ba136561d56fe7dbdf327561768f885f267829a394b665c597632001",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; stateful credit memo logic correctly preserves amounts and reasons across stages.",
+        "latency_ms": 1273
+      }
+    },
+    {
+      "slug": "crm-mock-lookup",
+      "holdout": false,
+      "archetype_tags": [
+        "external-adapter",
+        "in-memory-mock",
+        "multi-stage"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1154,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1292,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-crm-mock-lookup-N0q28n\n\n{\"level\":30,\"time\":1783737102805,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737102807,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737102807,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737102827,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-crm-mock-lookup-N0q28n/session-logs\"},\"programs\":[\"crm-mock-lookup\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737102910,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737102922,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:31:42\n   Duration  814ms (transform 71ms, setup 0ms, import 466ms, tests 186ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 180
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "intake": 1,
+        "crm_lookup": 1,
+        "eligibility_score": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "crm_lookup": false,
+        "eligibility_score": false
+      },
+      "latency_ms": 49809,
+      "body_hashes": {
+        "intake": "bd3a0b9d3904973a2c0f7a6a4b05c9ab142eb25617c45b243740bab1bffdd530",
+        "crm_lookup": "4a23567411413c921a2fc704c61e3006d2b922a55f2908bebf7ed0d564b957b3",
+        "eligibility_score": "52926b289b0e1767f08788784d0f6747f852daaedc85a072c842dac1cba8e990"
+      },
+      "prompt_hash": "c65c3e84d8c59646af415c62777592aabe8890e611edc98796832462d67cb207",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; mock adapter used correctly with eligibility computed.",
+        "latency_ms": 1138
+      }
+    },
+    {
+      "slug": "entitlement-seat-stateful",
+      "holdout": true,
+      "archetype_tags": [
+        "multi-stage",
+        "external-adapter",
+        "in-memory-mock",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1113,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1303,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-entitlement-seat-stateful-y3LV6q\n\n{\"level\":30,\"time\":1783737167487,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737167489,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737167489,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737167508,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-entitlement-seat-stateful-y3LV6q/session-logs\"},\"programs\":[\"entitlement-seat-stateful\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737167596,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737167610,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:32:46\n   Duration  854ms (transform 88ms, setup 0ms, import 498ms, tests 198ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 140
+        }
+      },
+      "attempts_total": 4,
+      "stage_attempts": {
+        "intake": 1,
+        "entitlement_lookup": 1,
+        "seat_delta_policy": 1,
+        "audit_decision": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "entitlement_lookup": false,
+        "seat_delta_policy": false,
+        "audit_decision": false
+      },
+      "latency_ms": 63499,
+      "body_hashes": {
+        "intake": "a75c95b0f5d7a6eaaa50d0379bf71ee9043e4631cc28907f18ff7cc23c48f97a",
+        "entitlement_lookup": "9162ea878e45de430065e0744393f0819a2ca169d2420624ba8bc7731efd880b",
+        "seat_delta_policy": "da40bff3071cfc52d5a0d5394baab1494baf6e4467dc2a45515ea89c4365b4bb",
+        "audit_decision": "3ddf0b7e902b19b3521a16314e22c95f4a9cca08d765df3063240bc6f8560542"
+      },
+      "prompt_hash": "be2ef6b1e411b2b4f51b96e3d57de6d864225d747830fe2efa854df878b87b0a",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; implementation correctly uses in-memory adapter, carries state through policy, and avoids recomputation in audit.",
+        "latency_ms": 1419
+      }
+    },
+    {
+      "slug": "fee-calculator",
+      "holdout": false,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1096,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1230,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-fee-calculator-dq0XHG\n\n{\"level\":30,\"time\":1783737207099,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737207101,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737207101,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737207120,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-fee-calculator-dq0XHG/session-logs\"},\"programs\":[\"fee-calculator\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737207192,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737207204,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:33:26\n   Duration  798ms (transform 73ms, setup 0ms, import 471ms, tests 169ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 127
+        }
+      },
+      "attempts_total": 2,
+      "stage_attempts": {
+        "intake": 1,
+        "calculate_fee": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "calculate_fee": false
+      },
+      "latency_ms": 38154,
+      "body_hashes": {
+        "intake": "91b7eb3885a5b24b84503492e20bfc056b68e02c0798f1e6b2a7f8a4a78543e0",
+        "calculate_fee": "a3edefa017dbb9d396f9b009db67bbe8ec8e7692b7567ddc9218d20691dedf33"
+      },
+      "prompt_hash": "d53ed7acd27c5a61e868e05642c8e5064c288b91e69324f9513383a00bef02e5",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All tests passed, including typecheck, smoke, behavioral, and functional oracle checks.",
+        "latency_ms": 1839
+      }
+    },
+    {
+      "slug": "proposal-ops-stateful",
+      "holdout": false,
+      "archetype_tags": [
+        "multi-stage",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1149,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1277,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-proposal-ops-stateful-gdAnwE\n\n{\"level\":30,\"time\":1783737277259,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737277260,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737277260,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737277280,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-proposal-ops-stateful-gdAnwE/session-logs\"},\"programs\":[\"proposal-ops-stateful\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737277367,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737277381,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:34:36\n   Duration  832ms (transform 78ms, setup 0ms, import 477ms, tests 194ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 144
+        }
+      },
+      "attempts_total": 4,
+      "stage_attempts": {
+        "intake": 1,
+        "estimate_fee": 1,
+        "apply_discount": 1,
+        "approval_summary": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "estimate_fee": false,
+        "apply_discount": false,
+        "approval_summary": false
+      },
+      "latency_ms": 68357,
+      "body_hashes": {
+        "intake": "c436ef088728d64741cb68dffa27dcd3828b355448700fce9cbdf2d3568382fb",
+        "estimate_fee": "749b91b4611c67561effdf975f9841b4c7479fd7a34bb158972ecf58f28f4af2",
+        "apply_discount": "dc6e42b90171589e22591e7ed19697a1fbd116ec8163d2d949ed31fa7a1a7635",
+        "approval_summary": "1902cffc132c9ad3e51a967dc375ca65f67ce4a56d110465ac2e0a1fa9448d32"
+      },
+      "prompt_hash": "cf3b02502b0f35ae5e84f91d2e4a593268f00bcbf5c43de856c7cf9f2cb558ac",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; stateful proposal ops verified with exact discount math and preserved approval status.",
+        "latency_ms": 1296
+      }
+    },
+    {
+      "slug": "refund-ledger-stateful",
+      "holdout": true,
+      "archetype_tags": [
+        "multi-stage",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1137,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1258,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-refund-ledger-stateful-W6GtI5\n\n{\"level\":30,\"time\":1783737357119,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737357120,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737357120,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737357140,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-refund-ledger-stateful-W6GtI5/session-logs\"},\"programs\":[\"refund-ledger-stateful\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737357228,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737357242,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:35:56\n   Duration  804ms (transform 72ms, setup 0ms, import 451ms, tests 195ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 165
+        }
+      },
+      "attempts_total": 5,
+      "stage_attempts": {
+        "intake": 1,
+        "normalize_refund": 1,
+        "apply_refund_policy": 1,
+        "ledger_posting": 2
+      },
+      "cache_hits": {
+        "intake": false,
+        "normalize_refund": false,
+        "apply_refund_policy": false,
+        "ledger_posting": false
+      },
+      "latency_ms": 78600,
+      "body_hashes": {
+        "intake": "703b367608a2f2fa2610356880bf86f5095718798a31c9c3cbaf30c5d74db503",
+        "normalize_refund": "727a31e342630af631087872b0e16aa4162b6c50defbc75d4194550f0041c0d8",
+        "apply_refund_policy": "978a27a5b3bcd05aa6d43d77a7840b863fe42a5dd47dcd9fab0b80b90182d202",
+        "ledger_posting": "d377832b8b1c333ed8110c0bd85a05032c349813d093c52be3a42e66dc8a4a0b"
+      },
+      "prompt_hash": "9ac6865cc43f6c3af5a18cb6379c6155df305126c7fd37a2aff216f98e14b465",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed successfully, confirming correct state separation and consistent ledger posting.",
+        "latency_ms": 1794
+      }
+    },
+    {
+      "slug": "release-note-extractor",
+      "holdout": true,
+      "archetype_tags": [
+        "llm-reasoning"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1052,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1258,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-release-note-extractor-ylDEUn\n\n{\"level\":30,\"time\":1783737398824,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737398826,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737398826,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737398846,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-release-note-extractor-ylDEUn/session-logs\"},\"programs\":[\"release-note-extractor\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737398923,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737398932,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:36:38\n   Duration  788ms (transform 64ms, setup 0ms, import 453ms, tests 173ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 99
+        }
+      },
+      "attempts_total": 2,
+      "stage_attempts": {
+        "intake": 1,
+        "release_note_summary": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "release_note_summary": false
+      },
+      "latency_ms": 39823,
+      "body_hashes": {
+        "intake": "fc02d750b571936d602c88e2c81d4cd8235d7a7118cf2802618efcda8e116150",
+        "release_note_summary": "af16b1abc8459ab7dd1a27a6b012fa6e975413a760bf11320bea4e3ac5b0c783"
+      },
+      "prompt_hash": "7a3b1d436f9f8a871997dc99d07f9c7874ecee88b8d2c67653efc991d99e5bc3",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All benchmark gates passed successfully, confirming accurate extraction of release note facts without hallucination.",
+        "latency_ms": 1195
+      }
+    },
+    {
+      "slug": "risk-router",
+      "holdout": false,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1306,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1209,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-risk-router-0uhDVx\n\n{\"level\":30,\"time\":1783737474624,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737474625,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737474625,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737474637,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-risk-router-0uhDVx/session-logs\"},\"programs\":[\"risk-router\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737474691,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737474702,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:37:53\n   Duration  771ms (transform 78ms, setup 0ms, import 480ms, tests 133ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 144
+        }
+      },
+      "attempts_total": 4,
+      "stage_attempts": {
+        "intake": 2,
+        "score_risk": 1,
+        "route_queue": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "score_risk": false,
+        "route_queue": false
+      },
+      "latency_ms": 74624,
+      "body_hashes": {
+        "intake": "dc343c05896dbcd3f77eb1424a48494f7d86c9c042126db239044132dc0d5b5a",
+        "score_risk": "64fdf6f5f9e89ad943be8da3e93ccc4a68f8ceff0448184019c69cfc2d02195c",
+        "route_queue": "d10fa7f90a50b1c4f1b68c8e3e3d9c8a60b7ac76dca8c0165223e7806c220014"
+      },
+      "prompt_hash": "d79d4e06a7c56ebc443898faf99c26b39b96be6ffe2837bec9da3487b182cbb6",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; deterministic risk computation and routing verified.",
+        "latency_ms": 1111
+      }
+    },
+    {
+      "slug": "sla-policy-refusal",
+      "holdout": true,
+      "archetype_tags": [
+        "adversarial-negative",
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1084,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1266,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-sla-policy-refusal-jtU8vZ\n\n{\"level\":30,\"time\":1783737520663,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737520665,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737520665,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737520684,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-sla-policy-refusal-jtU8vZ/session-logs\"},\"programs\":[\"sla-policy-refusal\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737520756,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737520769,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:38:39\n   Duration  791ms (transform 67ms, setup 0ms, import 465ms, tests 169ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 162
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "intake": 2,
+        "surface_gap": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "surface_gap": false
+      },
+      "latency_ms": 44968,
+      "body_hashes": {
+        "intake": "60e6ff9a4226358b8814a568482a62107837664683e04949df5bee0379990516",
+        "surface_gap": "937304593d2c2943175c776298e27a5ecd7fc93806dc9da185253f6aea036ebd"
+      },
+      "prompt_hash": "35978290fa0d772c7f38b7612787943bdb20e35fcfdc7f4c2a5434937d5f5af2",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "Passed all gates; correctly refused routing due to missing SLA policy fields without fabrication.",
+        "latency_ms": 1251
+      }
+    },
+    {
+      "slug": "usage-invoice-calculator",
+      "holdout": true,
+      "archetype_tags": [
+        "pure-compute"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1600,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 867,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-usage-invoice-calculator-5osABj\n\n{\"level\":30,\"time\":1783737580787,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737580789,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737580789,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737580809,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-usage-invoice-calculator-5osABj/session-logs\"},\"programs\":[\"usage-invoice-calculator\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737580881,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737580897,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:39:40\n   Duration  635ms (transform 41ms, setup 0ms, import 357ms, tests 173ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 135
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "intake": 1,
+        "calculate_invoice": 2
+      },
+      "cache_hits": {
+        "intake": false,
+        "calculate_invoice": false
+      },
+      "latency_ms": 58846,
+      "body_hashes": {
+        "intake": "426c9f2e8ec31bae5f3e8df13226ef4a7f01abad088e94e2f496c735da08e440",
+        "calculate_invoice": "ce90b1b76cdac37d082ea117285cf9c239340fec96e584ddefb0a7346984d40c"
+      },
+      "prompt_hash": "ba0a8f4d66aa883917400a5866e201596f2a93c512a78e4c80c06c1a527c0f9e",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed; invoice calculation logic is correct and deterministic.",
+        "latency_ms": 1122
+      }
+    },
+    {
+      "slug": "warehouse-mock-reservation",
+      "holdout": true,
+      "archetype_tags": [
+        "external-adapter",
+        "in-memory-mock",
+        "multi-stage"
+      ],
+      "passed": true,
+      "failure_taxonomy": null,
+      "gates": {
+        "typecheck": {
+          "status": "pass",
+          "duration_ms": 1032,
+          "stdout_excerpt": "",
+          "stderr_excerpt": ""
+        },
+        "smoke": {
+          "status": "pass",
+          "duration_ms": 1055,
+          "stdout_excerpt": "\n RUN  v4.1.9 /tmp/pgas-new-sota-live-generated/pgas-sota-warehouse-mock-reservation-HggWXC\n\n{\"level\":30,\"time\":1783737627671,\"app\":\"simoneos\",\"env\":\"development\",\"error\":{},\"msg\":\"multimodal.not_available\"}\n{\"level\":30,\"time\":1783737627671,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"surrogate.auto_binding_disabled_no_owner_programs\"}\n{\"level\":30,\"time\":1783737627671,\"app\":\"simoneos\",\"env\":\"development\",\"provider\":\"mock\",\"model\":\"pgas-test-harness-author\",\"msg\":\"llm.middleware_installed\"}\n{\"level\":30,\"time\":1783737627681,\"app\":\"simoneos\",\"env\":\"development\",\"port\":0,\"database\":\":memory:\",\"sessionLogs\":{\"enabled\":true,\"rootDir\":\"/tmp/pgas-new-sota-live-generated/pgas-sota-warehouse-mock-reservation-HggWXC/session-logs\"},\"programs\":[\"warehouse-mock-reservation\"],\"msg\":\"server.constructed\"}\n{\"level\":30,\"time\":1783737627717,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.drain_start\"}\n{\"level\":30,\"time\":1783737627725,\"app\":\"simoneos\",\"env\":\"development\",\"msg\":\"shutdown.clean\"}\n\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n   Start at  02:40:27\n   Duration  610ms (transform 70ms, setup 0ms, import 364ms, tests 87ms, environment 0ms)\n\n",
+          "stderr_excerpt": ""
+        },
+        "behavioral": {
+          "status": "pass",
+          "duration_ms": 0
+        },
+        "functional_oracle": {
+          "status": "pass",
+          "duration_ms": 110
+        }
+      },
+      "attempts_total": 3,
+      "stage_attempts": {
+        "intake": 1,
+        "inventory_lookup": 1,
+        "reservation_decision": 1
+      },
+      "cache_hits": {
+        "intake": false,
+        "inventory_lookup": false,
+        "reservation_decision": false
+      },
+      "latency_ms": 45679,
+      "body_hashes": {
+        "intake": "601e741050e638c27d970821efb810754e995180ef9b0eea9c9dfc80d85a0c87",
+        "inventory_lookup": "bc9bb8cf3f50d5da6b3d8416fc17cd8f49e69ad4d759be8fe113277fdc185714",
+        "reservation_decision": "e04e91183a5e8d7bcda828c1dcb39666337b985cd9f90933260e0cdf3703d11f"
+      },
+      "prompt_hash": "fb34a9b03a8fe1f335f39ce329d203b3f355c8333b1691c63a421a412412b6ce",
+      "scorecard_path": null,
+      "advisory_judge": {
+        "status": "pass",
+        "model_id": "qwen36-27b",
+        "rubric_scores": {
+          "correctness": 5,
+          "specificity": 5,
+          "safety": 5
+        },
+        "summary": "All gates passed, including typecheck, smoke, behavioral, and functional oracle tests.",
+        "latency_ms": 1782
+      }
+    }
+  ],
+  "baseline_vs_v3_5_0": {
+    "baseline_task_success_rate": 0,
+    "current_task_success_rate": 1,
+    "delta_task_success_rate": 1,
+    "regressions": []
+  }
+}
