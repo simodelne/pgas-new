@@ -5,7 +5,10 @@ import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { loadSpecWithPatterns, validateSpecWiring, type ActionHandler } from '@simodelne/pgas-server/plugin.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
-import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
+import {
+  assertPreconditionVocabularyAlignment,
+  synthesizeProgramSpecFromDomain,
+} from '../../src/foundry-program/synthesizer.js';
 import {
   clearSynthesizedArtifact,
   getSynthesizedArtifact,
@@ -1079,6 +1082,51 @@ describe('synthesize_program_spec handler', () => {
 
       expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
     });
+  });
+});
+
+describe('precondition vocabulary alignment (pgas#620 pre-positioning)', () => {
+  it('locks every synthesized mode: precondition keys are a subset of the mode vocabulary', () => {
+    const synthesized = synthesizeProgramSpecFromDomain(domain());
+    const parsed = load(synthesized.spec_yaml) as {
+      modes: Record<string, { vocabulary?: string[]; preconditions?: Record<string, unknown> }>;
+    };
+
+    expect(Object.keys(parsed.modes).length).toBeGreaterThanOrEqual(3);
+    for (const [modeName, mode] of Object.entries(parsed.modes)) {
+      const vocabulary = new Set(mode.vocabulary ?? []);
+      for (const actionName of Object.keys(mode.preconditions ?? {})) {
+        expect(vocabulary.has(actionName), `mode "${modeName}" precondition "${actionName}"`).toBe(true);
+      }
+    }
+    // The invariant also holds through the exported synthesis-time assertion,
+    // which validateSynthesizedSpec runs on every synthesized spec.
+    expect(() => assertPreconditionVocabularyAlignment(load(synthesized.spec_yaml))).not.toThrow();
+  });
+
+  it('rejects a mode that declares a precondition for an action outside its vocabulary', () => {
+    const misaligned = {
+      modes: {
+        review: {
+          vocabulary: ['approve_review'],
+          preconditions: {
+            reject_review: [{ kind: 'FieldTruthy', path: 'review.ready' }],
+          },
+        },
+      },
+    };
+
+    expect(() => assertPreconditionVocabularyAlignment(misaligned)).toThrow(
+      /mode "review" declares a precondition for action "reject_review"/u,
+    );
+  });
+
+  it('rejects structurally malformed preconditions instead of skipping them', () => {
+    expect(() => assertPreconditionVocabularyAlignment({
+      modes: { start: { vocabulary: ['begin_work'], preconditions: ['begin_work'] } },
+    })).toThrow(/preconditions must be a mapping/u);
+    expect(() => assertPreconditionVocabularyAlignment({ modes: [] })).toThrow(/spec\.modes/u);
+    expect(() => assertPreconditionVocabularyAlignment('not a spec')).toThrow(/parsed spec object/u);
   });
 });
 

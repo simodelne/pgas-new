@@ -80,6 +80,7 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
   'package.json': spec('standalone/package.json.tmpl', ['PGAS_SERVER_VERSION', 'SLUG']),
   'tsconfig.json': spec('standalone/tsconfig.json.tmpl', []),
   'src/server.ts': spec('standalone/src/server.ts.tmpl', ['PASCAL_NAME', 'SLUG']),
+  'src/author-driver.ts': spec('standalone/src/author-driver.ts.tmpl', []),
   'src/repl/index.ts': spec('standalone/src/repl/index.ts.tmpl', ['NAME', 'SLUG']),
   'src/repl/renderer.ts': spec('standalone/src/repl/renderer.ts.tmpl', []),
   'src/programs/{{SLUG}}/specs.yml': spec('program/spec-skeleton.yml.tmpl', ['NAME', 'SLUG']),

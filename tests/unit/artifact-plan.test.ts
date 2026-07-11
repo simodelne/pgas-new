@@ -49,6 +49,7 @@ describe('artifact planner', () => {
       'package.json',
       'tsconfig.json',
       'src/server.ts',
+      'src/author-driver.ts',
       'src/repl/index.ts',
       'src/repl/renderer.ts',
       'src/programs/pgas-new/specs.yml',

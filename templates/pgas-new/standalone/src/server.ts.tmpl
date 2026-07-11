@@ -1,9 +1,16 @@
 import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { resolveAuthorDrivers } from './author-driver.js';
 import { create{{PASCAL_NAME}}ProgramEntry } from './programs/{{SLUG}}/registration.js';
+
+// Opt-in unified native-tools author driver (PGAS_AUTHOR_DRIVER=unified).
+// Default (env unset): `drivers` is undefined, no `drivers` key is passed,
+// and the engine boots its legacy JSON author path exactly as before.
+const drivers = resolveAuthorDrivers();
 
 const server = await createPgasServer({
   programs: [{ name: '{{SLUG}}', entry: create{{PASCAL_NAME}}ProgramEntry() }],
   devMode: process.env.PGAS_DEV_MODE === '1',
+  ...(drivers ? { drivers } : {}),
 });
 
 await server.start();
