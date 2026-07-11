@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createContext, Script } from 'node:vm';
 import ts from 'typescript';
+import { createProviderHandles } from '@simodelne/pgas-server/plugin.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesizedArtifact } from './synthesizer-store.js';
 import { resynthesizeWithReasoningContracts } from './synthesizer.js';
@@ -14,6 +15,13 @@ import {
 } from './reasoning-contract.js';
 
 const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
+const CODEX_CLI_ESCALATION_DRIVER = 'codex-cli';
+const STAGE_BODY_SYSTEM_PREAMBLE = [
+  'Return only TypeScript source code. Do not use markdown fences.',
+  'Do not include comments.',
+  'Do not include the literal words TODO, placeholder, stage_action_stub, or not implemented.',
+  "The only allowed import is: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
+].join(' ');
 
 export interface StageBodyRequest {
   stage: string;
@@ -66,6 +74,7 @@ interface CacheRecord {
   behavioral_gate?: string;
   behavioral_fixture?: StageBehaviorFixture;
   real_call_verified?: true;
+  escalation_driver?: typeof CODEX_CLI_ESCALATION_DRIVER;
 }
 
 interface StageBehaviorFixture {
@@ -195,6 +204,7 @@ export async function synthesizeDomainLogic(
         archetype: classification.archetype,
         ...auditFieldsFor(classification),
         ...behaviorFields,
+        ...escalationAuditFields(cached),
         attempts: 0,
         cache_hit: true,
         body_hash: cached.body_hash,
@@ -206,6 +216,8 @@ export async function synthesizeDomainLogic(
     let accepted: CacheRecord | undefined;
     let attemptsUsed = 0;
     let fallbackUsed = false;
+    let escalationDriver: typeof CODEX_CLI_ESCALATION_DRIVER | undefined;
+    let escalationAttemptsUsed = 0;
     if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
       attemptsUsed = 1;
       const body = renderRepoIntegrationStageBody(stage, repoIntegration);
@@ -255,6 +267,45 @@ export async function synthesizeDomainLogic(
         lastError = verification.error;
       }
 
+      const escalationGenerator = !accepted ? resolveEscalationGenerator() : undefined;
+      if (escalationGenerator) {
+        escalationDriver = CODEX_CLI_ESCALATION_DRIVER;
+        const escalationMaxAttempts = domainSynthesisEscalationMaxAttempts();
+        for (let attempt = 1; attempt <= escalationMaxAttempts; attempt += 1) {
+          escalationAttemptsUsed = attempt;
+          let body: string;
+          try {
+            body = await escalationGenerator({
+              stage,
+              archetype: classification.archetype,
+              contract: workingArtifact.contracts_ts,
+              prompt,
+              ...(lastError ? { repair: { attempt, lastError } } : {}),
+            });
+          } catch (error) {
+            lastError = `stage body escalation generator failed: ${errorMessage(error)}`;
+            continue;
+          }
+          const verification = await verifyStageBody(body, classification.archetype, {
+            stage,
+            ...(domainSpec ? { domainSpec } : {}),
+            reasoningContracts,
+          });
+          if (verification.ok) {
+            accepted = {
+              body,
+              body_hash: sha256(body),
+              behavioral_gate: verification.behavioral_gate,
+              behavioral_fixture: verification.behavioral_fixture,
+              real_call_verified: verification.real_call_verified,
+              escalation_driver: CODEX_CLI_ESCALATION_DRIVER,
+            };
+            break;
+          }
+          lastError = verification.error;
+        }
+      }
+
       // Issue #93: LLM repair exhausted. Before failing terminally, try a
       // deterministic mechanical fallback body derived from the frozen
       // domain_spec. Accept it ONLY if it passes the SAME behavioral gate, so
@@ -295,6 +346,10 @@ export async function synthesizeDomainLogic(
       ...behaviorAuditFields(accepted),
       attempts: attemptsUsed,
       cache_hit: false,
+      ...(escalationDriver ? {
+        escalation_driver: escalationDriver,
+        escalation_attempts: escalationAttemptsUsed,
+      } : {}),
       ...(fallbackUsed ? { deterministic_fallback: true } : {}),
       body_hash: accepted.body_hash,
     });
@@ -617,18 +672,11 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
           messages: [
             {
               role: 'system',
-              content: [
-                'Return only TypeScript source code. Do not use markdown fences.',
-                'Do not include comments.',
-                'Do not include the literal words TODO, placeholder, stage_action_stub, or not implemented.',
-                "The only allowed import is: import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';",
-              ].join(' '),
+              content: STAGE_BODY_SYSTEM_PREAMBLE,
             },
             {
               role: 'user',
-              content: request.repair
-                ? `${request.prompt}\n\nPrevious attempt failed:\n${request.repair.lastError}`
-                : request.prompt,
+              content: stageBodyUserPrompt(request),
             },
           ],
         }),
@@ -653,6 +701,25 @@ function createOpenAiCompatibleBodyGenerator(config: { providerUrl: string; mode
   };
 }
 
+function resolveEscalationGenerator(): StageBodyGenerator | undefined {
+  const driver = process.env.PGAS_SYNTH_ESCALATION_DRIVER?.trim().toLowerCase();
+  if (driver !== CODEX_CLI_ESCALATION_DRIVER) return undefined;
+
+  setDefaultEnv('PGAS_ENABLE_CODEX_DRIVER', '1');
+  const { authorHandle } = createProviderHandles({ provider: CODEX_CLI_ESCALATION_DRIVER });
+  return async (request) => extractCode(await authorHandle.complete(stageBodyEscalationPrompt(request)));
+}
+
+function stageBodyEscalationPrompt(request: StageBodyRequest): string {
+  return `${STAGE_BODY_SYSTEM_PREAMBLE}\n\n${stageBodyUserPrompt(request)}`;
+}
+
+function stageBodyUserPrompt(request: StageBodyRequest): string {
+  return request.repair
+    ? `${request.prompt}\n\nPrevious attempt failed:\n${request.repair.lastError}`
+    : request.prompt;
+}
+
 function domainSynthesisProviderTimeoutMs(): number {
   return positiveIntegerEnv('PGAS_DOMAIN_SYNTHESIS_TIMEOUT_MS', 45_000);
 }
@@ -661,11 +728,21 @@ function domainSynthesisProviderMaxTokens(): number {
   return positiveIntegerEnv('PGAS_DOMAIN_SYNTHESIS_MAX_TOKENS', 2_400);
 }
 
+function domainSynthesisEscalationMaxAttempts(): number {
+  return positiveIntegerEnv('PGAS_SYNTH_ESCALATION_MAX_ATTEMPTS', 2);
+}
+
 function positiveIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function setDefaultEnv(name: string, value: string): void {
+  if ((process.env[name] ?? '').trim().length === 0) {
+    process.env[name] = value;
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -897,6 +974,12 @@ function behaviorAuditFields(record: Pick<CacheRecord, 'behavioral_gate' | 'beha
     ...(record.behavioral_gate ? { behavioral_gate: record.behavioral_gate } : {}),
     ...(record.behavioral_fixture ? { behavioral_fixture: record.behavioral_fixture } : {}),
     ...(record.real_call_verified ? { real_call_verified: true } : {}),
+  };
+}
+
+function escalationAuditFields(record: Pick<CacheRecord, 'escalation_driver'>): Record<string, unknown> {
+  return {
+    ...(record.escalation_driver ? { escalation_driver: record.escalation_driver } : {}),
   };
 }
 
@@ -2005,6 +2088,7 @@ function readCache(path: string): CacheRecord | undefined {
         ...(typeof parsed.behavioral_gate === 'string' ? { behavioral_gate: parsed.behavioral_gate } : {}),
         ...(behavioralFixture ? { behavioral_fixture: behavioralFixture } : {}),
         ...(parsed.real_call_verified ? { real_call_verified: true } : {}),
+        ...(parsed.escalation_driver === CODEX_CLI_ESCALATION_DRIVER ? { escalation_driver: parsed.escalation_driver } : {}),
       }
     : undefined;
 }
