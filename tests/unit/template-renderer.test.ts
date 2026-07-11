@@ -210,6 +210,7 @@ describe('template renderer', () => {
       renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
       const registration = readFileSync(join(outDir, 'src/programs/pgas-new/registration.ts'), 'utf8');
       const server = readFileSync(join(outDir, 'src/server.ts'), 'utf8');
+      const authorDriver = readFileSync(join(outDir, 'src/author-driver.ts'), 'utf8');
       const repl = readFileSync(join(outDir, 'src/repl/index.ts'), 'utf8');
       const apiTest = readFileSync(join(outDir, 'tests/api-blackbox.test.ts'), 'utf8');
       const liveTest = readFileSync(join(outDir, 'tests/live-provider.test.ts'), 'utf8');
@@ -217,6 +218,8 @@ describe('template renderer', () => {
 
       expect(readFileSync(join(outDir, 'package.json'), 'utf8')).toContain('"@simodelne/pgas-server": "^3.14.0"');
       expect(server).toContain("from '@simodelne/pgas-server/create-server.js'");
+      expect(authorDriver).toContain("from '@simodelne/pgas-server/create-server.js'");
+      expect(authorDriver).toContain("from '@simodelne/pgas-server/plugin.js'");
       expect(registration).toContain("from '@simodelne/pgas-server/plugin.js'");
       expect(registration).toContain('type ProgramEntry');
       expect(registration).toContain('createProgramAdapters');
@@ -244,10 +247,39 @@ describe('template renderer', () => {
       expect(deterministicTest).toContain("from '@simodelne/pgas-server/testing.js'");
       expect(deterministicTest).toContain('createTestHarness');
 
-      const renderedText = [registration, server, repl, apiTest, deterministicTest].join('\n');
+      const renderedText = [registration, server, authorDriver, repl, apiTest, deterministicTest].join('\n');
       expect(renderedText).not.toMatch(/@simodelne\/pgas-server\/api/);
       expect(renderedText).not.toMatch(/@simodelne\/pgas-server\/src/);
       expect(renderedText).not.toMatch(/@simodelne\/pgas-runtime/);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders the unified author driver env-gated and default-off (engine JSON path when unset)', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-author-driver-'));
+    try {
+      renderStandaloneScaffold({ outDir, slug: 'pgas-new', name: 'PGAS New' });
+
+      const server = readFileSync(join(outDir, 'src/server.ts'), 'utf8');
+      const authorDriver = readFileSync(join(outDir, 'src/author-driver.ts'), 'utf8');
+
+      // server.ts only spreads a drivers block when the resolver opted in;
+      // default (env unset) passes no `drivers` key at all.
+      expect(server).toContain("import { resolveAuthorDrivers } from './author-driver.js'");
+      expect(server).toContain('...(drivers ? { drivers } : {})');
+      expect(server).not.toContain("authorMode: 'json'");
+
+      // The resolver is gated on PGAS_AUTHOR_DRIVER=unified and returns
+      // undefined for every other value, keeping the legacy JSON author path.
+      expect(authorDriver).toContain("!== 'unified'");
+      expect(authorDriver).toContain('PGAS_AUTHOR_DRIVER');
+      expect(authorDriver).toContain('return undefined;');
+      expect(authorDriver).toContain("authorMode: 'unified'");
+      expect(authorDriver).toContain('createOpenAiUnifiedComplete()');
+      // No hardcoded provider endpoint: the unified completer requires
+      // explicit env configuration when enabled.
+      expect(authorDriver).not.toMatch(/https?:\/\/\d/u);
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }

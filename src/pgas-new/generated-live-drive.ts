@@ -38,7 +38,11 @@ export interface CountingProviderProxy {
   close(): Promise<void>;
 }
 
-const REQUEST_EXCERPT_LIMIT = 6_000;
+// Request excerpts must be long enough to preserve the native-tools evidence
+// fields (`tools`, `tool_choice`, `role:"tool"` feedback messages) that the
+// unified-driver live proof asserts on; tool declarations serialize at the
+// END of the payload, so a short prefix would silently drop them.
+const REQUEST_EXCERPT_LIMIT = 200_000;
 const RESPONSE_EXCERPT_LIMIT = 200_000;
 
 export async function startCountingProviderProxy(upstreamBaseUrl: string): Promise<CountingProviderProxy> {
@@ -131,6 +135,13 @@ export interface GeneratedLiveDriveResult {
   world: Record<string, unknown>;
   provider_hits: number;
   provider_exchanges: ProviderExchange[];
+  /**
+   * Which author-driver config the runner actually booted with: 'unified'
+   * when the scaffold's resolveAuthorDrivers opted in (PGAS_AUTHOR_DRIVER=
+   * unified), 'default' for the engine's legacy JSON author path, null when
+   * the runner produced no report.
+   */
+  author_driver: 'unified' | 'default' | null;
   runner_exit_code: number | null;
   runner_output_excerpt: string;
   runner_error?: string;
@@ -188,6 +199,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       world: isRecord(report?.world) ? report.world : {},
       provider_hits: proxy.hits(),
       provider_exchanges: proxy.exchanges(),
+      author_driver: report?.author_driver === 'unified' || report?.author_driver === 'default'
+        ? report.author_driver
+        : null,
       runner_exit_code: runner.exitCode,
       runner_output_excerpt: runner.output.slice(-4_000),
       ...(typeof report?.error === 'string' ? { runner_error: report.error } : {}),
@@ -230,9 +244,19 @@ interface DriveState {
 }
 
 async function main(): Promise<void> {
+  // Opt-in unified native-tools author driver: mirrors the rendered scaffold's
+  // src/server.ts gating. Default (PGAS_AUTHOR_DRIVER unset) boots the engine's
+  // legacy JSON author path exactly as before; the dynamic import keeps the
+  // default path byte-identical even against a scaffold without the module.
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
   const server = await createPgasServer({
     programs: [{ name: '${slug}', entry: create${pascal}ProgramEntry() }],
     devMode: true,
+    ...(drivers ? { drivers } : {}),
   });
   const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   const created = await client.sessions.create({
@@ -266,6 +290,7 @@ async function main(): Promise<void> {
     actions: state.actions,
     terminal_actions: state.terminalActions,
     world: state.world,
+    author_driver: drivers ? 'unified' : 'default',
   });
   process.exit(0);
 }
@@ -382,6 +407,7 @@ interface DriveReport {
   actions?: unknown[];
   terminal_actions?: unknown;
   world?: unknown;
+  author_driver?: unknown;
   error?: unknown;
 }
 

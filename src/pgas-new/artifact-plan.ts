@@ -98,6 +98,9 @@ export function createStandaloneArtifactPlan(
         'typecheck',
         'api-blackbox',
       ]),
+      artifact('server', 'src/author-driver.ts', 'Opt-in unified native-tools author driver, env-gated behind PGAS_AUTHOR_DRIVER=unified; default (unset) keeps the engine legacy JSON author path.', 'branch_write', [
+        'typecheck',
+      ]),
       artifact('repl', 'src/repl/index.ts', 'Stream-rendering REPL client using SSE triggers and WebSocket lifecycle events.', 'branch_write', [
         'control-plane-test',
       ]),

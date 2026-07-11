@@ -74,44 +74,7 @@ afterEach(() => {
 describe('generated program live drive gate', () => {
   liveIt('drives a freshly generated program to complete with the REAL provider making the reasoning decisions', { timeout: LIVE_TIMEOUT_MS }, async () => {
     const env = requireLiveDriveEnv();
-    const cacheDir = trackedTempRoot('pgas-new-live-drive-cache-');
-    const targetDir = trackedTempRoot('pgas-new-live-drive-render-');
-
-    // Phase 1 — LIVE synthesis. PGAS_REASONING_CONTRACT_REQUIRE_LLM=1 forbids
-    // the deterministic fallback contract: synthesis THROWS unless the real
-    // meta-LLM produced the reasoning contract.
-    const artifact = await withRequiredLlmContract(() =>
-      synthesizeDomainLogic(artifactFromDomain(multiStageDomain), {
-        cacheDir,
-        providerUrl: env.baseUrl,
-        model: env.model,
-      }));
-
-    const reasoningAudit = artifact.domain_synthesis_audit?.find(
-      (entry) => isRecord(entry) && entry.stage === REASONING_STAGE,
-    ) as Record<string, unknown> | undefined;
-    expect(reasoningAudit, 'reasoning stage audit entry').toBeTruthy();
-    // Live-marker #1: the reasoning contract itself came from the meta-LLM.
-    expect(reasoningAudit?.contract_source).toBe('meta_llm');
-
-    const contract = reasoningContractFromStageSource(artifact);
-    const contractFields = contract.result_schema.fields;
-    expect(contractFields.length).toBeGreaterThanOrEqual(3);
-
-    // Phase 2 — render the standalone scaffold exactly as branch_write does.
-    renderStandaloneScaffold({
-      slug: SLUG,
-      name: 'Proposal Ops',
-      outDir: targetDir,
-      synthesizedSpecYaml: artifact.spec_yaml,
-      synthesizedContractsTs: artifact.contracts_ts,
-      synthesizedHandlersTs: artifact.handlers_ts,
-      synthesizedHandlersIndexTs: artifact.handlers_index_ts,
-      synthesizedStageSources: artifact.stage_sources,
-      synthesizedToolsTs: artifact.tools_ts,
-      synthesizedSmokeTestTs: artifact.smoke_test_ts,
-    });
-    linkRootNodeModules(targetDir);
+    const { contractFields, targetDir } = await liveSynthesizeAndRender(env);
 
     // Phase 3 — LIVE drive: real engine, real provider, no scripted responses.
     const drive = await driveGeneratedProgramLive({
@@ -119,12 +82,7 @@ describe('generated program live drive gate', () => {
       slug: SLUG,
       providerBaseUrl: env.baseUrl,
       model: env.model,
-      initialText: [
-        'Prepare a proposal for Meridian Analytics, an enterprise buyer requesting a',
-        'compliance-dashboard build. The board needs a decision-ready summary within',
-        'two weeks; budget is value-conscious and assumptions must be transparent.',
-        'CRM account id: acct-meridian-042.',
-      ].join(' '),
+      initialText: LIVE_DRIVE_INITIAL_TEXT,
       finalStage: 'complete',
       maxTriggers: 12,
       driveTimeoutMs: 900_000,
@@ -136,6 +94,11 @@ describe('generated program live drive gate', () => {
     expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
     expect(drive.final_mode).toBe('complete');
     expect(drive.terminal).toBe(true);
+
+    // Default-off contract (FIX 1): with PGAS_AUTHOR_DRIVER unset the runner
+    // must have booted the engine's legacy JSON author path, not the opt-in
+    // unified driver.
+    expect(drive.author_driver).toBe('default');
 
     // Assertion 3 — REAL-provider proof. A canned-fallback pass cannot have
     // produced (a) >= 1 successful proxied provider round trip during the
@@ -174,7 +137,144 @@ describe('generated program live drive gate', () => {
     }
     expect(workProduct.items.length).toBeGreaterThanOrEqual(1);
   });
+
+  liveIt('drives a freshly generated program to complete on the UNIFIED native-tools author driver (PGAS_AUTHOR_DRIVER=unified)', { timeout: LIVE_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { contractFields, targetDir } = await liveSynthesizeAndRender(env);
+
+    // LIVE drive with the scaffold's opt-in unified driver enabled: the
+    // generated author-driver module supplies the OpenAI-compatible native
+    // tool-call completer and the engine installs authorMode 'unified'.
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: LIVE_DRIVE_INITIAL_TEXT,
+      finalStage: 'complete',
+      maxTriggers: 12,
+      driveTimeoutMs: 900_000,
+      env: { PGAS_AUTHOR_DRIVER: 'unified' },
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] author_driver=${String(drive.author_driver)}\n`);
+
+    // Assertion 1 — terminal completion by the live-driven program.
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.terminal).toBe(true);
+
+    // Assertion 2 — the runner actually booted the scaffold's unified driver
+    // config (reported from the resolved drivers value, not from env).
+    expect(drive.author_driver).toBe('unified');
+
+    // Assertion 3 — NATIVE-TOOLS wire evidence through the counting proxy:
+    // (a) at least one successful authoring request declared native function
+    // tools with a tool_choice (the unified completer's payload shape — the
+    // legacy JSON author path sends a plain prompt, not a tool catalog);
+    // (b) at least one successful response answered with native tool_calls;
+    // (c) a provider response emitted the reasoning-stage action decision.
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
+    const successfulExchanges = drive.provider_exchanges.filter(
+      (exchange) => exchange.response_status >= 200 && exchange.response_status < 300,
+    );
+    const toolDeclaringRequests = successfulExchanges.filter(
+      (exchange) => exchange.request_excerpt.includes('"tools":[{"type":"function"')
+        && exchange.request_excerpt.includes('"tool_choice"'),
+    );
+    expect(
+      toolDeclaringRequests.length,
+      'at least one live authoring request must declare native function tools',
+    ).toBeGreaterThanOrEqual(1);
+    const toolCallResponses = successfulExchanges.filter(
+      (exchange) => exchange.response_excerpt.includes('"tool_calls"'),
+    );
+    expect(
+      toolCallResponses.length,
+      'at least one live provider response must answer with native tool_calls',
+    ).toBeGreaterThanOrEqual(1);
+    const reasoningResponses = successfulExchanges.filter(
+      (exchange) => exchange.response_excerpt.includes(REASONING_ACTION),
+    );
+    expect(
+      reasoningResponses.length,
+      'at least one live provider response must emit the reasoning-stage action decision',
+    ).toBeGreaterThanOrEqual(1);
+    expect(drive.actions).toContain(REASONING_ACTION);
+
+    // Assertion 4 — anti-stub scan + reasoning-contract conformance on the
+    // final work product, identical to the JSON-path gate.
+    const workProduct = reasoningWorkProduct(drive.world);
+    assertNoExecutedPathStubs(workProduct);
+    for (const [key, value] of Object.entries(drive.world)) {
+      if (/\.(result_json|items_json)$/u.test(key)) {
+        assertNoExecutedPathStubs(value);
+      }
+    }
+    for (const field of contractFields) {
+      const value = workProduct.result[field.name];
+      expect(
+        fieldConforms(field, value),
+        `work_product.${field.name} must be a non-empty ${field.type} (got ${JSON.stringify(value)})`,
+      ).toBe(true);
+    }
+    expect(workProduct.items.length).toBeGreaterThanOrEqual(1);
+  });
 });
+
+const LIVE_DRIVE_INITIAL_TEXT = [
+  'Prepare a proposal for Meridian Analytics, an enterprise buyer requesting a',
+  'compliance-dashboard build. The board needs a decision-ready summary within',
+  'two weeks; budget is value-conscious and assumptions must be transparent.',
+  'CRM account id: acct-meridian-042.',
+].join(' ');
+
+/**
+ * Shared phases 1-2 of the live gate: LIVE synthesis of the multi-archetype
+ * domain (PGAS_REASONING_CONTRACT_REQUIRE_LLM=1 forbids the deterministic
+ * fallback contract — synthesis THROWS unless the real meta-LLM produced the
+ * reasoning contract) and rendering of the standalone scaffold exactly as
+ * branch_write does.
+ */
+async function liveSynthesizeAndRender(env: LiveDriveEnv): Promise<{ contractFields: ReasoningField[]; targetDir: string }> {
+  const cacheDir = trackedTempRoot('pgas-new-live-drive-cache-');
+  const targetDir = trackedTempRoot('pgas-new-live-drive-render-');
+
+  const artifact = await withRequiredLlmContract(() =>
+    synthesizeDomainLogic(artifactFromDomain(multiStageDomain), {
+      cacheDir,
+      providerUrl: env.baseUrl,
+      model: env.model,
+    }));
+
+  const reasoningAudit = artifact.domain_synthesis_audit?.find(
+    (entry) => isRecord(entry) && entry.stage === REASONING_STAGE,
+  ) as Record<string, unknown> | undefined;
+  expect(reasoningAudit, 'reasoning stage audit entry').toBeTruthy();
+  // Live-marker #1: the reasoning contract itself came from the meta-LLM.
+  expect(reasoningAudit?.contract_source).toBe('meta_llm');
+
+  const contract = reasoningContractFromStageSource(artifact);
+  const contractFields = contract.result_schema.fields;
+  expect(contractFields.length).toBeGreaterThanOrEqual(3);
+
+  renderStandaloneScaffold({
+    slug: SLUG,
+    name: 'Proposal Ops',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+  });
+  linkRootNodeModules(targetDir);
+
+  return { contractFields, targetDir };
+}
 
 interface LiveDriveEnv {
   baseUrl: string;
