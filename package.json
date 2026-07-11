@@ -1,6 +1,6 @@
 {
   "name": "pgas-new",
-  "version": "3.17.0",
+  "version": "3.18.0",
   "private": true,
   "type": "module",
   "description": "PGAS-specific foundry for creating TypeScript/Node PGAS programs",
