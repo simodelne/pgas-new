@@ -11,11 +11,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 // __fallback__ pre-gate; the premature attempt then left the REAL user_confirmation
 // approve unable to commit, stranding the session in scaffold_plan/draft.
 //
-// The fix routes the premature system_mode_entry re-entry to a no-write
-// await_artifact_plan_approval action, keeping approve_artifact_plan available for
-// the real user approval. This locks the exact spec wiring that fix depends on so
-// a spec edit that reopens #81 fails CI deterministically (no LLM/round timing).
-// Behaviorally proven on the live foundry path (session pgas-new-1782923109541).
+// ORIGINAL fix: a synthetic no-write await_artifact_plan_approval action absorbed
+// the premature system_mode_entry re-entry. That mechanism was MIGRATED to the
+// engine-native `awaits_user_decision` (pgas#641): plan_artifacts now declares
+// `awaits_user_decision: { channel: user_confirmation }`, so the runtime parks
+// automation for explicit user approval (suppresses auto-continue) — no
+// hand-rolled wait action / awaiting flag. This lock now asserts the engine-native
+// wiring AND the still-load-bearing invariant that approve_artifact_plan can only
+// fire on user_confirmation (the actual #81 root cause).
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const SPEC_PATH = resolve(ROOT, 'src/foundry-program/specs.yml');
@@ -27,10 +30,10 @@ interface Precondition {
   triggerSet?: string[];
 }
 
-interface Mutation {
-  op: string;
-  path: string;
-  value?: unknown;
+interface ActionEntry {
+  mutations?: Array<{ op: string; path: string; value?: unknown }>;
+  channel?: string;
+  awaits_user_decision?: { channel: string; intent?: string };
 }
 
 interface FoundrySpec {
@@ -39,7 +42,7 @@ interface FoundrySpec {
     preconditions?: Record<string, Precondition[]>;
   }>;
   proceed_to?: Record<string, string>;
-  action_map?: Record<string, { mutations?: Mutation[]; channel?: string }>;
+  action_map?: Record<string, ActionEntry>;
   schema?: Record<string, string>;
 }
 
@@ -49,103 +52,54 @@ beforeAll(() => {
   spec = load(readFileSync(SPEC_PATH, 'utf8')) as FoundrySpec;
 });
 
-function hasPrecondition(
-  preconditions: Precondition[] | undefined,
-  match: (precondition: Precondition) => boolean,
-): boolean {
-  return Array.isArray(preconditions) && preconditions.some(match);
-}
-
-describe('#81 scaffold_plan approval gating (await_artifact_plan_approval regression lock)', () => {
-  it('scaffold_plan vocabulary declares await_artifact_plan_approval and approve_artifact_plan', () => {
+describe('#81 scaffold_plan approval gating (awaits_user_decision regression lock)', () => {
+  it('scaffold_plan vocabulary declares plan_artifacts and approve_artifact_plan', () => {
     const vocabulary = spec.modes.scaffold_plan?.vocabulary;
-
-    expect(
-      vocabulary,
-      'If this fails: src/foundry-program/specs.yml scaffold_plan.vocabulary is no longer an array.',
-    ).toEqual(expect.any(Array));
+    expect(vocabulary, 'scaffold_plan.vocabulary is no longer an array.').toEqual(expect.any(Array));
     expect(
       vocabulary as string[],
-      'If this fails: scaffold_plan vocabulary dropped await_artifact_plan_approval or approve_artifact_plan (reopens #81).',
-    ).toEqual(expect.arrayContaining(['await_artifact_plan_approval', 'approve_artifact_plan']));
+      'If this fails: scaffold_plan vocabulary dropped plan_artifacts or approve_artifact_plan (reopens #81).',
+    ).toEqual(expect.arrayContaining(['plan_artifacts', 'approve_artifact_plan']));
   });
 
-  it('await_artifact_plan_approval fires only on system_mode_entry while the plan is draft, unapproved, and not yet awaiting', () => {
-    const preconditions = spec.modes.scaffold_plan?.preconditions?.await_artifact_plan_approval;
-
+  it('plan_artifacts declares awaits_user_decision on user_confirmation — the engine-native #81 approval park', () => {
+    const entry = spec.action_map?.plan_artifacts;
+    expect(entry, 'action_map.plan_artifacts is missing.').toBeDefined();
     expect(
-      preconditions,
-      'If this fails: await_artifact_plan_approval precondition was removed — the #81 fix is reverted.',
-    ).toEqual(expect.any(Array));
-    expect(
-      hasPrecondition(
-        preconditions,
-        (p) => p.kind === 'TriggerType' && Array.isArray(p.triggerSet)
-          && p.triggerSet.length === 1 && p.triggerSet[0] === 'system_mode_entry',
-      ),
-      'If this fails: await_artifact_plan_approval must be gated to system_mode_entry only.',
-    ).toBe(true);
-    expect(
-      hasPrecondition(preconditions, (p) => p.kind === 'FieldEquals' && p.path === 'artifact_plan.status' && p.value === 'draft'),
-      'If this fails: await_artifact_plan_approval must require artifact_plan.status=draft.',
-    ).toBe(true);
-    expect(
-      hasPrecondition(preconditions, (p) => p.kind === 'FieldFalsy' && p.path === 'artifact_plan.approved'),
-      'If this fails: await_artifact_plan_approval must require artifact_plan.approved to be falsy.',
-    ).toBe(true);
-    expect(
-      hasPrecondition(preconditions, (p) => p.kind === 'FieldFalsy' && p.path === 'artifact_plan.awaiting_user_approval'),
-      'If this fails: await_artifact_plan_approval must require artifact_plan.awaiting_user_approval to be falsy (fires once).',
-    ).toBe(true);
+      entry?.awaits_user_decision?.channel,
+      'If this fails: plan_artifacts lost awaits_user_decision on user_confirmation — the engine no longer parks for user approval and #81 (premature auto-approval) reopens.',
+    ).toBe('user_confirmation');
   });
 
-  it('approve_artifact_plan stays gated to user_confirmation so it cannot fire on a premature system_mode_entry (#81 root cause)', () => {
+  it('the synthetic await_artifact_plan_approval mechanism is fully removed (migrated to awaits_user_decision)', () => {
+    expect(
+      spec.modes.scaffold_plan?.vocabulary?.includes('await_artifact_plan_approval'),
+      'await_artifact_plan_approval should no longer be in the vocabulary (migrated).',
+    ).toBe(false);
+    expect(spec.action_map?.await_artifact_plan_approval, 'await_artifact_plan_approval action_map entry should be gone.').toBeUndefined();
+    expect(spec.modes.scaffold_plan?.preconditions?.await_artifact_plan_approval, 'await_artifact_plan_approval preconditions should be gone.').toBeUndefined();
+    expect(spec.schema?.['artifact_plan.awaiting_user_approval'], 'artifact_plan.awaiting_user_approval schema path should be removed.').toBeUndefined();
+  });
+
+  it('approve_artifact_plan stays gated to user_confirmation so it cannot fire on a premature system_mode_entry (#81 root cause — LOAD-BEARING)', () => {
     const preconditions = spec.modes.scaffold_plan?.preconditions?.approve_artifact_plan;
-
-    expect(
-      preconditions,
-      'If this fails: approve_artifact_plan precondition is missing.',
-    ).toEqual(expect.any(Array));
+    expect(preconditions, 'approve_artifact_plan precondition is missing.').toEqual(expect.any(Array));
     const triggerGates = (preconditions ?? []).filter((p) => p.kind === 'TriggerType');
-    expect(
-      triggerGates.length,
-      'If this fails: approve_artifact_plan must have exactly one TriggerType gate.',
-    ).toBe(1);
+    expect(triggerGates.length, 'approve_artifact_plan must have exactly one TriggerType gate.').toBe(1);
     expect(
       triggerGates[0]?.triggerSet,
       'If this fails: approve_artifact_plan must be gated to user_confirmation ONLY; allowing system_mode_entry reopens #81.',
     ).toEqual(['user_confirmation']);
   });
 
-  it('await_artifact_plan_approval only sets awaiting_user_approval=true on widget_output (no other effects)', () => {
-    const entry = spec.action_map?.await_artifact_plan_approval;
-
-    expect(
-      entry,
-      'If this fails: action_map.await_artifact_plan_approval is missing.',
-    ).toBeDefined();
-    expect(entry?.channel).toBe('widget_output');
-    expect(
-      entry?.mutations,
-      'If this fails: await_artifact_plan_approval must set exactly artifact_plan.awaiting_user_approval=true.',
-    ).toEqual([{ op: 'MSet', path: 'artifact_plan.awaiting_user_approval', value: true }]);
-  });
-
-  it('await_artifact_plan_approval is non-advancing while approve_artifact_plan transitions to domain_synthesis', () => {
-    expect(
-      spec.proceed_to?.await_artifact_plan_approval,
-      'If this fails: await_artifact_plan_approval became a transition trigger — it must keep the session in scaffold_plan awaiting user approval.',
-    ).toBeUndefined();
+  it('approve_artifact_plan transitions to domain_synthesis; plan_artifacts stays in scaffold_plan', () => {
     expect(
       spec.proceed_to?.approve_artifact_plan,
       'If this fails: approve_artifact_plan no longer transitions to domain_synthesis.',
     ).toBe('domain_synthesis');
-  });
-
-  it('declares the artifact_plan.awaiting_user_approval boolean schema path', () => {
     expect(
-      spec.schema?.['artifact_plan.awaiting_user_approval'],
-      'If this fails: artifact_plan.awaiting_user_approval schema path is missing/mistyped.',
-    ).toBe('boolean');
+      spec.proceed_to?.plan_artifacts,
+      'plan_artifacts must NOT be a transition trigger — it drafts and parks for approval.',
+    ).toBeUndefined();
   });
 });

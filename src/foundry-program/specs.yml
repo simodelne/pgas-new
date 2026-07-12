@@ -136,20 +136,13 @@ modes:
       - target: scaffold_plan
         guard: { kind: FieldTruthy, path: program.synthesis_complete }
   scaffold_plan:
-    vocabulary: [approve_artifact_plan, revise_artifact_plan, plan_artifacts, await_artifact_plan_approval, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [approve_artifact_plan, revise_artifact_plan, plan_artifacts, create_curator_request, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_confirmation, system_mode_entry, widget_output, artifact_plan_output]
     preconditions:
       plan_artifacts:
         - { kind: FieldTruthy, path: repo.write_authorized }
         - { kind: FieldTruthy, path: program.synthesis_complete }
         - { kind: FieldFalsy, path: artifact_plan.status }
-        - { kind: TriggerType, triggerSet: [system_mode_entry] }
-      await_artifact_plan_approval:
-        - { kind: FieldTruthy, path: repo.write_authorized }
-        - { kind: FieldTruthy, path: program.synthesis_complete }
-        - { kind: FieldEquals, path: artifact_plan.status, value: draft }
-        - { kind: FieldFalsy, path: artifact_plan.approved }
-        - { kind: FieldFalsy, path: artifact_plan.awaiting_user_approval }
         - { kind: TriggerType, triggerSet: [system_mode_entry] }
       approve_artifact_plan:
         - { kind: FieldTruthy, path: repo.write_authorized }
@@ -307,7 +300,7 @@ projection:
     include: [program.slug, program.name, program.target_dir, program.runtime, program.design_confirmed, program.synthesis_complete]
     exclude: []
   scaffold_plan:
-    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized, artifact_plan.awaiting_user_approval, notebook.entries, notebook.pins]
+    include: [program.slug, program.name, program.target_dir, program.synthesis_complete, inputs.user_decision, inputs.user_decision.decision, inputs.user_decision.instruction, inputs.user_decision.note_mode, inputs.user_decision.timestamp, artifact_plan.status, artifact_plan.artifacts, artifact_plan.approved, artifact_plan.write_authorized, notebook.entries, notebook.pins]
     exclude: []
   domain_synthesis:
     include: [program.slug, program.name, program.target_dir, repo.target_kind, program.synthesis_complete, program.domain_synthesis_complete, artifact_plan.status, artifact_plan.artifacts, artifact_plan.write_authorized]
@@ -779,23 +772,18 @@ action_map:
       INTERNAL: Auto-fires exactly ONCE on system_mode_entry into scaffold_plan
       to draft the artifact plan. Do NOT call this in response to /approve —
       the user-driven approval action is approve_artifact_plan. Its precondition
-      forbids re-firing after artifact_plan.status is set.
+      forbids re-firing after artifact_plan.status is set. Declares
+      awaits_user_decision so the engine parks automation for explicit user
+      approval on user_confirmation (engine-native replacement for the former
+      synthetic await_artifact_plan_approval wait; #81 premature-approval
+      prevention — the runtime suppresses auto-continue until a decision arrives).
     result_path: artifact_plan.artifacts
     mutations:
       - { op: MSet, path: artifact_plan.status, value: draft }
       - { op: MSet, path: artifact_plan.approved, value: false }
       - { op: MSet, path: artifact_plan.write_authorized, value: false }
-      - { op: MSet, path: artifact_plan.awaiting_user_approval, value: false }
     channel: artifact_plan_output
-  await_artifact_plan_approval:
-    description: |
-      INTERNAL: After an artifact plan is drafted, duplicate system_mode_entry
-      continuations must call this no-write action and wait for explicit user
-      confirmation. Do NOT call approve_artifact_plan unless the trigger is
-      user_confirmation with decision='approve'.
-    mutations:
-      - { op: MSet, path: artifact_plan.awaiting_user_approval, value: true }
-    channel: widget_output
+    awaits_user_decision: { channel: user_confirmation }
   approve_artifact_plan:
     description: |
       USER-DRIVEN: Fires when the user types /approve to authorize the
@@ -1055,7 +1043,6 @@ schema:
   artifact_plan.artifacts.*: object
   artifact_plan.approved: boolean
   artifact_plan.write_authorized: boolean
-  artifact_plan.awaiting_user_approval: boolean
   artifacts.written: boolean
   artifacts.generated_paths: array
   curator_requests.requests: array
@@ -1119,7 +1106,7 @@ guidance:
     - "Only leave repo_targeting after repo.write_authorized is true; the transition to architecture_design is guarded on that field."
   scaffold_plan:
     - "Only call plan_artifacts on system_mode_entry to produce the artifact plan from the synthesized spec in in-process transit after repo.write_authorized and program.synthesis_complete are true and artifact_plan.status is still unset. If the handler reports the spec is missing from transit, call synthesize_program_spec again; the synthesizer is mechanical and idempotent."
-    - "If a later system_mode_entry arrives while artifact_plan.status='draft' and artifact_plan.approved=false, call await_artifact_plan_approval and wait. Do NOT call approve_artifact_plan on system_mode_entry."
+    - "Once the plan is drafted, the engine parks automation for explicit user approval (plan_artifacts declares awaits_user_decision on user_confirmation), so a later system_mode_entry does NOT auto-continue. Do NOT re-call plan_artifacts (its precondition forbids re-firing once artifact_plan.status is set) and NEVER call approve_artifact_plan on system_mode_entry — approval only comes from user_confirmation."
     - "Echo the artifact-plan list (paths + purposes) to the user as plain text and instruct them to type /approve or /reject."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation decision='approve' with artifact_plan.status='draft' and artifact_plan.approved false, call approve_artifact_plan. Do NOT call plan_artifacts on an approval trigger. Then the transition to domain_synthesis fires."
