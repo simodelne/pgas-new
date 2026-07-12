@@ -300,7 +300,7 @@ async function runGeneratedSmoke(targetDir: string): Promise<SotaGateResult> {
     '',
   ].join('\n'));
   const vitestBin = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
-  return runCommand(process.execPath, [vitestBin, 'run', '--config', 'vitest.sota-smoke.config.ts'], targetDir, COMMAND_TIMEOUT_MS);
+  return runCommand(process.execPath, [vitestBin, 'run', '--pool=threads', '--config', 'vitest.sota-smoke.config.ts'], targetDir, COMMAND_TIMEOUT_MS);
 }
 
 async function functionalOracleGate(benchmark: SotaBenchmark, targetDir: string): Promise<SotaGateResult> {
