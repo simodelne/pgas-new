@@ -40,7 +40,7 @@ const BASE_ACTIONS_BY_MODE: ActionSet = {
     'create_curator_request',
   ],
   architecture_design: [...SESSION_CONTROL_ACTIONS, 'design_architecture', 'web_research', 'record_user_note'],
-  scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'await_artifact_plan_approval', 'approve_artifact_plan', 'create_curator_request'],
+  scaffold_plan: [...SESSION_CONTROL_ACTIONS, 'plan_artifacts', 'approve_artifact_plan', 'create_curator_request'],
   domain_synthesis: [...SESSION_CONTROL_ACTIONS, 'synthesize_domain_logic', 'record_user_note'],
   branch_write: [...SESSION_CONTROL_ACTIONS, 'write_scaffold_artifacts', 'git_status'],
   static_verify: [
