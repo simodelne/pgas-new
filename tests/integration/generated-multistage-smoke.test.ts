@@ -226,7 +226,7 @@ function linkRootNodeModules(targetDir: string): void {
 
 function runGeneratedSmokeTest(targetDir: string): string {
   const vitestBin = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
-  return execFileSync(process.execPath, [vitestBin, 'run', 'tests/generated-program-smoke.test.ts'], {
+  return execFileSync(process.execPath, [vitestBin, 'run', '--pool=threads', 'tests/generated-program-smoke.test.ts'], {
     cwd: targetDir,
     encoding: 'utf8',
     env: { ...process.env, CI: '1' },

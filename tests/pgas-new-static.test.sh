@@ -52,7 +52,12 @@ NPMRC
     mkdir -p "$WORK/.npm-cache"
     NPM_TOKEN="$NPM_TOKEN" npm_config_cache="$WORK/.npm-cache" npm install --no-audit --no-fund >/tmp/pgas-new-generated-install.log 2>&1
     npm_config_cache="$WORK/.npm-cache" npm run typecheck >/tmp/pgas-new-generated-typecheck.log 2>&1
-    npm_config_cache="$WORK/.npm-cache" npm test >/tmp/pgas-new-generated-test.log 2>&1
+    # --pool=threads: run the generated scaffold's nested vitest in worker_threads
+    # instead of spawning fork-worker processes. On a constrained host (e.g. cgroup
+    # pids.max cap contended by a concurrent session) a fresh fork-worker aborts at
+    # startup on uv_thread_create; the threads pool reuses the existing process and
+    # survives. Harness-side hardening only — the shipped package.json stays default.
+    npm_config_cache="$WORK/.npm-cache" npm test -- --pool=threads >/tmp/pgas-new-generated-test.log 2>&1
   ) && pass "generated scaffold install/typecheck/test passed" || fail "generated scaffold install/typecheck/test failed"
 fi
 
