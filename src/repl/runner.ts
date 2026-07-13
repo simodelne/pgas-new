@@ -406,6 +406,25 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
       return;
     }
 
+    // Generalized user_text channel guard. In the foundry spec
+    // (src/foundry-program/specs.yml) only intake_intelligence declares a
+    // `user_text` channel; every other mode advances via system_mode_entry
+    // auto-continuation, widget_output, or user_confirmation (/approve,
+    // /reject). Firing a user_text trigger at a mode that does not declare the
+    // channel is a doomed round — and in repo_targeting it crashes the engine
+    // with a raw `Cannot read properties of undefined (reading 'replace')`
+    // TypeError (surfaced during live UAT 2026-07-13). Only send user_text
+    // where the spec accepts it; otherwise guide the user to the real controls.
+    // (state.mode === null means no session yet — the first message legitimately
+    // starts intake_intelligence, so it must pass through.)
+    if (state.mode !== null && !modeAcceptsUserText(state.mode)) {
+      renderer.renderInfo(
+        `The '${state.mode}' step does not take free text — it proceeds automatically or via /approve, /reject, or /status.`,
+      );
+      updatePrompt();
+      return;
+    }
+
     await runTrigger(state.sessionId, 'user_text', userText);
   }
 
@@ -578,10 +597,19 @@ export async function runStreamingRepl(options: ReplOptions): Promise<ReplExitIn
         } else if (event.event === 'error') {
           const data = (event.data ?? {}) as Record<string, unknown>;
           const message = String(data.message ?? event.data);
+          // Observability: the server's error event may carry more than a bare
+          // message (a `detail`/`stack` in dev). The REPL previously kept only
+          // `message`, which reduced raw engine TypeErrors to a single line and
+          // hid the failing boundary during UAT. Surface any extra detail, and
+          // dump the full event under PGAS_REPL_DEBUG for root-causing.
+          if (process.env.PGAS_REPL_DEBUG === '1') {
+            console.error('[pgas-repl] round error event:', JSON.stringify(data));
+          }
           if (isRecoverableRoundError(data)) {
             return { status: 'transient', detail: recoverableDetail(data) };
           }
-          return { status: 'error', detail: message };
+          const extra = errorEventDetail(data);
+          return { status: 'error', detail: extra ? `${message}\n${extra}` : message };
         }
       }
       // Stream ended without a round_complete or error event: the transport
@@ -663,6 +691,17 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.length > 0) return error.message;
   if (typeof error === 'string' && error.length > 0) return error;
   return String(error);
+}
+
+// Pull any extra detail the server attached to an error event beyond `message`
+// (a `detail`/`stack`/`cause` string in dev builds). Returns null when there is
+// nothing more than the message, so the caller can show just the message.
+function errorEventDetail(data: Record<string, unknown>): string | null {
+  const candidate = data.detail ?? data.stack ?? data.cause;
+  if (typeof candidate === 'string' && candidate.length > 0 && candidate !== data.message) {
+    return candidate;
+  }
+  return null;
 }
 
 function isUnauthorizedError(error: unknown): boolean {
@@ -816,6 +855,17 @@ function buildUserConfirmationPayload(
  */
 export function isArtifactPlanGateMode(mode: string | null): boolean {
   return mode === 'scaffold_plan';
+}
+
+// Modes whose spec (src/foundry-program/specs.yml) declares a `user_text`
+// channel. Only intake_intelligence (the six-question design interview) does;
+// every other mode is auto-continuation / widget / confirmation driven. Kept as
+// an explicit set so a future spec change that adds user_text to another mode is
+// a single, visible edit here. See the generalized guard in dispatch (handleText).
+const USER_TEXT_MODES = new Set(['intake_intelligence']);
+
+export function modeAcceptsUserText(mode: string | null): boolean {
+  return mode !== null && USER_TEXT_MODES.has(mode);
 }
 
 function parseRejectQuestionNumber(instruction: string | undefined): number | null {
