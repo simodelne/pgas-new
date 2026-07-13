@@ -1273,10 +1273,15 @@ function collectStrings(value: unknown, out: string[]): void {
   }
 }
 
+// Static pattern — hoisted to module scope so it is compiled once rather than on
+// every extractRequestedArtifactPaths call. Safe to share: String.prototype.matchAll
+// internally clones the regex, so the shared /g pattern's lastIndex is never mutated.
+const ARTIFACT_PATH_PATTERN =
+  /(?:^|[\s`'"])([A-Za-z0-9._/-]+\.(?:ts|tsx|yml|yaml|json|md|html|docx))(?:[\s.,;:)\]'"`]|$)/gu;
+
 function extractRequestedArtifactPaths(text: string): string[] {
   const paths: string[] = [];
-  const artifactPathPattern = /(?:^|[\s`'"])([A-Za-z0-9._/-]+\.(?:ts|tsx|yml|yaml|json|md|html|docx))(?:[\s.,;:)\]'"`]|$)/gu;
-  for (const match of text.matchAll(artifactPathPattern)) {
+  for (const match of text.matchAll(ARTIFACT_PATH_PATTERN)) {
     const path = match[1];
     if (path && isSafeRepoRelativePath(path)) {
       paths.push(path);
