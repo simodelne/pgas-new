@@ -159,13 +159,20 @@ export function parseWiringManifest(source: string): WiringManifestResult {
   }
 
   if (isRecord(verification?.commands)) {
+    // Validate required commands first (this also catches a required command that is
+    // absent entirely), then any remaining present commands. `flagged` prevents a
+    // required-and-present-but-invalid command from being reported twice.
+    const flagged = new Set<string>();
     for (const command of REQUIRED_VERIFICATION_COMMANDS) {
-      if (typeof verification.commands[command] !== 'string' || verification.commands[command].length === 0) {
+      const value = verification.commands[command];
+      if (typeof value !== 'string' || value.length === 0) {
         errors.push(`verification.commands.${command} must be a non-empty string`);
+        flagged.add(command);
       }
     }
 
     for (const [name, value] of Object.entries(verification.commands)) {
+      if (flagged.has(name)) continue;
       if (typeof value !== 'string' || value.length === 0) {
         errors.push(`verification.commands.${name} must be a non-empty string`);
       }
