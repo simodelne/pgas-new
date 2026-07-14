@@ -79,6 +79,67 @@ describe('capability detection precision', () => {
   });
 });
 
+describe('adversarial detection (Codex #167 review)', () => {
+  const caps = (input: Parameters<typeof detectRequestedCapabilities>[0]) =>
+    new Set(detectRequestedCapabilities(input).map((d) => d.capability));
+
+  it('does NOT flag automated per-item scoring (no user decision) as per_item_confirmation [#1]', () => {
+    expect(caps({ purpose: 'For each item, compute an approval score and summarize the decision factors.' }))
+      .not.toContain('per_item_confirmation');
+    expect(caps({ purpose: 'Produce an approval summary and an approval package for each section.' }))
+      .not.toContain('per_item_confirmation');
+  });
+
+  it('detects a synonym-phrased per-item user-approval loop [#2 recall]', () => {
+    expect(
+      caps({
+        purpose:
+          'Review every provision separately and ask the user to accept or reject the proposed redline before continuing.',
+      }),
+    ).toContain('per_item_confirmation');
+  });
+
+  it('detects a per-item approval demand nested in stage domain_spec.rules (deep flatten) [#2]', () => {
+    expect(
+      caps({
+        stages: [
+          {
+            slug: 'revise',
+            domain_spec: { rules: ['For each clause, ask the user to approve or reject the proposed edit before continuing.'] },
+          },
+        ],
+      }),
+    ).toContain('per_item_confirmation');
+  });
+
+  it('detects docx/track-change export implied by completion outputs [#2]', () => {
+    const c = caps({
+      purpose: 'Revise a contract.',
+      completion: { final_stage: 'complete', outputs: ['revised contract DOCX with track changes', 'revision table'] },
+    });
+    expect(c).toContain('export_docx_trackchange');
+    expect(c).toContain('export_docx_plain');
+  });
+
+  it('does NOT flag external-adapter or llm-reasoning stages with result_path as child delegation [#3]', () => {
+    expect(caps({ delegation: { crm_lookup: { kind: 'external-adapter', result_path: 'crm.account' } } }))
+      .not.toContain('delegation_child_session');
+    expect(caps({ delegation: { review: { kind: 'llm-reasoning', result_path: 'review.summary' } } }))
+      .not.toContain('delegation_child_session');
+  });
+
+  it('flags a research-agent child even when it also names a service (service does not suppress kind) [#3]', () => {
+    expect(
+      caps({ delegation: { research: { kind: 'research_agent', service: 'internal_research_api', result_path: 'research.findings' } } }),
+    ).toContain('delegation_research_agent');
+  });
+
+  it('flags a child-session delegation via structural fields (target_spec) [#3]', () => {
+    expect(caps({ delegation: { ingest: { target_spec: 'document-ingest', payload_map: {} } } }))
+      .toContain('delegation_child_session');
+  });
+});
+
 describe('honest refusal safe-stop', () => {
   it('assertSynthesizableCapabilities passes silently for a linear program', () => {
     expect(() =>

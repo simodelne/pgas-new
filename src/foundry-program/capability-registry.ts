@@ -138,6 +138,8 @@ export interface CapabilityDetectionInput {
   readonly stages?: ReadonlyArray<object>;
   /** parsed intake.delegation_json */
   readonly delegation?: Record<string, unknown>;
+  /** parsed intake.completion_json (its string leaves are scanned too) */
+  readonly completion?: unknown;
   /** any additional free text (e.g. intake notes) to scan */
   readonly extraText?: string;
 }
@@ -158,28 +160,31 @@ interface TextDetector {
 // external-adapter programs (fee-calculator, crm-mock-lookup, proposal-ops, …),
 // which is why each requires an explicit per-item / child-session / upload /
 // docx-track-change phrase, not merely "approve" or "service".
+// per_item_confirmation is detected by TWO required signals (below), not a single
+// coupling regex — so automated "compute an approval score" (iteration without a
+// user decision) does NOT match, while synonym-phrased "review every provision and
+// ask the user to accept or reject … before continuing" (deep-flattened) does.
+const PER_ITEM_ITERATION =
+  /\b(?:(?:clause|item|section|line|provision|paragraph|article|term)[- ]by[- ](?:clause|item|section|line|provision|paragraph|article|term)|per[- ](?:clause|item|section|provision|paragraph|article)|(?:each|every) (?:clause|item|section|line|provision|paragraph|article|term)|one (?:clause|item|provision|section) at a time|(?:review|revis\w+|process|iterate)\w*[^.]{0,25}(?:each|every) (?:clause|item|section|provision|paragraph))\b/i;
+const USER_APPROVAL =
+  /(?:\b(?:user|human|client|reviewer|counterparty|attorney|lawyer)\b[^.]{0,45}\b(?:approv\w*|accept\w*|reject\w*|skip\w*|sign[- ]?off|confirm\w*|decide|decision)\b|\b(?:ask|prompt|require)\w*\b[^.]{0,25}\b(?:user|client|reviewer|human)\b[^.]{0,25}\b(?:approv\w*|accept\w*|reject\w*|choose)\b|\baccept or reject\b|\bapprove or reject\b|\b(?:approv\w*|accept\w*|reject\w*|skip\w*)[^.]{0,25}\bbefore (?:continuing|proceeding|moving on)\b|\bawait\w*[^.]{0,20}(?:user|approval)\b|\bexplicit(?:ly)? approv\w*\b)/i;
+
+// Text detectors (per_item handled above). Each requires an explicit capability
+// phrase; none fire on plain linear/external-adapter programs.
 const TEXT_DETECTORS: readonly TextDetector[] = [
   {
-    // Requires a per-item phrase COUPLED (within 60 chars, either order) with a
-    // user approval/decision verb. This excludes mere incremental processing
-    // ("draft section by section") which is NOT a per-item user-approval loop.
-    capability: 'per_item_confirmation',
-    pattern: /(?:(?:\b(?:clause|item|section|line)[- ](?:by[- ])?(?:clause|item|section|line)\b|\bper[- ](?:clause|item|section)\b|\bone (?:clause|item) at a time\b|\beach (?:clause|item|section|line)\b)[^.]{0,60}\b(?:approv|accept|reject|skip|confirm|sign[- ]?off|decision)\b|\b(?:approv|accept|reject|skip|confirm)\w*\b[^.]{0,40}\beach (?:clause|item|section|line)\b)/i,
-    label: 'per-item / clause-by-clause user approval loop',
-  },
-  {
     capability: 'delegation_research_agent',
-    pattern: /\b(research agent|legal research|spawn[^.]{0,25}research|research (fan[- ]?out|children|axes)|delegate[^.]{0,25}research)\b/i,
+    pattern: /\b(?:research agent|spawn\w*[^.]{0,25}research|research (?:fan[- ]?out|children|axes)|delegate\w*[^.]{0,25}research)\b/i,
     label: 'research-agent delegation / fan-out',
   },
   {
     capability: 'delegation_child_session',
-    pattern: /\b(child session|sub[- ]?agent|subagent|delegate[^.]{0,25}(child|sub[- ]?session)|spawn[^.]{0,25}(child|session))\b/i,
+    pattern: /\b(?:child session|sub[- ]?agents?|delegate\w*[^.]{0,25}(?:child|sub[- ]?session)|spawn\w*[^.]{0,25}(?:child|session))\b/i,
     label: 'child-session delegation',
   },
   {
     capability: 'document_upload_intake',
-    pattern: /\b(upload[^.]{0,25}(document|contract|file|pdf|docx)|document[- ]ingest|ingest[^.]{0,20}(a |the )?(contract|document|pdf|docx)|extract[^.]{0,30}(clauses|sections|text)[^.]{0,20}from[^.]{0,20}(document|contract|pdf|upload))\b/i,
+    pattern: /\b(?:upload\w*[^.]{0,25}(?:document|contract|file|pdf|docx|agreement)|document[- ]ingest|ingest\w*[^.]{0,20}(?:a |the )?(?:contract|document|pdf|docx|agreement)|extract\w*[^.]{0,35}(?:clauses|sections|provisions|terms|text)[^.]{0,20}from[^.]{0,25}(?:document|contract|pdf|upload|agreement|source)|(?:attached|uploaded|source)[^.]{0,15}(?:agreement|contract|document))\b/i,
     label: 'document upload / ingest',
   },
   {
@@ -189,71 +194,105 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
   },
   {
     capability: 'export_docx_plain',
-    pattern: /\b(docx|word document|export[^.]{0,20}(docx|word))\b/i,
-    label: 'DOCX export',
+    pattern: /\b(?:docx|word document|word redline|export\w*[^.]{0,20}(?:docx|word)|download\w*[^.]{0,20}(?:docx|word))\b/i,
+    label: 'DOCX/Word export',
+  },
+  {
+    capability: 'export_html',
+    pattern: /\b(?:editable html (?:contract|document|view)|html (?:redline|revision table)|render\w*[^.]{0,20}html (?:contract|redline|revision))\b/i,
+    label: 'HTML export/render',
   },
   {
     capability: 'rich_frontend',
-    pattern: /\b(editable[^.]{0,20}(html|view|document|contract)|approval widget|redline (view|editor)|alternatives? selection|choose[^.]{0,20}alternative)\b/i,
-    label: 'rich editable / approval frontend',
+    pattern: /\b(?:editable[^.]{0,20}(?:html|view|document|contract)|approval widget|redline (?:view|editor|preview)|alternatives? (?:selection|to (?:accept|choose))|choose[^.]{0,20}(?:an )?alternative|side[- ]by[- ]side redline)\b/i,
+    label: 'rich editable / approval / redline frontend',
   },
 ];
 
-/** Distinguish child/research delegation (refused) from external-adapter service delegation (synthesized). */
+// Deep-flatten every string leaf (bounded depth) so nested domain_spec rules /
+// invariants and completion outputs are scanned, not just top-level fields.
+function collectStringLeaves(value: unknown, out: string[], depth = 0): void {
+  if (value == null || depth > 8) return;
+  if (typeof value === 'string') {
+    out.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectStringLeaves(item, out, depth + 1);
+  } else if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectStringLeaves(item, out, depth + 1);
+  }
+}
+
+/**
+ * Classify structured delegation. `kind`/structural fields are AUTHORITATIVE:
+ *  - An explicit child/research `kind` (or a child structural field) marks child
+ *    delegation even if `service`/`adapter` is also present (service-backed research
+ *    must not evade refusal).
+ *  - `result_path` (and other output metadata) is NOT a child marker — external-adapter
+ *    and llm-reasoning stages legitimately use it, and flagging them was a false positive.
+ */
 function detectDelegationCapabilities(delegation: Record<string, unknown> | undefined): CapabilityDemand[] {
   if (!delegation || typeof delegation !== 'object') return [];
   const demands: CapabilityDemand[] = [];
   for (const [slug, raw] of Object.entries(delegation)) {
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as Record<string, unknown>;
-    // external-adapter service delegation (has `service`/`adapter`) IS synthesizable — skip it.
-    const isServiceAdapter = typeof entry.service === 'string' || typeof entry.adapter === 'string';
-    const childMarker =
-      'child' in entry ||
+    const kind = typeof entry.kind === 'string' ? entry.kind.toLowerCase() : '';
+    const explicitResearch = /research/.test(kind) || 'synthesize_child' in entry;
+    const explicitChildKind = /\b(?:child|sub[- ]?agent|subagent|research[_ -]?agent)\b/.test(kind) || /\bdelegat/.test(kind);
+    const structuralChild =
       'target_spec' in entry ||
       'synthesize_child' in entry ||
       'children' in entry ||
-      'result_path' in entry ||
-      (typeof entry.kind === 'string' && /child|research|delegat|sub[- ]?agent/i.test(entry.kind));
-    if (childMarker && !isServiceAdapter) {
-      const research =
-        (typeof entry.kind === 'string' && /research/i.test(entry.kind)) ||
-        'synthesize_child' in entry;
+      'child' in entry ||
+      'max_delegated_rounds' in entry ||
+      'fan_out' in entry;
+    if (explicitResearch) {
       demands.push({
-        capability: research ? 'delegation_research_agent' : 'delegation_child_session',
+        capability: 'delegation_research_agent',
+        evidence: `stage '${slug}' declares a research-agent delegation (kind=${kind || '?'})`,
+      });
+    } else if (explicitChildKind || structuralChild) {
+      demands.push({
+        capability: 'delegation_child_session',
         evidence: `stage '${slug}' declares a child-session delegation (${Object.keys(entry).join(', ')})`,
       });
     }
+    // else: external-adapter / llm-reasoning / service stage (incl. result_path) — synthesizable, not flagged.
   }
   return demands;
 }
 
 export function detectRequestedCapabilities(input: CapabilityDetectionInput): CapabilityDemand[] {
-  const haystack = [
-    input.purpose ?? '',
-    input.extraText ?? '',
-    ...(input.stages ?? []).map((stage) =>
-      Object.values(stage as Record<string, unknown>)
-        .filter((value): value is string => typeof value === 'string')
-        .join(' '),
-    ),
-  ]
-    .join('\n')
-    .trim();
+  // Scan ALL string leaves (deep) of purpose + stages (incl. nested domain_spec
+  // rules/invariants) + completion + extra text — not just top-level fields.
+  const leaves: string[] = [];
+  if (input.purpose) leaves.push(input.purpose);
+  if (input.extraText) leaves.push(input.extraText);
+  for (const stage of input.stages ?? []) collectStringLeaves(stage, leaves);
+  collectStringLeaves(input.completion, leaves);
+  const haystack = leaves.join('\n').trim();
 
   const found = new Map<string, CapabilityDemand>();
+  const add = (capability: string, evidence: string): void => {
+    if (!found.has(capability)) found.set(capability, { capability, evidence });
+  };
+
+  // per_item_confirmation: requires BOTH a per-item iteration phrase AND a
+  // user-facing approval/decision phrase (anywhere in the flattened text).
+  const iteration = PER_ITEM_ITERATION.exec(haystack);
+  const approval = USER_APPROVAL.exec(haystack);
+  if (iteration && approval) {
+    add(
+      'per_item_confirmation',
+      `per-item user-approval loop (iteration "${iteration[0].slice(0, 40).trim()}" + user decision "${approval[0].slice(0, 40).trim()}")`,
+    );
+  }
+
   for (const detector of TEXT_DETECTORS) {
     const match = detector.pattern.exec(haystack);
-    if (match && !found.has(detector.capability)) {
-      found.set(detector.capability, {
-        capability: detector.capability,
-        evidence: `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`,
-      });
-    }
+    if (match) add(detector.capability, `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`);
   }
-  for (const demand of detectDelegationCapabilities(input.delegation)) {
-    if (!found.has(demand.capability)) found.set(demand.capability, demand);
-  }
+  for (const demand of detectDelegationCapabilities(input.delegation)) add(demand.capability, demand.evidence);
   return [...found.values()];
 }
 

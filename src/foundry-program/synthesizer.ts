@@ -159,7 +159,7 @@ export function synthesizeProgramSpecFromDomain(
   // document upload, rich frontend, DOCX/track-changes). No detectors fire for
   // today's linear / external-adapter programs, so this is a no-op for them and
   // golden byte-identity is preserved.
-  assertSynthesizableCapabilities({ purpose, stages, delegation });
+  assertSynthesizableCapabilities({ purpose, stages, delegation, completion });
 
   assertStages(stages);
   assertTransitions(transitions);
