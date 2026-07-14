@@ -75,7 +75,7 @@ describe('pgas-new init', () => {
 
   it('supports non-interactive email and password-file flags', async () => {
     const passwordFile = join(homeDir, 'admin-password');
-    writeFileSync(passwordFile, 'file-password\n');
+    writeFileSync(passwordFile, 'file-password\n', { mode: 0o600 });
     const io = promptIo();
 
     const result = await runCli(['init', '--email', 'admin@example.com', '--password-file', passwordFile], io);
