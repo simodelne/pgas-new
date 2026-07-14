@@ -138,6 +138,29 @@ describe('adversarial detection (Codex #167 review)', () => {
     expect(caps({ delegation: { ingest: { target_spec: 'document-ingest', payload_map: {} } } }))
       .toContain('delegation_child_session');
   });
+
+  it('does NOT flag a linear summarizer that mentions "user" near the noun "decision" [re-review #1]', () => {
+    // "pasted by the user … into a decision memo" — per-item iteration ("each article")
+    // WITHOUT a user approval action must NOT trip per_item_confirmation.
+    expect(
+      caps({ purpose: 'Summarize each article and paragraph from text pasted by the user into a compact decision memo.' }),
+    ).not.toContain('per_item_confirmation');
+  });
+
+  it('does NOT flag "word frequency" content as a DOCX/Word export [re-review no-regression]', () => {
+    expect(
+      caps({
+        purpose:
+          'Build a linear analyzer that computes word frequencies from pasted article text and produces a downloadable word frequency CSV report.',
+      }),
+    ).not.toContain('export_docx_plain');
+  });
+
+  it('still detects a genuine Word-document export (recall preserved after tightening) [re-review]', () => {
+    expect(caps({ purpose: 'Revise the contract and let the user download the revised Word document.' }))
+      .toContain('export_docx_plain');
+    expect(caps({ completion: { outputs: ['a .docx export of the final memo'] } })).toContain('export_docx_plain');
+  });
 });
 
 describe('honest refusal safe-stop', () => {

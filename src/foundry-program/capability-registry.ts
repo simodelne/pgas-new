@@ -166,8 +166,13 @@ interface TextDetector {
 // ask the user to accept or reject … before continuing" (deep-flattened) does.
 const PER_ITEM_ITERATION =
   /\b(?:(?:clause|item|section|line|provision|paragraph|article|term)[- ]by[- ](?:clause|item|section|line|provision|paragraph|article|term)|per[- ](?:clause|item|section|provision|paragraph|article)|(?:each|every) (?:clause|item|section|line|provision|paragraph|article|term)|one (?:clause|item|provision|section) at a time|(?:review|revis\w+|process|iterate)\w*[^.]{0,25}(?:each|every) (?:clause|item|section|provision|paragraph))\b/i;
+// The user signal must be an APPROVAL ACTION (approve/accept/reject/skip/sign-off/
+// confirm) tied to the user — NOT merely the word "user" near the output noun
+// "decision"/"decision memo" (a realistic linear summarizer says "pasted by the
+// user … into a decision memo" and must not trip this). "decide/decision" as bare
+// nouns are excluded; genuine per-item approval loops still say approve/accept/reject.
 const USER_APPROVAL =
-  /(?:\b(?:user|human|client|reviewer|counterparty|attorney|lawyer)\b[^.]{0,45}\b(?:approv\w*|accept\w*|reject\w*|skip\w*|sign[- ]?off|confirm\w*|decide|decision)\b|\b(?:ask|prompt|require)\w*\b[^.]{0,25}\b(?:user|client|reviewer|human)\b[^.]{0,25}\b(?:approv\w*|accept\w*|reject\w*|choose)\b|\baccept or reject\b|\bapprove or reject\b|\b(?:approv\w*|accept\w*|reject\w*|skip\w*)[^.]{0,25}\bbefore (?:continuing|proceeding|moving on)\b|\bawait\w*[^.]{0,20}(?:user|approval)\b|\bexplicit(?:ly)? approv\w*\b)/i;
+  /(?:\b(?:user|human|client|reviewer|counterparty|attorney|lawyer)\b[^.]{0,45}\b(?:approv\w*|accept\w*|reject\w*|skip\w*|sign[- ]?off|confirm\w*)\b|\b(?:ask|prompt|require)\w*\b[^.]{0,25}\b(?:user|client|reviewer|human)\b[^.]{0,25}\b(?:approv\w*|accept\w*|reject\w*|choose)\b|\baccept or reject\b|\bapprove or reject\b|\b(?:approv\w*|accept\w*|reject\w*|skip\w*)[^.]{0,25}\bbefore (?:continuing|proceeding|moving on)\b|\bawait\w*[^.]{0,20}(?:user|approval)\b|\bexplicit(?:ly)? approv\w*\b)/i;
 
 // Text detectors (per_item handled above). Each requires an explicit capability
 // phrase; none fire on plain linear/external-adapter programs.
@@ -193,8 +198,11 @@ const TEXT_DETECTORS: readonly TextDetector[] = [
     label: 'track-changes output',
   },
   {
+    // "Word" must be a document/export TYPE (word document/doc/file/redline/format,
+    // or .docx) — NOT arbitrary "word" content like "word frequency". The export/
+    // download branches require an explicit docx/Word-document object.
     capability: 'export_docx_plain',
-    pattern: /\b(?:docx|word document|word redline|export\w*[^.]{0,20}(?:docx|word)|download\w*[^.]{0,20}(?:docx|word))\b/i,
+    pattern: /\b(?:\.?docx\b|word (?:documents?|docs?|file|redline|format|export)|(?:export|download|generate|produce|render|save)\w*[^.]{0,20}(?:\.?docx\b|word (?:documents?|docs?|file)))\b/i,
     label: 'DOCX/Word export',
   },
   {
