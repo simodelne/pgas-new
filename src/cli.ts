@@ -1,7 +1,7 @@
 process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
 
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
@@ -528,7 +528,15 @@ function writePrivateFile(path: string, contents: string): void {
   chmodSync(path, 0o600);
 }
 
-function readPasswordFile(path: string): string {
+export function readPasswordFile(path: string): string {
+  const stats = statSync(path);
+  const mode = stats.mode & 0o777;
+  if ((mode & 0o077) !== 0) {
+    throw new Error(
+      `password file ${path} is group- or world-accessible (mode 0${mode.toString(8).padStart(3, '0')}); ` +
+        `run 'chmod 600 ${path}' to restrict it to the owner`,
+    );
+  }
   return readFileSync(path, 'utf8').replace(/\r?\n$/u, '');
 }
 
