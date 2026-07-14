@@ -48,7 +48,11 @@ describe('pgas-new governed model', () => {
     expect(state.session.active_session_running).toBe(false);
     expect(state.intake.research_allowed).toBe(false);
     expect(state.program.runtime).toBe('typescript-node');
+    expect(state.program.target_dir_confirmed).toBe(false);
+    expect(state.program.design_confirmed).toBe(false);
+    expect(state.program.skip_dimensions).toEqual([]);
     expect(state.program.architecture_ready).toBe(false);
+    expect(state.program.synthesis_complete).toBe(false);
     expect(state.program.domain_synthesis_complete).toBe(false);
     expect(state.domain_synthesis.audit).toEqual({});
     expect(state.repo.target_kind).toBe('unknown');

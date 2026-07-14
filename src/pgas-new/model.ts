@@ -117,7 +117,13 @@ export interface PgasNewState {
     runtime: 'typescript-node';
     slug?: string;
     name?: string;
+    target_dir?: string;
+    target_dir_confirmed: boolean;
+    design_path?: string;
+    design_confirmed: boolean;
+    skip_dimensions: string[];
     architecture_ready: boolean;
+    synthesis_complete: boolean;
     domain_synthesis_complete: boolean;
   };
   domain_synthesis: {
@@ -185,7 +191,11 @@ export function createInitialState(): PgasNewState {
     },
     program: {
       runtime: 'typescript-node',
+      target_dir_confirmed: false,
+      design_confirmed: false,
+      skip_dimensions: [],
       architecture_ready: false,
+      synthesis_complete: false,
       domain_synthesis_complete: false,
     },
     domain_synthesis: {
