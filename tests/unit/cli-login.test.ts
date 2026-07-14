@@ -44,7 +44,7 @@ describe('pgas-new login', () => {
 
   it('logs in non-interactively and caches the returned token with 0600 permissions', async () => {
     const passwordFile = join(homeDir, 'admin-password');
-    writeFileSync(passwordFile, 'file-password\n');
+    writeFileSync(passwordFile, 'file-password\n', { mode: 0o600 });
 
     const result = await runCli(['login', '--email', 'admin@example.com', '--password-file', passwordFile]);
 
@@ -79,7 +79,7 @@ describe('pgas-new login', () => {
   it('returns exit 1 on invalid credentials and does not cache a token', async () => {
     globalThis.fetch = vi.fn(async () => json({ error: 'Invalid credentials' }, 401));
     const passwordFile = join(homeDir, 'admin-password');
-    writeFileSync(passwordFile, 'file-password\n');
+    writeFileSync(passwordFile, 'file-password\n', { mode: 0o600 });
 
     const result = await runCli(['login', '--email', 'admin@example.com', '--password-file', passwordFile]);
 
