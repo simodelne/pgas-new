@@ -8,6 +8,7 @@ import { loadSpecWithPatterns, type ReactionHandler, type ReactionResult } from 
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import { assertSynthesizableCapabilities } from './capability-registry.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
   classifyStagesForDomain,
@@ -151,6 +152,14 @@ export function synthesizeProgramSpecFromDomain(
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
+
+  // #166 capability gate (uplift PR-1): safe-stop rather than silently emit an
+  // inadequate linear scaffold when the program demands synthesis capabilities the
+  // foundry does not yet have (per-item confirmation, child/research delegation,
+  // document upload, rich frontend, DOCX/track-changes). No detectors fire for
+  // today's linear / external-adapter programs, so this is a no-op for them and
+  // golden byte-identity is preserved.
+  assertSynthesizableCapabilities({ purpose, stages, delegation });
 
   assertStages(stages);
   assertTransitions(transitions);
