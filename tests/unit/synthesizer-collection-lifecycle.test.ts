@@ -76,6 +76,7 @@ interface ParsedSpec {
     transitions?: Array<{ target: string; guard?: { kind: string; path: string } }>;
     vocabulary?: string[];
   }>;
+  projection: Record<string, { include: string[]; exclude: string[] }>;
   schema: Record<string, string>;
   reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
   action_map: Record<string, {
@@ -97,6 +98,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
       ['duplicate action names', (descriptor) => { descriptor.transitions[1] = { ...descriptor.transitions[1], action: 'start_review' }; }, /duplicate.*action/u],
       ['terminal status outside statuses', (descriptor) => { descriptor.aggregate.terminal_statuses = ['accepted', 'archived']; }, /terminal_statuses/u],
       ['missing aggregate guard field', (descriptor) => { descriptor.aggregate.guard_field = ''; }, /aggregate\.guard_field/u],
+      ['unknown storage representation', (descriptor) => { descriptor.storage = { ...descriptor.storage, representation: 'flat_blob' } as typeof descriptor.storage; }, /storage\.representation/u],
     ];
 
     for (const [label, mutate, message] of invalidCases) {
@@ -161,6 +163,57 @@ describe('collection_lifecycle descriptor synthesis', () => {
     expect(artifact.handlers_ts).toContain("'work_units.all_terminal'");
     expect(artifact.handlers_ts).toContain("return { mutations: [{ op: 'MSet' as const, path: 'work_units.all_terminal', value: allTerminal }] };");
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('keeps json_string collection storage on the exact legacy schema paths', () => {
+    const jsonStringLifecycle = {
+      ...clone(genericLifecycle),
+      storage: {
+        ...genericLifecycle.storage,
+        representation: 'json_string' as const,
+      },
+    };
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(jsonStringLifecycle));
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(pickCollectionSchema(parsed.schema)).toEqual({
+      'work_units.items_json': 'string',
+      'work_units.pending_event_json': 'string',
+      'work_units.lifecycle_violation_json': 'string',
+      'work_units.all_terminal': 'boolean',
+    });
+  });
+
+  it('emits indexed array schema paths and projects the array root for indexed collections', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(indexedArrayLifecycle()));
+    const parsed = load(artifact.spec_yaml) as ParsedSpec;
+
+    expect(parsed.schema).toMatchObject({
+      'work_units.items': 'array',
+      'work_units.items.*': 'object',
+      'work_units.items.*.id': 'string',
+      'work_units.items.*.title': 'string',
+      'work_units.items.*.priority': 'number',
+      'work_units.items.*.status': 'string',
+      'work_units.pending_event_json': 'string',
+      'work_units.lifecycle_violation_json': 'string',
+      'work_units.all_terminal': 'boolean',
+    });
+    expect(parsed.schema).not.toHaveProperty('work_units.items_json');
+    expect(parsed.projection.review_work.include).toContain('work_units.items');
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('emits reconstructArray terminal checks instead of JSON parsing for indexed collections', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domainWithLifecycle(indexedArrayLifecycle()));
+
+    expect(artifact.handlers_ts).toContain('reconstructArray(Object.fromEntries(snapshot), itemsPath)');
+    expect(artifact.handlers_ts).toContain("'work_units.items'");
+    expect(artifact.handlers_ts).not.toContain('const raw = snapshot.get(itemsPath);');
+    expect(artifact.handlers_ts).not.toContain('const rawItems = snapshot.get(itemsPath);');
+    expect(artifact.handlers_ts).not.toContain('parsed = JSON.parse(raw) as unknown;');
+    expect(artifact.handlers_ts).not.toContain('value: JSON.stringify(nextItems)');
+    expect(artifact.handlers_ts).toContain("path: itemsPath + '.' + itemIndex + '.' + statusField");
   });
 
   it('writes a managed-by-llm lifecycle intent event without changing item status', () => {
@@ -352,6 +405,35 @@ function domainWithLifecycle(lifecycle: unknown): Record<string, unknown> {
       collection_lifecycle: lifecycle,
     }),
   };
+}
+
+function indexedArrayLifecycle(): unknown {
+  return {
+    ...clone(genericLifecycle),
+    storage: {
+      items_path: 'work_units.items',
+      event_path: 'work_units.pending_event_json',
+      violation_path: 'work_units.lifecycle_violation_json',
+      representation: 'indexed_array',
+    },
+    item: {
+      id_field: 'id',
+      status_field: 'status',
+      schema: {
+        id: 'string',
+        title: 'string',
+        priority: 'number',
+      },
+    },
+  };
+}
+
+function pickCollectionSchema(schema: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(schema).filter(([path]) =>
+      path.startsWith('work_units.'),
+    ),
+  );
 }
 
 function runAllTerminalReaction(
