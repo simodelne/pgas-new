@@ -57,10 +57,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'per_item_confirmation',
-    status: 'refuses',
-    evidence: 'no synthesis of per-item decision_targeting + confirmation_pairing + one-proposed-at-a-time reactions.',
-    since_version: '3.22.0',
-    gap_note: 'uplift PR-2 (collection representation v2) + PR-3 (confirmation-loop codegen). Engine DecisionTargetingConfig / ConfirmationPairingConfig are already public on 3.18.0.',
+    status: 'synthesizes',
+    evidence: 'confirmation_loop descriptors synthesize decision_targeting + confirmation_pairing + reaction-owned per-item status enforcement on indexed_array collections.',
+    since_version: '3.23.0',
   },
   {
     capability: 'delegation_child_session',

@@ -29,11 +29,11 @@ describe('foundry capability registry (#166 PR-1)', () => {
     }
   });
 
-  it('classifies the load-bearing Contract-Revision capabilities as refuses (foundry can synthesize linear + collections today)', () => {
+  it('classifies the load-bearing Contract-Revision capabilities by current synthesis status', () => {
     expect(capabilityStatus('linear_stage_chain')).toBe('synthesizes');
     expect(capabilityStatus('collection_lifecycle_aggregate')).toBe('synthesizes');
+    expect(capabilityStatus('per_item_confirmation')).toBe('synthesizes');
     for (const cap of [
-      'per_item_confirmation',
       'delegation_child_session',
       'delegation_research_agent',
       'document_upload_intake',
@@ -186,8 +186,9 @@ describe('honest refusal safe-stop', () => {
     const err = thrown as CapabilityRefusalError;
     expect(err.kind).toBe('capability_refusal');
     expect(err.refused.map((d) => d.capability)).toEqual(
-      expect.arrayContaining(['per_item_confirmation', 'export_docx_trackchange']),
+      expect.arrayContaining(['export_docx_trackchange']),
     );
+    expect(err.refused.map((d) => d.capability)).not.toContain('per_item_confirmation');
     expect(err.message).toContain('capability_refusal');
     expect(err.message).toContain('uplift'); // gap_note routed into the message
   });
