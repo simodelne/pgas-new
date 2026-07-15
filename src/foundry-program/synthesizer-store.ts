@@ -32,6 +32,7 @@ export interface SynthesisContext {
         items_path: string;
         event_path: string;
         violation_path: string;
+        representation?: 'json_string' | 'indexed_array';
       };
       item: {
         id_field: string;
