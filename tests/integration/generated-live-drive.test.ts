@@ -19,7 +19,11 @@ import { synthesizeDomainLogic } from '../../src/foundry-program/domain-synthesi
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import type { ReasoningField } from '../../src/foundry-program/reasoning-contract.js';
-import { driveGeneratedProgramLive } from '../../src/pgas-new/generated-live-drive.js';
+import {
+  deriveConfirmationScript,
+  driveGeneratedProgramLive,
+  type GeneratedLiveDriveConfirmationScript,
+} from '../../src/pgas-new/generated-live-drive.js';
 import { renderStandaloneScaffold } from '../../src/pgas-new/template-renderer.js';
 import { assertNoExecutedPathStubs } from '../../src/pgas-new/verify.js';
 
@@ -30,6 +34,7 @@ const LIVE_TIMEOUT_MS = Number(process.env.PGAS_LIVE_GRADUATION_TIMEOUT_MS ?? '1
 const SLUG = 'proposal-ops';
 const REASONING_STAGE = 'brief_summary';
 const REASONING_ACTION = 'complete_brief_summary';
+const CONFIRMATION_SLUG = 'work-unit-flow-live';
 
 // Same representative multi-archetype domain shape as the hermetic smoke test:
 // pure-compute (intake, fee_modeling) + external-adapter (crm_lookup) +
@@ -61,6 +66,89 @@ const multiStageDomain = {
     },
   }),
   'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'brief_summary.done' }),
+};
+
+const confirmationLifecycle = {
+  version: 1,
+  name: 'work_units',
+  item_label: 'work unit',
+  storage: {
+    items_path: 'work_units.items',
+    event_path: 'work_units.pending_event_json',
+    violation_path: 'work_units.lifecycle_violation_json',
+    representation: 'indexed_array',
+  },
+  item: {
+    id_field: 'id',
+    status_field: 'status',
+    schema: {
+      id: 'string',
+      title: 'string',
+      proposed_text: 'string',
+      user_instruction: 'string',
+    },
+  },
+  statuses: [
+    { name: 'pending', initial: true },
+    { name: 'proposed' },
+    { name: 'accepted', terminal: true },
+    { name: 'skipped', terminal: true },
+  ],
+  transitions: [],
+  aggregate: {
+    guard_field: 'work_units.all_terminal',
+    terminal_statuses: ['accepted', 'skipped'],
+    require_non_empty: true,
+  },
+};
+
+const confirmationLoop = {
+  collection: 'work_units.items',
+  proposed_status: 'proposed',
+  decisions: {
+    approve: { to: 'accepted' },
+    revise: {
+      to: 'proposed',
+      requires_instruction: true,
+      instruction_path: 'work_units.items.*.user_instruction',
+      re_propose: true,
+    },
+    skip: { to: 'skipped' },
+  },
+  one_proposed_at_a_time: true,
+  aggregate: {
+    guard_field: 'work_units.all_terminal',
+    terminal_statuses: ['accepted', 'skipped'],
+  },
+  stage: 'review_work',
+  summary_path: 'summary.confirmation_loop',
+  violation_path: 'work_units.confirmation_violation_json',
+  pending_action_path: 'decisions.pending_review_work_action',
+};
+
+const confirmationLoopDomain = {
+  'program.slug': CONFIRMATION_SLUG,
+  'program.name': 'Work Unit Flow Live',
+  'program.target_dir': '/tmp/work-unit-flow-live',
+  'program.design_path': 'design',
+  'intake.purpose': 'Review two work units one at a time with explicit user confirmation before completion.',
+  'intake.entry_channel': 'user_text',
+  'intake.stages_json': JSON.stringify([
+    { slug: 'intake', is_bootstrap: true },
+    { slug: 'review_work' },
+    { slug: 'complete', is_terminal: true },
+  ]),
+  'intake.transitions_json': JSON.stringify([
+    { from: 'intake', to: 'review_work', trigger: 'started', guard_field: 'intake.started' },
+    { from: 'review_work', to: 'complete', trigger: 'done', guard_field: 'work_units.all_terminal' },
+  ]),
+  'intake.delegation_json': JSON.stringify({ enabled: false }),
+  'intake.completion_json': JSON.stringify({
+    final_stage: 'complete',
+    guard_field: 'work_units.all_terminal',
+    collection_lifecycle: confirmationLifecycle,
+  }),
+  'intake.interaction_json': JSON.stringify({ confirmation_loops: [confirmationLoop] }),
 };
 
 const tempRoots: string[] = [];
@@ -227,6 +315,37 @@ describe('generated program live drive gate', () => {
       expect(workProduct.items.every((item) => typeof item === 'string' && item.length > 0)).toBe(true);
     }
   });
+
+  liveIt('drives a generated confirmation loop with structured user decisions', { timeout: LIVE_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, confirmationScript } = liveSynthesizeAndRenderConfirmationLoop();
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: CONFIRMATION_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: [
+        'Create two review items for the launch checklist.',
+        'Propose one item at a time and wait for user confirmation before continuing.',
+      ].join(' '),
+      finalStage: 'complete',
+      maxTriggers: 12,
+      driveTimeoutMs: 900_000,
+      confirmationScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] choreography=${JSON.stringify(drive.choreography)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.terminal).toBe(true);
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
+    expect(drive.choreography.provider_hits_ok).toBe(true);
+    expect(drive.choreography.decision_table_respected).toBe(true);
+    expect(drive.choreography.one_proposed_invariant_held).toBe(true);
+  });
 });
 
 const LIVE_DRIVE_INITIAL_TEXT = [
@@ -280,6 +399,37 @@ async function liveSynthesizeAndRender(env: LiveDriveEnv): Promise<{ contractFie
   linkRootNodeModules(targetDir);
 
   return { contractFields, targetDir };
+}
+
+function liveSynthesizeAndRenderConfirmationLoop(): { targetDir: string; confirmationScript: GeneratedLiveDriveConfirmationScript } {
+  const targetDir = trackedTempRoot('pgas-new-live-drive-confirmation-render-');
+  const artifact = artifactFromDomain(confirmationLoopDomain);
+  const loop = artifact.synthesis_context?.interaction?.confirmation_loops[0];
+  const lifecycle = artifact.synthesis_context?.completion.collection_lifecycle;
+  expect(loop, 'confirmation loop descriptor').toBeTruthy();
+  expect(lifecycle, 'confirmation lifecycle descriptor').toBeTruthy();
+  const confirmationScript = deriveConfirmationScript(loop!, [
+    { decision: 'approve' },
+    { decision: 'revise', instruction: 'Tighten the proposed wording before asking again.' },
+    { decision: 'approve' },
+    { decision: 'skip' },
+  ], lifecycle!);
+
+  renderStandaloneScaffold({
+    slug: CONFIRMATION_SLUG,
+    name: 'Work Unit Flow Live',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+  });
+  linkRootNodeModules(targetDir);
+
+  return { targetDir, confirmationScript };
 }
 
 interface LiveDriveEnv {
