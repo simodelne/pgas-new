@@ -9,6 +9,7 @@ import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { assertSynthesizableCapabilities } from './capability-registry.js';
+import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
   classifyStagesForDomain,
@@ -53,6 +54,10 @@ interface Completion {
   collection_lifecycle?: CollectionLifecycleDescriptor;
 }
 
+interface Interaction {
+  confirmation_loops: ConfirmationLoopDescriptor[];
+}
+
 interface CollectionLifecycleDescriptor {
   version: number;
   name: string;
@@ -87,6 +92,30 @@ interface CollectionLifecycleDescriptor {
     terminal_statuses: string[];
     require_non_empty: boolean;
   };
+}
+
+interface ConfirmationLoopDecisionDescriptor {
+  to: string;
+  requires_instruction?: boolean;
+  instruction_path?: string;
+  re_propose?: boolean;
+}
+
+interface ConfirmationLoopDescriptor {
+  collection: string;
+  proposed_status: string;
+  item_id_field?: string;
+  item_title_field?: string;
+  decisions: Record<string, ConfirmationLoopDecisionDescriptor>;
+  one_proposed_at_a_time: true;
+  aggregate: {
+    guard_field: string;
+    terminal_statuses: string[];
+  };
+  stage: string;
+  summary_path?: string;
+  violation_path?: string;
+  pending_action_path?: string;
 }
 
 export interface SynthesizedSpec {
@@ -135,6 +164,27 @@ interface PlannedTransitionAction {
 const PGAS_CHANNEL_ID_MAX_LENGTH = 64;
 const COLLECTION_LIFECYCLE_EVENT_CHANNEL = 'lifecycle_event';
 const COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE = '';
+const USER_CONFIRMATION_CHANNEL = 'user_confirmation';
+const PROPOSE_ITEM_ACTION = 'propose_item';
+const CONTROL_PLANE_ACTIONS = [
+  'record_user_note',
+  'session_new',
+  'session_abort_current',
+  'session_status',
+  'session_history',
+  'session_resume',
+  'session_help',
+];
+const USER_DECISION_INGESTION_PATHS = [
+  'inputs.user_decision',
+  'inputs.user_decision.decision',
+  'inputs.user_decision.instruction',
+  'inputs.user_decision.timestamp',
+  'inputs.user_decision.target_item_index',
+  'inputs.user_decision.target_item_id',
+  'inputs.user_decision.target_item_title',
+  'inputs.user_decision.target_item_status',
+];
 
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -155,6 +205,8 @@ export function synthesizeProgramSpecFromDomain(
   const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
+  const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
+  const confirmationLoops = interaction?.confirmation_loops ?? [];
 
   // #166 capability gate (uplift PR-1): safe-stop rather than silently emit an
   // inadequate linear scaffold when the program demands synthesis capabilities the
@@ -173,6 +225,13 @@ export function synthesizeProgramSpecFromDomain(
       ...completion,
       guard_field: collectionLifecycle.aggregate.guard_field,
       collection_lifecycle: collectionLifecycle,
+    };
+  }
+  if (confirmationLoops.length > 0) {
+    assertConfirmationLoopDescriptors(confirmationLoops, collectionLifecycle, stages);
+    completion = {
+      ...completion,
+      guard_field: confirmationLoops[0]?.aggregate.guard_field ?? completion.guard_field,
     };
   }
   transitions = refreshStaleTransitionsForStages(stages, transitions, completion) ?? transitions;
@@ -217,6 +276,12 @@ export function synthesizeProgramSpecFromDomain(
     stageClassificationBySlug,
   );
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
+  const loopStageNames = new Set(confirmationLoops.map((loop) => loop.stage));
+  const suppressedTransitionActionNames = new Set(
+    transitionActions
+      .filter((action) => loopStageNames.has(action.source))
+      .map((action) => action.name),
+  );
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
@@ -258,9 +323,14 @@ export function synthesizeProgramSpecFromDomain(
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentModeWiring(synthesizedModes, completion.collection_lifecycle);
   }
+  applyConfirmationLoopIntentModeWiring(synthesizedModes, confirmationLoops);
   spec.modes = synthesizedModes;
 
-  spec.proceed_to = Object.fromEntries(transitionActions.map((action) => [action.name, action.target]));
+  spec.proceed_to = Object.fromEntries(
+    transitionActions
+      .filter((action) => !suppressedTransitionActionNames.has(action.name))
+      .map((action) => [action.name, action.target]),
+  );
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
@@ -307,6 +377,7 @@ export function synthesizeProgramSpecFromDomain(
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleProjection(projection, completion.collection_lifecycle);
   }
+  applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle);
   spec.projection = projection;
 
   const prompts: MutableRecord = {
@@ -326,6 +397,7 @@ export function synthesizeProgramSpecFromDomain(
     [entryChannel]: [`inputs.${entryChannel}`],
     system_mode_entry: ['inputs.mode_entry'],
   };
+  applyConfirmationLoopIngestion(recordField(spec, 'ingestion'), confirmationLoops);
 
   spec.reactions = {
     capture_initial_entry_input: {
@@ -335,9 +407,10 @@ export function synthesizeProgramSpecFromDomain(
     },
   };
   applyStageOutputMirrorReactions(recordField(spec, 'reactions'), intermediateModes, flatMirrorStages);
-  if (completion.collection_lifecycle) {
+  if (completion.collection_lifecycle && confirmationLoops.length === 0) {
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
+  applyConfirmationLoopReactions(recordField(spec, 'reactions'), confirmationLoops, completion.collection_lifecycle);
 
   spec.channels = {
     ...recordField(spec, 'channels'),
@@ -347,6 +420,7 @@ export function synthesizeProgramSpecFromDomain(
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentChannel(recordField(spec, 'channels'), completion.collection_lifecycle);
   }
+  applyConfirmationLoopIntentChannel(recordField(spec, 'channels'), confirmationLoops, completion.collection_lifecycle);
   applyControlPlaneEntryChannel(spec, entryChannel);
 
   const actionMap = recordField(spec, 'action_map');
@@ -356,11 +430,16 @@ export function synthesizeProgramSpecFromDomain(
     delete actionMap.begin_work;
   }
   for (const action of transitionActions) {
+    if (suppressedTransitionActionNames.has(action.name)) {
+      continue;
+    }
     actionMap[action.name] = actionMapEntryFor(action, firstMode, stageDomainSpecBySlug.get(action.source), reasoningContractsBySlug.get(action.source));
   }
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleIntentActions(actionMap, completion.collection_lifecycle);
   }
+  applyConfirmationLoopIntentActions(actionMap, confirmationLoops, completion.collection_lifecycle);
+  applyConfirmationLoopPairing(spec, confirmationLoops);
 
   const schema = recordField(spec, 'schema');
   delete schema['work.started'];
@@ -402,6 +481,7 @@ export function synthesizeProgramSpecFromDomain(
   if (completion.collection_lifecycle) {
     applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
   }
+  applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
 
@@ -423,6 +503,7 @@ export function synthesizeProgramSpecFromDomain(
       entryPath: `inputs.${entryChannel}`,
       flatMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
+      confirmationLoops,
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
@@ -433,9 +514,10 @@ export function synthesizeProgramSpecFromDomain(
       entryPath: `inputs.${entryChannel}`,
       flatMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
+      confirmationLoops,
     }, reasoningContractsBySlug),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle),
-    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug),
+    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
     synthesis_context: {
@@ -446,6 +528,7 @@ export function synthesizeProgramSpecFromDomain(
       stages,
       transitions,
       delegation,
+      ...(interaction ? { interaction } : {}),
       completion,
     },
   };
@@ -476,6 +559,7 @@ export function resynthesizeWithReasoningContracts(
     'intake.transitions_json': JSON.stringify(context.transitions),
     'intake.delegation_json': JSON.stringify(context.delegation),
     'intake.completion_json': JSON.stringify(context.completion),
+    ...(context.interaction ? { 'intake.interaction_json': JSON.stringify(context.interaction) } : {}),
   }, { ...options, reasoningContracts: contracts });
 }
 
@@ -560,13 +644,7 @@ function applyModeVocabularies(
     const mode = recordField(modes, modeName);
     mode.vocabulary = [
       ...actions.map((action) => action.name),
-      'record_user_note',
-      'session_new',
-      'session_abort_current',
-      'session_status',
-      'session_history',
-      'session_resume',
-      'session_help',
+      ...CONTROL_PLANE_ACTIONS,
     ];
   }
 }
@@ -758,6 +836,267 @@ function applyCollectionLifecycleIntentActions(
       channel: COLLECTION_LIFECYCLE_EVENT_CHANNEL,
     };
   }
+}
+
+function applyConfirmationLoopIntentChannel(
+  channels: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle?: CollectionLifecycleDescriptor,
+): void {
+  if (loops.length === 0 || !lifecycle) {
+    return;
+  }
+  const loop = loops[0] as ConfirmationLoopDescriptor;
+  channels[USER_CONFIRMATION_CHANNEL] = {
+    direction: 'In',
+    sync: 'Async',
+    structured_decision: true,
+    decision_targeting: {
+      collection: loop.collection,
+      status_field: lifecycle.item.status_field,
+      status_equals: loop.proposed_status,
+      select: 'first',
+      index_path: 'inputs.user_decision.target_item_index',
+      id_path: 'inputs.user_decision.target_item_id',
+      title_path: 'inputs.user_decision.target_item_title',
+      status_path: 'inputs.user_decision.target_item_status',
+    },
+  };
+}
+
+function applyConfirmationLoopIngestion(
+  ingestion: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+): void {
+  if (loops.length === 0) {
+    return;
+  }
+  ingestion[USER_CONFIRMATION_CHANNEL] = USER_DECISION_INGESTION_PATHS;
+}
+
+function applyConfirmationLoopReactions(
+  reactions: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle?: CollectionLifecycleDescriptor,
+): void {
+  if (!lifecycle) {
+    return;
+  }
+  for (const loop of loops) {
+    reactions[confirmationLoopSaveReactionName(loop)] = {
+      event: 'AfterIngestion',
+      watch: [
+        'inputs.user_decision.decision',
+        'inputs.user_decision.instruction',
+        'inputs.user_decision.timestamp',
+        'inputs.user_decision.target_item_index',
+      ],
+      write_scope: [confirmationLoopPendingPath(loop)],
+    };
+    reactions[confirmationLoopEnforceReactionName(loop)] = {
+      event: 'AfterMutation',
+      watch: ['inputs.user_decision.decision', 'inputs.user_decision.timestamp', 'inputs.mode_entry'],
+      write_scope: unique([
+        `${loop.collection}.*.${lifecycle.item.status_field}`,
+        ...confirmationLoopInstructionPaths(loop),
+        confirmationLoopViolationPath(loop, lifecycle),
+        confirmationLoopDemotionCounterPath(loop),
+        confirmationLoopAppliedDecisionPath(loop),
+        loop.aggregate.guard_field,
+      ]),
+    };
+  }
+}
+
+function applyConfirmationLoopIntentModeWiring(
+  modes: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+): void {
+  loops.forEach((loop, index) => {
+    const mode = recordField(modes, loop.stage);
+    mode.vocabulary = [
+      confirmationLoopProposeActionName(loop, index, loops.length),
+      ...CONTROL_PLANE_ACTIONS,
+    ];
+    const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+    mode.channels = unique([...channels, USER_CONFIRMATION_CHANNEL, 'widget_output']);
+  });
+}
+
+function applyConfirmationLoopProjection(
+  projection: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle?: CollectionLifecycleDescriptor,
+): void {
+  if (!lifecycle) {
+    return;
+  }
+  for (const loop of loops) {
+    const modeProjection = recordField(projection, loop.stage);
+    const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+    const idField = loop.item_id_field ?? lifecycle.item.id_field;
+    const titleField = loop.item_title_field ?? 'title';
+    modeProjection.include = unique([
+      ...include.filter((path) => path !== loop.collection),
+      'inputs.user_decision.target_item_index',
+      'inputs.user_decision.target_item_id',
+      'inputs.user_decision.target_item_title',
+      'inputs.user_decision.target_item_status',
+      `${loop.collection}.*.${idField}`,
+      `${loop.collection}.*.${titleField}`,
+      `${loop.collection}.*.${lifecycle.item.status_field}`,
+      loop.aggregate.guard_field,
+      confirmationLoopSummaryPath(loop),
+    ]);
+    if (!Array.isArray(modeProjection.exclude)) {
+      modeProjection.exclude = [];
+    }
+  }
+}
+
+function applyConfirmationLoopIntentActions(
+  actionMap: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle?: CollectionLifecycleDescriptor,
+): void {
+  if (!lifecycle) {
+    return;
+  }
+  loops.forEach((loop, index) => {
+    const actionName = confirmationLoopProposeActionName(loop, index, loops.length);
+    if (Object.prototype.hasOwnProperty.call(actionMap, actionName)) {
+      throw new Error(`confirmation_loop propose action collides with generated action_map: ${actionName}`);
+    }
+    const idField = loop.item_id_field ?? lifecycle.item.id_field;
+    const statusField = lifecycle.item.status_field;
+    const contentMutations = Object.keys(lifecycle.item.schema)
+      .filter((field) => field !== idField && field !== statusField)
+      .map((field) => ({
+        op: 'MSet',
+        path: `${loop.collection}.*.${field}`,
+        value: '',
+        from_arg: field,
+      }));
+    actionMap[actionName] = {
+      description: `Propose ${lifecycle.item_label} content for user confirmation.`,
+      mutations: [
+        ...contentMutations,
+        { op: 'MSet', path: `${loop.collection}.*.${statusField}`, value: loop.proposed_status },
+      ],
+      channel: 'widget_output',
+      awaits_user_decision: { channel: USER_CONFIRMATION_CHANNEL, intent: 'present_for_approval' },
+    };
+    for (const decisionActionName of confirmationLoopDecisionActionNames(loop, index, loops.length)) {
+      if (Object.prototype.hasOwnProperty.call(actionMap, decisionActionName)) {
+        throw new Error(`confirmation_loop decision action collides with generated action_map: ${decisionActionName}`);
+      }
+      actionMap[decisionActionName] = {
+        description: `Acknowledge a user confirmation decision for ${lifecycle.item_label}; status writes are reaction-owned.`,
+        mutations: [],
+        channel: 'widget_output',
+      };
+    }
+  });
+}
+
+function applyConfirmationLoopPairing(
+  spec: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+): void {
+  if (loops.length === 0) {
+    return;
+  }
+  spec.confirmation_pairing = {
+    prefixes: unique(loops.map((loop) => loop.collection)),
+    policy: 'reject',
+    terminals: unique(loops.flatMap((loop, index) => [
+      confirmationLoopProposeActionName(loop, index, loops.length),
+      ...confirmationLoopDecisionActionNames(loop, index, loops.length),
+    ])),
+  };
+}
+
+function applyConfirmationLoopSchema(
+  schema: MutableRecord,
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle?: CollectionLifecycleDescriptor,
+): void {
+  if (loops.length === 0 || !lifecycle) {
+    return;
+  }
+  schema['inputs.user_decision'] = 'object';
+  schema['inputs.user_decision.decision'] = 'string';
+  schema['inputs.user_decision.instruction'] = 'string';
+  schema['inputs.user_decision.timestamp'] = 'string';
+  schema['inputs.user_decision.target_item_index'] = 'number';
+  schema['inputs.user_decision.target_item_id'] = 'string';
+  schema['inputs.user_decision.target_item_title'] = 'string';
+  schema['inputs.user_decision.target_item_status'] = 'string';
+  for (const loop of loops) {
+    schema[confirmationLoopPendingPath(loop)] = 'string';
+    schema[confirmationLoopViolationPath(loop, lifecycle)] = 'string';
+    schema[confirmationLoopSummaryPath(loop)] = 'object';
+    schema[confirmationLoopDemotionCounterPath(loop)] = 'number';
+    schema[confirmationLoopAppliedDecisionPath(loop)] = 'string';
+    schema[loop.aggregate.guard_field] = 'boolean';
+  }
+}
+
+function confirmationLoopSaveReactionName(loop: ConfirmationLoopDescriptor): string {
+  return `save_${safeIdentifier(loop.stage)}_decision`;
+}
+
+function confirmationLoopEnforceReactionName(loop: ConfirmationLoopDescriptor): string {
+  return `enforce_${safeIdentifier(loop.stage)}_status`;
+}
+
+function confirmationLoopProposeActionName(
+  loop: ConfirmationLoopDescriptor,
+  index: number,
+  total: number,
+): string {
+  void index;
+  return total === 1 ? PROPOSE_ITEM_ACTION : `propose_${safeIdentifier(loop.stage)}_item`;
+}
+
+function confirmationLoopDecisionActionNames(
+  loop: ConfirmationLoopDescriptor,
+  index: number,
+  total: number,
+): string[] {
+  void index;
+  return Object.keys(loop.decisions).map((decision) =>
+    total === 1 ? `${safeIdentifier(decision)}_item` : `${safeIdentifier(decision)}_${safeIdentifier(loop.stage)}_item`,
+  );
+}
+
+function confirmationLoopPendingPath(loop: ConfirmationLoopDescriptor): string {
+  return loop.pending_action_path ?? `decisions.pending_${safeIdentifier(loop.stage)}_action`;
+}
+
+function confirmationLoopSummaryPath(loop: ConfirmationLoopDescriptor): string {
+  return loop.summary_path ?? `summary.${safeIdentifier(loop.stage)}`;
+}
+
+function confirmationLoopViolationPath(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string {
+  return loop.violation_path ?? lifecycle.storage.violation_path;
+}
+
+function confirmationLoopDemotionCounterPath(loop: ConfirmationLoopDescriptor): string {
+  return `${confirmationLoopSummaryPath(loop)}.one_proposed_demotions`;
+}
+
+function confirmationLoopAppliedDecisionPath(loop: ConfirmationLoopDescriptor): string {
+  return `${confirmationLoopSummaryPath(loop)}.last_applied_decision`;
+}
+
+function confirmationLoopInstructionPaths(loop: ConfirmationLoopDescriptor): string[] {
+  return Object.values(loop.decisions)
+    .map((decision) => decision.instruction_path)
+    .filter((path): path is string => typeof path === 'string' && path.length > 0);
 }
 
 function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
@@ -1015,6 +1354,7 @@ function renderHandlersSource(
     entryPath: string;
     flatMirrorStages: ReadonlySet<string>;
     collectionLifecycle?: CollectionLifecycleDescriptor;
+    confirmationLoops: ConfirmationLoopDescriptor[];
   },
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
@@ -1030,8 +1370,10 @@ function renderHandlersSource(
   const lifecycleTransitions = options.collectionLifecycle
     ? collectionLifecycleLlmTransitions(options.collectionLifecycle)
     : [];
+  const confirmationLoops = options.collectionLifecycle ? options.confirmationLoops : [];
   const usesIndexedCollectionLifecycle = options.includeReactionHandlers &&
     options.collectionLifecycle?.storage.representation === 'indexed_array';
+  const usesConfirmationLoopHandlers = options.includeReactionHandlers && confirmationLoops.length > 0;
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
@@ -1039,14 +1381,9 @@ function renderHandlersSource(
   const contractsImport = bodyActions.length > 0
     ? `import { createStageRuntime, normalizeStageOutput, resolveStageInput } from ${tsString(options.contractsImport)};`
     : '';
-  const sessionControlHandlers = [
-    'session_new',
-    'session_abort_current',
-    'session_status',
-    'session_history',
-    'session_resume',
-    'session_help',
-  ].map((action) => `  async ${action}(payload) {
+  const sessionControlHandlers = CONTROL_PLANE_ACTIONS
+    .filter((action) => action !== 'record_user_note')
+    .map((action) => `  async ${action}(payload) {
     return {
       kind: 'session_control',
       control: ${tsString(action)},
@@ -1114,11 +1451,14 @@ ${fieldResolvers}
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
     : '';
   const reactionImport = options.includeReactionHandlers
-    ? `ReactionHandler, ${stageOutputMirrorReactionEntries ? 'ReactionResult, ' : ''}`
+    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers ? 'ReactionResult, ' : ''}`
     : '';
-  const reactionMapConstructor = stageOutputMirrorReactionEntries ? 'new Map<string, ReactionHandler>' : 'new Map';
+  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
+    : '';
+  const confirmationReactionEntries = usesConfirmationLoopHandlers && options.collectionLifecycle
+    ? renderConfirmationLoopReactionEntries(confirmationLoops, options.collectionLifecycle)
     : '';
   const lifecycleIntentHelper = lifecycleTransitions.length > 0
     ? `
@@ -1134,8 +1474,11 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
   const lifecycleReactionHelper = options.includeReactionHandlers && options.collectionLifecycle
     ? `${renderCollectionLifecycleAllTerminalHelper(options.collectionLifecycle)}${lifecycleTransitions.length > 0 ? renderCollectionLifecycleApplyHelper(options.collectionLifecycle) : ''}`
     : '';
+  const confirmationReactionHelper = usesConfirmationLoopHandlers
+    ? renderConfirmationLoopReactionHelper()
+    : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -1180,7 +1523,7 @@ function reasoningOutputConformant(
     : '';
 
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
-${usesIndexedCollectionLifecycle ? "import { reconstructArray } from '@simodelne/pgas-server/plugin.js';\n" : ''}import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
+${usesIndexedCollectionLifecycle || usesConfirmationLoopHandlers ? "import { reconstructArray } from '@simodelne/pgas-server/plugin.js';\n" : ''}import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
 ${contractsImport}
 ${stageImports ? `${stageImports}\n` : ''}
 
@@ -1452,6 +1795,204 @@ function collectionLifecycleApplyEvent(
 }`;
 }
 
+function renderConfirmationLoopReactionEntries(
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle: CollectionLifecycleDescriptor,
+): string {
+  return loops.map((loop) => {
+    const decisions = Object.fromEntries(Object.entries(loop.decisions).map(([name, decision]) => [name, decision]));
+    return `,
+  [${tsString(confirmationLoopSaveReactionName(loop))}, (snapshot, trigger, mode) => {
+    void trigger;
+    if (mode !== ${tsString(loop.stage)}) return undefined;
+    return confirmationLoopSaveDecision(snapshot, ${tsString(confirmationLoopPendingPath(loop))});
+  }],
+  [${tsString(confirmationLoopEnforceReactionName(loop))}, (snapshot, trigger, mode) => {
+    void trigger;
+    if (mode !== ${tsString(loop.stage)}) return undefined;
+    return confirmationLoopEnforceStatus(
+      snapshot,
+      ${tsString(loop.collection)},
+      ${tsString(lifecycle.item.id_field)},
+      ${tsString(lifecycle.item.status_field)},
+      ${tsString(confirmationLoopInitialStatus(lifecycle))},
+      ${tsString(loop.proposed_status)},
+      ${tsString(confirmationLoopPendingPath(loop))},
+      ${tsString(confirmationLoopViolationPath(loop, lifecycle))},
+      ${tsString(confirmationLoopDemotionCounterPath(loop))},
+      ${tsString(confirmationLoopAppliedDecisionPath(loop))},
+      ${tsString(loop.aggregate.guard_field)},
+      [${loop.aggregate.terminal_statuses.map(tsString).join(', ')}],
+      ${JSON.stringify(decisions)},
+    );
+  }]`;
+  }).join('');
+}
+
+function renderConfirmationLoopReactionHelper(): string {
+  return `
+
+interface PendingConfirmationDecision {
+  decision: string;
+  instruction: string;
+  target_index: number;
+}
+
+function confirmationLoopSaveDecision(
+  snapshot: ReadonlyMap<string, unknown>,
+  pendingPath: string,
+): ReactionResult | undefined {
+  const rawDecision = snapshot.get('inputs.user_decision.decision');
+  const decision = typeof rawDecision === 'string' ? rawDecision.trim() : '';
+  if (decision.length === 0) {
+    return undefined;
+  }
+  const pending = {
+    decision,
+    instruction: typeof snapshot.get('inputs.user_decision.instruction') === 'string'
+      ? String(snapshot.get('inputs.user_decision.instruction'))
+      : '',
+    target_index: confirmationLoopTargetIndex(snapshot.get('inputs.user_decision.target_item_index')),
+    target_item_id: typeof snapshot.get('inputs.user_decision.target_item_id') === 'string' ? snapshot.get('inputs.user_decision.target_item_id') : '',
+    target_item_title: typeof snapshot.get('inputs.user_decision.target_item_title') === 'string' ? snapshot.get('inputs.user_decision.target_item_title') : '',
+    target_item_status: typeof snapshot.get('inputs.user_decision.target_item_status') === 'string' ? snapshot.get('inputs.user_decision.target_item_status') : '',
+    timestamp: typeof snapshot.get('inputs.user_decision.timestamp') === 'string' ? snapshot.get('inputs.user_decision.timestamp') : '',
+  };
+  return { mutations: [{ op: 'MSet' as const, path: pendingPath, value: JSON.stringify(pending) }] };
+}
+
+function confirmationLoopEnforceStatus(
+  snapshot: ReadonlyMap<string, unknown>,
+  itemsPath: string,
+  idField: string,
+  statusField: string,
+  initialStatus: string,
+  proposedStatus: string,
+  pendingPath: string,
+  violationPath: string,
+  demotionCounterPath: string,
+  appliedDecisionPath: string,
+  aggregateGuardPath: string,
+  terminalStatuses: readonly string[],
+  decisions: Record<string, { to: string; requires_instruction?: boolean; instruction_path?: string; re_propose?: boolean }>,
+): ReactionResult | undefined {
+  const mutations: ReactionResult['mutations'] = [];
+  let items: unknown[] = [];
+  let itemsAvailable = true;
+  try {
+    items = reconstructArray(Object.fromEntries(snapshot), itemsPath);
+  } catch {
+    itemsAvailable = false;
+  }
+
+  const pending = confirmationLoopPendingDecision(snapshot.get(pendingPath));
+  if (pending.kind === 'invalid') {
+    mutations.push({ op: 'MSet' as const, path: violationPath, value: JSON.stringify({ reason: 'invalid_pending_decision' }) });
+  } else if (pending.kind === 'present') {
+    const fingerprint = confirmationLoopPendingFingerprint(pending.value);
+    if (snapshot.get(appliedDecisionPath) === fingerprint) {
+      // Already applied; invariant enforcement below still runs.
+    } else if (!itemsAvailable) {
+      mutations.push(
+        { op: 'MSet' as const, path: violationPath, value: JSON.stringify({ reason: 'missing_collection' }) },
+        { op: 'MSet' as const, path: appliedDecisionPath, value: fingerprint },
+      );
+    } else {
+      const decision = decisions[pending.value.decision];
+      const item = Number.isInteger(pending.value.target_index) ? items[pending.value.target_index] : undefined;
+      if (!decision || !item || typeof item !== 'object' || Array.isArray(item)) {
+        mutations.push(
+          { op: 'MSet' as const, path: violationPath, value: JSON.stringify({ reason: decision ? 'missing_item' : 'unknown_decision', decision: pending.value.decision, target_index: pending.value.target_index }) },
+          { op: 'MSet' as const, path: appliedDecisionPath, value: fingerprint },
+        );
+      } else if (decision.requires_instruction === true && pending.value.instruction.trim().length === 0) {
+        mutations.push(
+          { op: 'MSet' as const, path: violationPath, value: JSON.stringify({ reason: 'missing_instruction', decision: pending.value.decision, target_index: pending.value.target_index }) },
+          { op: 'MSet' as const, path: appliedDecisionPath, value: fingerprint },
+        );
+      } else {
+        const record = item as Record<string, unknown>;
+        const nextStatus = decision.re_propose === true ? proposedStatus : decision.to;
+        record[statusField] = nextStatus;
+        mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + pending.value.target_index + '.' + statusField, value: nextStatus });
+        if (decision.instruction_path && pending.value.instruction.trim().length > 0) {
+          mutations.push({ op: 'MSet' as const, path: decision.instruction_path.replace(/\\.\\*(?=\\.|$)/u, '.' + pending.value.target_index), value: pending.value.instruction });
+        }
+        mutations.push({ op: 'MSet' as const, path: appliedDecisionPath, value: fingerprint });
+      }
+    }
+  }
+
+  const proposed = itemsAvailable
+    ? items.map((item, index) => ({ item, index })).filter(({ item }) =>
+        item && typeof item === 'object' && !Array.isArray(item) &&
+        (item as Record<string, unknown>)[statusField] === proposedStatus)
+    : [];
+  let demoted = 0;
+  for (const { item, index } of proposed.slice(1)) {
+    const record = item as Record<string, unknown>;
+    record[statusField] = initialStatus;
+    mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + index + '.' + statusField, value: initialStatus });
+    mutations.push({ op: 'MSet' as const, path: violationPath, value: JSON.stringify({ reason: 'multiple_proposed', kept_index: proposed[0]?.index ?? 0, demoted_index: index, demoted_id: typeof record[idField] === 'string' ? record[idField] : '' }) });
+    demoted += 1;
+  }
+  if (demoted > 0) {
+    const current = snapshot.get(demotionCounterPath);
+    mutations.push({ op: 'MSet' as const, path: demotionCounterPath, value: (typeof current === 'number' && Number.isFinite(current) ? current : 0) + demoted });
+  }
+  const terminal = new Set(terminalStatuses);
+  const allTerminal = itemsAvailable && items.length > 0 && items.every((item) =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
+    typeof (item as Record<string, unknown>)[statusField] === 'string' &&
+    terminal.has((item as Record<string, unknown>)[statusField] as string));
+  mutations.push({ op: 'MSet' as const, path: aggregateGuardPath, value: allTerminal });
+  return mutations.length > 0 ? { mutations } : undefined;
+}
+
+function confirmationLoopPendingDecision(value: unknown): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'present'; value: PendingConfirmationDecision } {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return { kind: 'empty' };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return { kind: 'invalid' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { kind: 'invalid' };
+  }
+  const record = parsed as Record<string, unknown>;
+  const decision = typeof record.decision === 'string' ? record.decision.trim() : '';
+  const targetIndex = confirmationLoopTargetIndex(record.target_index);
+  if (decision.length === 0 || targetIndex < 0) {
+    return { kind: 'invalid' };
+  }
+  return {
+    kind: 'present',
+    value: {
+      decision,
+      instruction: typeof record.instruction === 'string' ? record.instruction : '',
+      target_index: targetIndex,
+    },
+  };
+}
+
+function confirmationLoopPendingFingerprint(pending: PendingConfirmationDecision): string {
+  return JSON.stringify(pending);
+}
+
+function confirmationLoopTargetIndex(value: unknown): number {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\\d+$/u.test(value)) {
+    return Number.parseInt(value, 10);
+  }
+  return -1;
+}`;
+}
+
 function renderToolsSource(
   slug: string,
   transitionActions: TransitionAction[],
@@ -1703,7 +2244,11 @@ function renderSmokeTestSource(
   transitionActions: TransitionAction[],
   completion: Completion,
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
+  confirmationLoops: ConfirmationLoopDescriptor[] = [],
 ): string {
+  if (confirmationLoops.length > 0) {
+    return renderConfirmationLoopSmokeTestSource(slug, name, confirmationLoops);
+  }
   const pathActions = actionsForCompletionPath(transitionActions, completion.final_stage);
   const initialTrigger = smokeInitialTriggerExpression(stages, entryChannel);
   const hasContractResponses = pathActions.some((action) =>
@@ -1781,6 +2326,31 @@ ${hasContractResponses
     : `function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
 }`}
+`;
+}
+
+function renderConfirmationLoopSmokeTestSource(
+  slug: string,
+  name: string,
+  loops: ConfirmationLoopDescriptor[],
+): string {
+  const reactionNames = loops.flatMap((loop) => [
+    confirmationLoopSaveReactionName(loop),
+    confirmationLoopEnforceReactionName(loop),
+  ]);
+  return `import { describe, expect, it } from 'vitest';
+import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { reactionHandlers } from '../src/programs/${slug}/handlers.js';
+
+describe('generated confirmation-loop smoke', () => {
+  it('loads ${name} confirmation-loop topology without scripting suppressed transition actions', () => {
+    const entry = create${toPascalCase(slug)}ProgramEntry();
+    expect(entry).toBeTruthy();
+    for (const reaction of [${reactionNames.map(tsString).join(', ')}]) {
+      expect(reactionHandlers.has(reaction)).toBe(true);
+    }
+  });
+});
 `;
 }
 
@@ -1974,6 +2544,54 @@ export function createCollectionLifecycleApplyReaction(value: unknown): Reaction
   return (snapshot) => collectionLifecycleApplyEvent(snapshot, descriptor);
 }
 
+export function createConfirmationLoopSaveDecisionReaction(
+  value: unknown,
+  lifecycleValue: unknown,
+): ReactionHandler {
+  const loop = normalizeConfirmationLoopDescriptor(value, 0);
+  const lifecycle = normalizeCollectionLifecycleDescriptor(lifecycleValue);
+  if (!lifecycle) {
+    throw new Error('collection_lifecycle descriptor is required');
+  }
+  assertCollectionLifecycleDescriptor(lifecycle);
+  assertConfirmationLoopDescriptors([loop], lifecycle, [
+    { slug: 'intake', is_bootstrap: true },
+    { slug: loop.stage },
+    { slug: 'complete', is_terminal: true },
+  ]);
+  return (snapshot, trigger, mode) => {
+    void trigger;
+    if (mode !== loop.stage) {
+      return undefined;
+    }
+    return confirmationLoopSaveDecision(snapshot, loop);
+  };
+}
+
+export function createConfirmationLoopEnforceStatusReaction(
+  value: unknown,
+  lifecycleValue: unknown,
+): ReactionHandler {
+  const loop = normalizeConfirmationLoopDescriptor(value, 0);
+  const lifecycle = normalizeCollectionLifecycleDescriptor(lifecycleValue);
+  if (!lifecycle) {
+    throw new Error('collection_lifecycle descriptor is required');
+  }
+  assertCollectionLifecycleDescriptor(lifecycle);
+  assertConfirmationLoopDescriptors([loop], lifecycle, [
+    { slug: 'intake', is_bootstrap: true },
+    { slug: loop.stage },
+    { slug: 'complete', is_terminal: true },
+  ]);
+  return (snapshot, trigger, mode) => {
+    void trigger;
+    if (mode !== loop.stage) {
+      return undefined;
+    }
+    return confirmationLoopEnforceStatus(snapshot, loop, lifecycle);
+  };
+}
+
 function collectionLifecycleApplyEvent(
   snapshot: ReadonlyMap<string, unknown>,
   descriptor: CollectionLifecycleDescriptor,
@@ -2122,6 +2740,289 @@ function collectionLifecycleItems(
   return Array.isArray(parsed) ? parsed : undefined;
 }
 
+interface PendingConfirmationDecision {
+  decision: string;
+  instruction: string;
+  target_index: number;
+  target_item_id?: string;
+  target_item_title?: string;
+  target_item_status?: string;
+  timestamp?: string;
+}
+
+type ReactionMutations = NonNullable<ReactionResult['mutations']>;
+
+function confirmationLoopSaveDecision(
+  snapshot: ReadonlyMap<string, unknown>,
+  loop: ConfirmationLoopDescriptor,
+): ReactionResult | undefined {
+  const rawDecision = snapshot.get('inputs.user_decision.decision');
+  const decision = typeof rawDecision === 'string' ? rawDecision.trim() : '';
+  if (decision.length === 0) {
+    return undefined;
+  }
+  const targetIndex = normalizeTargetIndex(snapshot.get('inputs.user_decision.target_item_index'));
+  const instruction = typeof snapshot.get('inputs.user_decision.instruction') === 'string'
+    ? String(snapshot.get('inputs.user_decision.instruction'))
+    : '';
+  const pending: PendingConfirmationDecision = {
+    decision,
+    instruction,
+    target_index: targetIndex,
+    ...stringSnapshotField(snapshot, 'inputs.user_decision.target_item_id', 'target_item_id'),
+    ...stringSnapshotField(snapshot, 'inputs.user_decision.target_item_title', 'target_item_title'),
+    ...stringSnapshotField(snapshot, 'inputs.user_decision.target_item_status', 'target_item_status'),
+    ...stringSnapshotField(snapshot, 'inputs.user_decision.timestamp', 'timestamp'),
+  };
+  return {
+    mutations: [
+      { op: 'MSet' as const, path: confirmationLoopPendingPath(loop), value: JSON.stringify(pending) },
+    ],
+  };
+}
+
+function confirmationLoopEnforceStatus(
+  snapshot: ReadonlyMap<string, unknown>,
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): ReactionResult | undefined {
+  const mutations: ReactionMutations = [];
+  let items: unknown[] = [];
+  let itemsAvailable = true;
+  try {
+    items = reconstructArray(Object.fromEntries(snapshot), loop.collection);
+  } catch {
+    itemsAvailable = false;
+  }
+
+  const pending = confirmationLoopPendingDecision(snapshot.get(confirmationLoopPendingPath(loop)));
+  if (pending.kind === 'invalid') {
+    mutations.push(confirmationLoopViolationMutation(loop, lifecycle, { reason: 'invalid_pending_decision' }));
+  } else if (pending.kind === 'present') {
+    const fingerprint = confirmationLoopPendingFingerprint(pending.value);
+    if (snapshot.get(confirmationLoopAppliedDecisionPath(loop)) === fingerprint) {
+      // Already applied this recorded intent; still enforce invariants below.
+    } else if (!itemsAvailable) {
+      mutations.push(
+        confirmationLoopViolationMutation(loop, lifecycle, { reason: 'missing_collection' }),
+        { op: 'MSet' as const, path: confirmationLoopAppliedDecisionPath(loop), value: fingerprint },
+      );
+    } else {
+      applyConfirmationPendingDecision(mutations, items, snapshot, loop, lifecycle, pending.value);
+    }
+  }
+
+  if (itemsAvailable && loop.one_proposed_at_a_time) {
+    const demoted = enforceOneProposedAtATime(mutations, items, snapshot, loop, lifecycle);
+    if (demoted > 0) {
+      const current = snapshot.get(confirmationLoopDemotionCounterPath(loop));
+      const currentCount = typeof current === 'number' && Number.isFinite(current) ? current : 0;
+      mutations.push({
+        op: 'MSet' as const,
+        path: confirmationLoopDemotionCounterPath(loop),
+        value: currentCount + demoted,
+      });
+    }
+  }
+
+  const allTerminal = itemsAvailable
+    ? confirmationLoopAllTerminal(items, lifecycle.item.status_field, loop.aggregate.terminal_statuses)
+    : false;
+  mutations.push({ op: 'MSet' as const, path: loop.aggregate.guard_field, value: allTerminal });
+
+  return mutations.length > 0 ? { mutations } : undefined;
+}
+
+function applyConfirmationPendingDecision(
+  mutations: ReactionMutations,
+  items: unknown[],
+  snapshot: ReadonlyMap<string, unknown>,
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+  pending: PendingConfirmationDecision,
+): void {
+  const decision = loop.decisions[pending.decision];
+  const fingerprint = confirmationLoopPendingFingerprint(pending);
+  if (!decision) {
+    mutations.push(
+      confirmationLoopViolationMutation(loop, lifecycle, { reason: 'unknown_decision', decision: pending.decision }),
+      { op: 'MSet' as const, path: confirmationLoopAppliedDecisionPath(loop), value: fingerprint },
+    );
+    return;
+  }
+  const targetIndex = pending.target_index;
+  const item = Number.isInteger(targetIndex) ? items[targetIndex] : undefined;
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    mutations.push(
+      confirmationLoopViolationMutation(loop, lifecycle, { reason: 'missing_item', target_index: targetIndex }),
+      { op: 'MSet' as const, path: confirmationLoopAppliedDecisionPath(loop), value: fingerprint },
+    );
+    return;
+  }
+  if (decision.requires_instruction === true && pending.instruction.trim().length === 0) {
+    mutations.push(
+      confirmationLoopViolationMutation(loop, lifecycle, { reason: 'missing_instruction', decision: pending.decision, target_index: targetIndex }),
+      { op: 'MSet' as const, path: confirmationLoopAppliedDecisionPath(loop), value: fingerprint },
+    );
+    return;
+  }
+
+  const statusField = lifecycle.item.status_field;
+  const nextStatus = decision.re_propose === true ? loop.proposed_status : decision.to;
+  (item as Record<string, unknown>)[statusField] = nextStatus;
+  mutations.push({
+    op: 'MSet' as const,
+    path: `${loop.collection}.${targetIndex}.${statusField}`,
+    value: nextStatus,
+  });
+  if (decision.instruction_path && pending.instruction.trim().length > 0) {
+    const instructionPath = indexedPath(decision.instruction_path, targetIndex);
+    (item as Record<string, unknown>)[instructionPath.split('.').at(-1) ?? 'instruction'] = pending.instruction;
+    mutations.push({
+      op: 'MSet' as const,
+      path: instructionPath,
+      value: pending.instruction,
+    });
+  }
+  mutations.push({ op: 'MSet' as const, path: confirmationLoopAppliedDecisionPath(loop), value: fingerprint });
+  void snapshot;
+}
+
+function enforceOneProposedAtATime(
+  mutations: ReactionMutations,
+  items: unknown[],
+  snapshot: ReadonlyMap<string, unknown>,
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): number {
+  const statusField = lifecycle.item.status_field;
+  const initialStatus = confirmationLoopInitialStatus(lifecycle);
+  const proposedIndices = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) =>
+      item && typeof item === 'object' && !Array.isArray(item) &&
+      (item as Record<string, unknown>)[statusField] === loop.proposed_status);
+  if (proposedIndices.length <= 1) {
+    return 0;
+  }
+  let demoted = 0;
+  for (const { item, index } of proposedIndices.slice(1)) {
+    const record = item as Record<string, unknown>;
+    record[statusField] = initialStatus;
+    mutations.push({
+      op: 'MSet' as const,
+      path: `${loop.collection}.${index}.${statusField}`,
+      value: initialStatus,
+    });
+    mutations.push(confirmationLoopViolationMutation(loop, lifecycle, {
+      reason: 'multiple_proposed',
+      kept_index: proposedIndices[0]?.index ?? 0,
+      demoted_index: index,
+      demoted_id: typeof record[lifecycle.item.id_field] === 'string' ? record[lifecycle.item.id_field] : '',
+    }));
+    demoted += 1;
+  }
+  void snapshot;
+  return demoted;
+}
+
+function confirmationLoopPendingDecision(value: unknown): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'present'; value: PendingConfirmationDecision } {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return { kind: 'empty' };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    return { kind: 'invalid' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { kind: 'invalid' };
+  }
+  const record = parsed as Record<string, unknown>;
+  const decision = typeof record.decision === 'string' ? record.decision.trim() : '';
+  const targetIndex = normalizeTargetIndex(record.target_index);
+  if (decision.length === 0 || targetIndex < 0) {
+    return { kind: 'invalid' };
+  }
+  return {
+    kind: 'present',
+    value: {
+      decision,
+      instruction: typeof record.instruction === 'string' ? record.instruction : '',
+      target_index: targetIndex,
+      ...(typeof record.target_item_id === 'string' ? { target_item_id: record.target_item_id } : {}),
+      ...(typeof record.target_item_title === 'string' ? { target_item_title: record.target_item_title } : {}),
+      ...(typeof record.target_item_status === 'string' ? { target_item_status: record.target_item_status } : {}),
+      ...(typeof record.timestamp === 'string' ? { timestamp: record.timestamp } : {}),
+    },
+  };
+}
+
+function confirmationLoopPendingFingerprint(pending: PendingConfirmationDecision): string {
+  return pending.timestamp && pending.timestamp.length > 0
+    ? pending.timestamp
+    : JSON.stringify({
+        decision: pending.decision,
+        instruction: pending.instruction,
+        target_index: pending.target_index,
+      });
+}
+
+function confirmationLoopViolationMutation(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+  value: Record<string, unknown>,
+): ReactionMutations[number] {
+  return {
+    op: 'MSet' as const,
+    path: confirmationLoopViolationPath(loop, lifecycle),
+    value: JSON.stringify(value),
+  };
+}
+
+function confirmationLoopAllTerminal(
+  items: unknown[],
+  statusField: string,
+  terminalStatuses: readonly string[],
+): boolean {
+  if (items.length === 0) {
+    return false;
+  }
+  const terminal = new Set(terminalStatuses);
+  return items.every((item) =>
+    item && typeof item === 'object' && !Array.isArray(item) &&
+    typeof (item as Record<string, unknown>)[statusField] === 'string' &&
+    terminal.has((item as Record<string, unknown>)[statusField] as string));
+}
+
+function confirmationLoopInitialStatus(lifecycle: CollectionLifecycleDescriptor): string {
+  return lifecycle.statuses.find((status) => status.initial === true)?.name ?? '';
+}
+
+function indexedPath(path: string, index: number): string {
+  return path.replace(/\.\*(?=\.|$)/u, `.${index}`);
+}
+
+function normalizeTargetIndex(value: unknown): number {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\d+$/u.test(value)) {
+    return Number.parseInt(value, 10);
+  }
+  return -1;
+}
+
+function stringSnapshotField(
+  snapshot: ReadonlyMap<string, unknown>,
+  path: string,
+  key: Exclude<keyof PendingConfirmationDecision, 'target_index'>,
+): Partial<PendingConfirmationDecision> {
+  const value = snapshot.get(path);
+  return typeof value === 'string' ? { [key]: value } : {};
+}
+
 function promptForStage(
   modeName: string,
   programName: string,
@@ -2195,7 +3096,9 @@ function validateSynthesizedSpec(specYaml: string): void {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  assertPreconditionVocabularyAlignment(load(specYaml));
+  const parsed = load(specYaml);
+  assertPreconditionVocabularyAlignment(parsed);
+  assertConfirmationPairingTerminals(parsed);
 }
 
 /**
@@ -2468,6 +3371,98 @@ export function assertCollectionLifecycleDescriptor(descriptor: CollectionLifecy
   }
 }
 
+function normalizeInteractionDescriptor(value: unknown): Interaction | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const descriptor = requiredRecord(value, 'interaction');
+  const loopsRaw = descriptor.confirmation_loops;
+  if (loopsRaw === undefined) {
+    return undefined;
+  }
+  const confirmationLoops = requiredArray(loopsRaw, 'interaction.confirmation_loops')
+    .map((loop, index) => normalizeConfirmationLoopDescriptor(loop, index));
+  return { confirmation_loops: confirmationLoops };
+}
+
+function normalizeConfirmationLoopDescriptor(value: unknown, index: number): ConfirmationLoopDescriptor {
+  const descriptor = requiredRecord(value, `interaction.confirmation_loops[${index}]`);
+  const decisions = Object.fromEntries(
+    Object.entries(requiredRecord(descriptor.decisions, `interaction.confirmation_loops[${index}].decisions`))
+      .map(([decisionName, rawDecision]) => {
+        const decision = requiredRecord(rawDecision, `interaction.confirmation_loops[${index}].decisions.${decisionName}`);
+        return [requiredString(decisionName, `interaction.confirmation_loops[${index}].decisions key`), {
+          to: requiredString(decision.to, `interaction.confirmation_loops[${index}].decisions.${decisionName}.to`),
+          ...(decision.requires_instruction === true ? { requires_instruction: true } : {}),
+          ...optionalStringField(decision, 'instruction_path', `interaction.confirmation_loops[${index}].decisions.${decisionName}.instruction_path`),
+          ...(decision.re_propose === true ? { re_propose: true } : {}),
+        }];
+      }),
+  ) as Record<string, ConfirmationLoopDecisionDescriptor>;
+  const aggregate = requiredRecord(descriptor.aggregate, `interaction.confirmation_loops[${index}].aggregate`);
+  const stage = requiredString(descriptor.stage, `interaction.confirmation_loops[${index}].stage`);
+  return {
+    collection: requiredString(descriptor.collection, `interaction.confirmation_loops[${index}].collection`),
+    proposed_status: requiredString(descriptor.proposed_status, `interaction.confirmation_loops[${index}].proposed_status`),
+    ...optionalStringField(descriptor, 'item_id_field', `interaction.confirmation_loops[${index}].item_id_field`),
+    ...optionalStringField(descriptor, 'item_title_field', `interaction.confirmation_loops[${index}].item_title_field`),
+    decisions,
+    one_proposed_at_a_time: requiredTrue(descriptor.one_proposed_at_a_time, `interaction.confirmation_loops[${index}].one_proposed_at_a_time`),
+    aggregate: {
+      guard_field: requiredString(aggregate.guard_field, `interaction.confirmation_loops[${index}].aggregate.guard_field`),
+      terminal_statuses: requiredStringList(aggregate.terminal_statuses, `interaction.confirmation_loops[${index}].aggregate.terminal_statuses`),
+    },
+    stage,
+    ...optionalStringField(descriptor, 'summary_path', `interaction.confirmation_loops[${index}].summary_path`),
+    ...optionalStringField(descriptor, 'violation_path', `interaction.confirmation_loops[${index}].violation_path`),
+    ...optionalStringField(descriptor, 'pending_action_path', `interaction.confirmation_loops[${index}].pending_action_path`),
+  };
+}
+
+function assertConfirmationLoopDescriptors(
+  loops: ConfirmationLoopDescriptor[],
+  lifecycle: CollectionLifecycleDescriptor | undefined,
+  stages: Stage[],
+): void {
+  if (!lifecycle || lifecycle.storage.representation !== 'indexed_array') {
+    throw new Error('confirmation_loop collection must reference a collection_lifecycle with indexed_array storage');
+  }
+  const modeNames = new Set(stages.map((stage) => stage.slug));
+  const terminalModes = new Set(stages.filter((stage) => stage.is_terminal).map((stage) => stage.slug));
+  const statusByName = new Map(lifecycle.statuses.map((status) => [status.name, status]));
+  const initialStatuses = lifecycle.statuses.filter((status) => status.initial === true);
+  if (initialStatuses.length !== 1) {
+    throw new Error('confirmation_loop requires collection_lifecycle to declare exactly one initial status');
+  }
+  for (const loop of loops) {
+    if (loop.collection !== lifecycle.storage.items_path) {
+      throw new Error('confirmation_loop collection must reference a collection_lifecycle with indexed_array storage');
+    }
+    const proposed = statusByName.get(loop.proposed_status);
+    if (!proposed || proposed.terminal === true) {
+      throw new Error(`confirmation_loop proposed_status must be a declared non-terminal status; got ${loop.proposed_status}`);
+    }
+    if (Object.keys(loop.decisions).length === 0) {
+      throw new Error('confirmation_loop decisions must declare at least one decision');
+    }
+    for (const [decisionName, decision] of Object.entries(loop.decisions)) {
+      if (!statusByName.has(decision.to)) {
+        throw new Error(`confirmation_loop decision ${decisionName} must target a declared status; got ${decision.to}`);
+      }
+      if (decision.requires_instruction === true && !decision.instruction_path) {
+        throw new Error(`confirmation_loop decision ${decisionName} requires instruction_path when requires_instruction is true`);
+      }
+    }
+    const unknownTerminalStatuses = loop.aggregate.terminal_statuses.filter((status) => !statusByName.has(status));
+    if (unknownTerminalStatuses.length > 0) {
+      throw new Error(`confirmation_loop.aggregate.terminal_statuses must be a subset of statuses; unknown: ${unknownTerminalStatuses.join(', ')}`);
+    }
+    if (!modeNames.has(loop.stage) || terminalModes.has(loop.stage)) {
+      throw new Error(`confirmation_loop stage must reference a real non-terminal mode; got ${loop.stage}`);
+    }
+  }
+}
+
 function normalizeCollectionStorageRepresentation(value: unknown): CollectionStorageRepresentation {
   if (value === undefined) {
     return 'json_string';
@@ -2499,6 +3494,17 @@ function parseJsonDomainField<T>(domain: Record<string, unknown>, path: string):
     throw new Error(`missing JSON-string domain field: ${path}`);
   }
   return JSON.parse(value) as T;
+}
+
+function optionalJsonDomainField(domain: Record<string, unknown>, path: string): unknown {
+  const value = domainValue(domain, path);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`optional JSON-string domain field must be a string when present: ${path}`);
+  }
+  return JSON.parse(value) as unknown;
 }
 
 function requiredRecord(value: unknown, label: string): Record<string, unknown> {
@@ -2538,6 +3544,25 @@ function requiredBoolean(value: unknown, label: string): boolean {
     throw new Error(`${label} must be a boolean`);
   }
   return value;
+}
+
+function requiredTrue(value: unknown, label: string): true {
+  if (value !== true) {
+    throw new Error(`${label} must be true`);
+  }
+  return true;
+}
+
+function optionalStringField(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): Record<string, string> {
+  const value = record[key];
+  if (value === undefined) {
+    return {};
+  }
+  return { [key]: requiredString(value, label) };
 }
 
 function optionalStringProperty(

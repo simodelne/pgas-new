@@ -21,6 +21,29 @@ export interface SynthesisContext {
     guard_field?: string;
   }>;
   delegation: Record<string, unknown>;
+  interaction?: {
+    confirmation_loops: Array<{
+      collection: string;
+      proposed_status: string;
+      item_id_field?: string;
+      item_title_field?: string;
+      decisions: Record<string, {
+        to: string;
+        requires_instruction?: boolean;
+        instruction_path?: string;
+        re_propose?: boolean;
+      }>;
+      one_proposed_at_a_time: true;
+      aggregate: {
+        guard_field: string;
+        terminal_statuses: string[];
+      };
+      stage: string;
+      summary_path?: string;
+      violation_path?: string;
+      pending_action_path?: string;
+    }>;
+  };
   completion: {
     final_stage: string;
     guard_field: string;

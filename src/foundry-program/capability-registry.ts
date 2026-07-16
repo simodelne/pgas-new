@@ -57,10 +57,10 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'per_item_confirmation',
-    status: 'refuses',
-    evidence: 'no synthesis of per-item decision_targeting + confirmation_pairing + one-proposed-at-a-time reactions.',
-    since_version: '3.22.0',
-    gap_note: 'uplift PR-2 (collection representation v2) + PR-3 (confirmation-loop codegen). Engine DecisionTargetingConfig / ConfirmationPairingConfig are already public on 3.18.0.',
+    status: 'scaffolds_with_gap',
+    evidence: 'confirmation_loop descriptors synthesize decision_targeting + confirmation_pairing + reaction-owned per-item status enforcement on indexed_array collections; emission is unit-proven (generated enforce-reaction behavior: approve/revise/skip, one-proposed-at-a-time demotion + violation, aggregate flip) and engine-spec-valid (loadSpecWithPatterns).',
+    since_version: '3.23.0',
+    gap_note: 'uplift PR-4 (choreography live-drive v2): emission is NOT yet proven end-to-end by the live-drive hard gate with a real provider making per-item decisions. Per this registry\'s own bar (synthesizes = live-drive-proven, not mock-green), it stays scaffolds_with_gap until PR-4 boots a generated confirmation-loop program on the engine and asserts the decision table + one-proposed-at-a-time invariant live.',
   },
   {
     capability: 'delegation_child_session',

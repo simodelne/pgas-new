@@ -135,3 +135,63 @@ export async function runCompositeStaticChecks(
     payload as never,
   )) as CompositeEffectEnvelope;
 }
+
+/**
+ * Confirmation-pairing drift check for generated specs: when pairing protects
+ * a collection prefix, every action whose declarative mutations write under
+ * that prefix must be listed as a terminal. This catches future edits that add
+ * a collection write but forget to extend `confirmation_pairing.terminals`.
+ */
+export function assertConfirmationPairingTerminals(spec: unknown): void {
+  if (!isRecord(spec)) {
+    throw new Error('confirmation_pairing lint requires a parsed spec object');
+  }
+  const pairing = spec.confirmation_pairing;
+  if (pairing === undefined || pairing === null) {
+    return;
+  }
+  if (!isRecord(pairing)) {
+    throw new Error('confirmation_pairing must be a mapping');
+  }
+  const prefixes = stringArray(pairing.prefixes);
+  if (prefixes.length === 0) {
+    return;
+  }
+  const terminals = new Set(stringArray(pairing.terminals));
+  const actionMap = isRecord(spec.action_map) ? spec.action_map : {};
+
+  const missing: string[] = [];
+  for (const [actionName, action] of Object.entries(actionMap)) {
+    if (!isRecord(action)) {
+      continue;
+    }
+    const mutations = Array.isArray(action.mutations) ? action.mutations : [];
+    const writesProtectedPrefix = mutations.some((mutation) => {
+      if (!isRecord(mutation) || typeof mutation.path !== 'string') {
+        return false;
+      }
+      return prefixes.some((prefix) => pathWithinPrefix(mutation.path as string, prefix));
+    });
+    if (writesProtectedPrefix && !terminals.has(actionName)) {
+      missing.push(actionName);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `confirmation_pairing terminals missing prefix-writing action(s): ${missing.join(', ')}`,
+    );
+  }
+}
+
+function pathWithinPrefix(path: string, prefix: string): boolean {
+  return path === prefix || path.startsWith(`${prefix}.`);
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
