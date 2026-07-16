@@ -144,7 +144,9 @@ describe('generated live-drive choreography helpers', () => {
   it('keeps the no-script runner source byte-identical to the entry-channel-only baseline', () => {
     const source = renderLiveDriveRunnerSource('proposal-ops');
 
-    expect(hash(source)).toBe('ddededebbe54ba9710ca8609a4fe5e9591e4ba78e3879016fd4d75ca7b980404');
+    // Updated when runner crash-logging (console.error + unhandledRejection handler) was added
+    // uniformly to all runner variants for observability — see the upload live-drive silent-crash fix.
+    expect(hash(source)).toBe('7b49c1a611af5392f086d84154a2bfcb7cef6bc89c92e0747fcc44208110e2da');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');

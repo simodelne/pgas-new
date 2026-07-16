@@ -590,6 +590,10 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
   const workDir = join(options.targetDir, '.pgas-new-live-drive');
   rmSync(workDir, { recursive: true, force: true });
   mkdirSync(join(workDir, 'session-logs'), { recursive: true });
+  // The upload runner boots createPgasServer({ storage: { uploadsDir } }) at this path — the
+  // dir MUST exist or the server crashes at boot before the runner can log or write a report
+  // (observed: upload live-drive runner_exit=1 with empty output / no report).
+  mkdirSync(join(workDir, 'uploads'), { recursive: true });
   const runnerPath = join(workDir, 'runner.ts');
   const reportPath = join(workDir, 'report.json');
   const driveTimeoutMs = options.driveTimeoutMs ?? DEFAULT_DRIVE_TIMEOUT_MS;
@@ -866,8 +870,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
 main().catch((error: unknown) => {
-  writeReport({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
   process.exit(1);
 });
 `;
@@ -1194,8 +1206,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
 main().catch((error: unknown) => {
-  writeReport({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
   process.exit(1);
 });
 `;
@@ -1604,8 +1624,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
 main().catch((error: unknown) => {
-  writeReport({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
   process.exit(1);
 });
 `;
@@ -1931,8 +1959,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
 main().catch((error: unknown) => {
-  writeReport({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
   process.exit(1);
 });
 `;
