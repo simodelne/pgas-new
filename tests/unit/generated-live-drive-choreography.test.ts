@@ -10,6 +10,7 @@ import {
 const loopDescriptor = {
   collection: 'work_units.items',
   proposed_status: 'proposed',
+  seed: { source_stage: 'plan_work' },
   decisions: {
     approve: { to: 'accepted' },
     revise: {
