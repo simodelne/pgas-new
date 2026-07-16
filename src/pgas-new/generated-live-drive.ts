@@ -122,6 +122,7 @@ export interface GeneratedLiveDriveOptions {
   env?: Record<string, string | undefined>;
   confirmationScript?: GeneratedLiveDriveConfirmationScript;
   delegationScript?: GeneratedLiveDriveDelegationScript;
+  uploadScript?: GeneratedLiveDriveUploadScript;
 }
 
 export interface DriveTerminalAction {
@@ -152,6 +153,9 @@ export interface GeneratedLiveDriveResult {
   delegation: GeneratedLiveDriveDelegationReport | null;
   delegation_verdict: GeneratedLiveDriveDelegationVerdict;
   delegation_engaged: boolean;
+  upload: GeneratedLiveDriveUploadReport | null;
+  upload_verdict: GeneratedLiveDriveUploadVerdict;
+  upload_engaged: boolean;
   runner_exit_code: number | null;
   runner_output_excerpt: string;
   runner_error?: string;
@@ -191,6 +195,14 @@ export interface GeneratedLiveDriveDelegationScript {
   childProgram: string;
 }
 
+export interface GeneratedLiveDriveUploadScript {
+  resultPath: string;
+  sourceReadyPath: string;
+  stage: string;
+  sentinel: string;
+  expectedCharCount: number;
+}
+
 export interface GeneratedLiveDriveDelegationReport {
   child_program: string;
   result_status: string | null;
@@ -201,6 +213,18 @@ export interface GeneratedLiveDriveDelegationReport {
   degraded: boolean;
   degrade_reason: string;
   exported_fields: Record<string, unknown>;
+}
+
+export interface GeneratedLiveDriveUploadReport {
+  source_status: string | null;
+  char_count: number;
+  expected_char_count: number;
+  source_ready: boolean;
+  full_text_excerpt: string;
+  sentinel_present: boolean;
+  uploaded_file_id: string | null;
+  refs_landed: boolean;
+  upload_accepted: boolean;
 }
 
 export interface GeneratedLiveDriveStatusItem {
@@ -244,6 +268,20 @@ export interface GeneratedLiveDriveDelegationVerdict {
   notes: string[];
 }
 
+export interface GeneratedLiveDriveUploadVerdict {
+  upload_engaged: boolean;
+  upload_accepted: boolean;
+  refs_landed: boolean;
+  content_extracted: boolean;
+  sentinel_present: boolean;
+  extraction_exact: boolean;
+  source_ready: boolean;
+  parent_complete: boolean;
+  provider_hits_ok: boolean;
+  no_stub_markers: boolean;
+  notes: string[];
+}
+
 export interface GeneratedLiveDriveDelegationAssessmentInput {
   report: GeneratedLiveDriveDelegationReport | null;
   parentSessionId: string | null;
@@ -254,6 +292,25 @@ export interface GeneratedLiveDriveDelegationAssessmentInput {
   stubFindings?: readonly string[];
   /** the delegation host stage; its items_json is legitimately empty (it delegates, not produces items). */
   hostStage?: string;
+}
+
+export interface GeneratedLiveDriveUploadAssessmentInput {
+  report: GeneratedLiveDriveUploadReport | null;
+  finalMode: string | null;
+  expectedFinalMode?: string;
+  providerHits: number;
+  stubFindings?: readonly string[];
+  /** the upload host stage; its items_json may be legitimately empty when it only ingests source. */
+  hostStage?: string;
+}
+
+export function buildUploadLiveDriveFixtureText(sentinel: string): string {
+  return [
+    `PGAS upload live-drive fixture.`,
+    `Sentinel: ${sentinel}`,
+    'This ASCII source document exists only for the upload live-drive gate.',
+    'The generated program must read these exact bytes through request.documents content_text.',
+  ].join('\n');
 }
 
 export function deriveConfirmationScript(
@@ -443,6 +500,92 @@ export function assessDelegationEngagement(
   };
 }
 
+export function assessUploadEngagement(
+  input: GeneratedLiveDriveUploadAssessmentInput,
+): GeneratedLiveDriveUploadVerdict {
+  const notes: string[] = [];
+  const expectedFinalMode = input.expectedFinalMode ?? DEFAULT_FINAL_STAGE;
+  const report = input.report;
+
+  const uploadAccepted = report?.upload_accepted === true;
+  if (!report) {
+    notes.push('upload_result_absent');
+  } else if (!uploadAccepted) {
+    notes.push('upload_not_accepted');
+  }
+
+  const refsLanded = report?.refs_landed === true;
+  if (!refsLanded) {
+    notes.push('file_refs_not_landed');
+  }
+
+  const contentExtracted = report?.source_status === 'extracted';
+  if (!contentExtracted) {
+    notes.push(`source_status_not_extracted:${String(report?.source_status ?? null)}`);
+  }
+
+  const sentinelPresent = report?.sentinel_present === true;
+  if (!sentinelPresent) {
+    notes.push('sentinel_absent');
+  }
+
+  const actualCharCount = report?.char_count ?? 0;
+  const expectedCharCount = report?.expected_char_count ?? 0;
+  const extractionExact = Number.isFinite(actualCharCount) &&
+    Number.isFinite(expectedCharCount) &&
+    expectedCharCount > 0 &&
+    actualCharCount === expectedCharCount;
+  if (!extractionExact) {
+    notes.push(`char_count_mismatch:expected=${String(expectedCharCount)}:actual=${String(actualCharCount)}`);
+  }
+
+  const sourceReady = report?.source_ready === true;
+  if (!sourceReady) {
+    notes.push('source_ready_false');
+  }
+
+  const parentComplete = input.finalMode === expectedFinalMode;
+  if (!parentComplete) {
+    notes.push(`parent_not_complete:expected=${expectedFinalMode}:actual=${String(input.finalMode)}`);
+  }
+
+  const providerHitsOk = input.providerHits >= 1;
+  if (!providerHitsOk) {
+    notes.push('provider_hits_below_minimum');
+  }
+
+  const hostItemsPrefix = input.hostStage ? `${input.hostStage}.items_json` : null;
+  const stubFindings = (input.stubFindings ?? []).filter(
+    (finding) => hostItemsPrefix === null || !finding.startsWith(hostItemsPrefix),
+  );
+  const noStubMarkers = stubFindings.length === 0;
+  if (!noStubMarkers) {
+    notes.push(`stub_markers_present:${stubFindings.slice(0, 3).join(';')}`);
+  }
+
+  return {
+    upload_engaged: uploadAccepted &&
+      refsLanded &&
+      contentExtracted &&
+      sentinelPresent &&
+      extractionExact &&
+      sourceReady &&
+      parentComplete &&
+      providerHitsOk &&
+      noStubMarkers,
+    upload_accepted: uploadAccepted,
+    refs_landed: refsLanded,
+    content_extracted: contentExtracted,
+    sentinel_present: sentinelPresent,
+    extraction_exact: extractionExact,
+    source_ready: sourceReady,
+    parent_complete: parentComplete,
+    provider_hits_ok: providerHitsOk,
+    no_stub_markers: noStubMarkers,
+    notes,
+  };
+}
+
 export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptions): Promise<GeneratedLiveDriveResult> {
   const workDir = join(options.targetDir, '.pgas-new-live-drive');
   rmSync(workDir, { recursive: true, force: true });
@@ -453,7 +596,12 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
 
   const proxy = await startCountingProviderProxy(options.providerBaseUrl);
   try {
-    writeFileSync(runnerPath, renderLiveDriveRunnerSource(options.slug, options.confirmationScript, options.delegationScript));
+    writeFileSync(runnerPath, renderLiveDriveRunnerSource(
+      options.slug,
+      options.confirmationScript,
+      options.delegationScript,
+      options.uploadScript,
+    ));
 
     const runner = await runNodeScript(runnerPath, {
       cwd: options.targetDir,
@@ -483,6 +631,12 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
         ...(options.delegationScript
           ? { PGAS_LIVE_DRIVE_DELEGATION_SCRIPT: JSON.stringify(options.delegationScript) }
           : {}),
+        ...(options.uploadScript
+          ? {
+              PGAS_LIVE_DRIVE_UPLOAD_SCRIPT: JSON.stringify(options.uploadScript),
+              PGAS_LIVE_DRIVE_UPLOADS_DIR: join(workDir, 'uploads'),
+            }
+          : {}),
       },
     });
 
@@ -493,6 +647,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
     const world = isRecord(report?.world) ? report.world : {};
     const parentSessionId = typeof report?.session_id === 'string' ? report.session_id : null;
     const delegation = parseDelegationReport(report?.delegation);
+    const upload = parseUploadReport(report?.upload);
     const delegationVerdict = options.delegationScript
       ? assessDelegationEngagement({
           report: delegation,
@@ -508,6 +663,16 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
     const choreography = options.confirmationScript
       ? assessChoreography(statusHistory, options.confirmationScript, providerHits)
       : noConfirmationScriptChoreography(providerHits);
+    const uploadVerdict = options.uploadScript
+      ? assessUploadEngagement({
+          report: upload,
+          finalMode,
+          expectedFinalMode: options.finalStage ?? DEFAULT_FINAL_STAGE,
+          providerHits,
+          stubFindings: generatedStageOutputStubFindings(world),
+          hostStage: options.uploadScript.stage,
+        })
+      : noUploadScriptVerdict(providerHits);
     return {
       final_mode: finalMode,
       terminal: report?.terminal === true,
@@ -527,6 +692,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       delegation,
       delegation_verdict: delegationVerdict,
       delegation_engaged: delegationVerdict.delegation_engaged,
+      upload,
+      upload_verdict: uploadVerdict,
+      upload_engaged: uploadVerdict.upload_engaged,
       runner_exit_code: runner.exitCode,
       runner_output_excerpt: runner.output.slice(-4_000),
       ...(typeof report?.error === 'string' ? { runner_error: report.error } : {}),
@@ -550,7 +718,11 @@ export function renderLiveDriveRunnerSource(
   slug: string,
   confirmationScript?: GeneratedLiveDriveConfirmationScript,
   delegationScript?: GeneratedLiveDriveDelegationScript,
+  uploadScript?: GeneratedLiveDriveUploadScript,
 ): string {
+  if (uploadScript) {
+    return renderUploadLiveDriveRunnerSource(slug);
+  }
   if (delegationScript) {
     return renderDelegationLiveDriveRunnerSource(slug, delegationScript.childProgram);
   }
@@ -1029,6 +1201,416 @@ main().catch((error: unknown) => {
 `;
 }
 
+export function renderUploadLiveDriveRunnerSource(slug: string): string {
+  const pascal = toPascalCase(slug);
+  return `import { writeFileSync } from 'node:fs';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+
+const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
+const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
+const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
+const FINAL_STAGE = process.env.PGAS_LIVE_DRIVE_FINAL_STAGE ?? 'complete';
+const MAX_TRIGGERS = Number(process.env.PGAS_LIVE_DRIVE_MAX_TRIGGERS ?? '12');
+const DEADLINE = Date.now() + Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '540000');
+const UPLOADS_DIR = process.env.PGAS_LIVE_DRIVE_UPLOADS_DIR ?? '';
+const uploadScript = parseUploadScript(process.env.PGAS_LIVE_DRIVE_UPLOAD_SCRIPT ?? '');
+
+interface DriveState {
+  mode: string | null;
+  terminal: boolean;
+  roundCount: number;
+  world: Record<string, unknown>;
+  actions: string[];
+  terminalActions: Array<{ name: string; payload_excerpt: string }>;
+}
+
+interface UploadScript {
+  resultPath: string;
+  sourceReadyPath: string;
+  stage: string;
+  sentinel: string;
+  expectedCharCount: number;
+}
+
+interface UploadAttempt {
+  attempted: boolean;
+  uploadAccepted: boolean;
+  uploadedFileId: string | null;
+  fileRef: Record<string, unknown> | null;
+}
+
+async function main(): Promise<void> {
+  // Opt-in unified native-tools author driver: mirrors the rendered scaffold's
+  // src/server.ts gating. Default (PGAS_AUTHOR_DRIVER unset) boots the engine's
+  // legacy JSON author path exactly as before; the dynamic import keeps the
+  // default path byte-identical even against a scaffold without the module.
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
+  const server = await createPgasServer({
+    programs: [{ name: '${slug}', entry: create${pascal}ProgramEntry() }],
+    devMode: true,
+    ...(UPLOADS_DIR.length > 0 ? { storage: { uploadsDir: UPLOADS_DIR } } : {}),
+    ...(drivers ? { drivers } : {}),
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  const created = await client.sessions.create({
+    program: '${slug}',
+    domain_context: { query: INITIAL_TEXT },
+  });
+  const sessionId = created.sessionId;
+
+  let payloadText = INITIAL_TEXT;
+  let triggers = 0;
+  let upload = noUploadAttempt();
+  let state = await readState(client, sessionId);
+  while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
+    if (!upload.attempted && state.mode === uploadScript.stage) {
+      upload = await uploadFixture(client, sessionId, uploadScript);
+      if (upload.fileRef) {
+        const before = state.roundCount;
+        try {
+          await triggerWithDeadline(client, sessionId, {
+            channel: 'document_upload',
+            payload: { 'inputs.document_intake.file_refs': [upload.fileRef] },
+          });
+        } catch (error) {
+          if (/terminal/iu.test(String(error))) break;
+          throw error;
+        }
+        triggers += 1;
+        state = await waitForRoundOrUploadLanding(client, sessionId, before, upload.uploadedFileId);
+        continue;
+      }
+    }
+
+    const before = state.roundCount;
+    try {
+      await triggerWithDeadline(client, sessionId, { channel: ENTRY_CHANNEL, payload: payloadText });
+    } catch (error) {
+      if (/terminal/iu.test(String(error))) break;
+      if (isTriggerInFlightTimeout(error)) {
+        const latest = await safeReadState(client, sessionId, state);
+        writeDriveReport({
+          session_id: sessionId,
+          state: latest,
+          triggers,
+          drivers,
+          upload,
+          timeout_kind: 'trigger_in_flight',
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+        });
+        process.exit(1);
+      }
+      throw error;
+    }
+    triggers += 1;
+    payloadText = 'Continue to the next stage of the workflow.';
+    state = await waitForRound(client, sessionId, before);
+  }
+
+  state = await readState(client, sessionId);
+  writeDriveReport({ session_id: sessionId, state, triggers, drivers, upload });
+  process.exit(0);
+}
+
+async function uploadFixture(client: PgasClient, sessionId: string, script: UploadScript): Promise<UploadAttempt> {
+  const fixtureText = buildUploadFixtureText(script.sentinel);
+  const actualBytes = new TextEncoder().encode(fixtureText).length;
+  if (actualBytes !== script.expectedCharCount) {
+    throw new Error(\`upload fixture byte length mismatch: expected \${String(script.expectedCharCount)} actual \${String(actualBytes)}\`);
+  }
+  const form = new FormData();
+  form.append('files', new Blob([fixtureText], { type: 'text/plain' }), \`pgas-upload-live-drive-\${Date.now()}.txt\`);
+  const uploaded = await client.files.upload(sessionId, form);
+  const files = isRecord(uploaded) && Array.isArray(uploaded.files)
+    ? uploaded.files.filter(isRecord)
+    : [];
+  const fileRef = files[0] ?? null;
+  const fileId = fileRef ? stringValue(fileRef.fileId) : null;
+  return {
+    attempted: true,
+    uploadAccepted: fileId !== null,
+    uploadedFileId: fileId,
+    fileRef,
+  };
+}
+
+async function triggerWithDeadline(
+  client: PgasClient,
+  sessionId: string,
+  payload: { channel: string; payload: unknown },
+): Promise<void> {
+  const remaining = DEADLINE - Date.now();
+  if (remaining <= 0) {
+    throw new Error('trigger_in_flight_timeout: deadline reached before trigger');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.sessions.trigger(sessionId, payload),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('trigger_in_flight_timeout: trigger exceeded live-drive deadline')), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTriggerInFlightTimeout(error: unknown): boolean {
+  return /trigger_in_flight_timeout/u.test(error instanceof Error ? error.message : String(error));
+}
+
+async function waitForRound(client: PgasClient, sessionId: string, before: number): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function waitForRoundOrUploadLanding(
+  client: PgasClient,
+  sessionId: string,
+  before: number,
+  fileId: string | null,
+): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && !refsLanded(latest.world, fileId) && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function safeReadState(client: PgasClient, sessionId: string, fallback: DriveState): Promise<DriveState> {
+  try {
+    return await readState(client, sessionId);
+  } catch {
+    return fallback;
+  }
+}
+
+async function readState(client: PgasClient, sessionId: string): Promise<DriveState> {
+  const [envelope, worldResponse, roundsResponse] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+    client.sessions.rounds(sessionId),
+  ]);
+  const rounds = Array.isArray(roundsResponse.rounds) ? roundsResponse.rounds : [];
+  const status = typeof envelope.status === 'string' ? envelope.status : '';
+  const stateRecord = envelope.state as Record<string, unknown> | undefined;
+  const mode = firstString(envelope.mode, stateRecord?.mode);
+  const terminalActions = rounds.flatMap((round) => terminalActionOf(round));
+  return {
+    mode,
+    terminal: Boolean(stateRecord?.terminal ?? envelope.terminal) || status.toLowerCase() === 'completed',
+    roundCount: rounds.length,
+    world: worldResponse.domain as Record<string, unknown>,
+    actions: terminalActions.map((action) => action.name),
+    terminalActions,
+  };
+}
+
+function parseUploadScript(raw: string): UploadScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT is required for upload live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    sourceReadyPath: stringField(parsed, 'sourceReadyPath'),
+    stage: stringField(parsed, 'stage'),
+    sentinel: stringField(parsed, 'sentinel'),
+    expectedCharCount: numberField(parsed, 'expectedCharCount'),
+  };
+  if (!script.resultPath || !script.sourceReadyPath || !script.stage || !script.sentinel || script.expectedCharCount <= 0) {
+    throw new Error('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT is missing required resultPath/sourceReadyPath/stage/sentinel/expectedCharCount');
+  }
+  return script;
+}
+
+function writeDriveReport(input: {
+  session_id: string;
+  state: DriveState;
+  triggers: number;
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  upload: UploadAttempt;
+  timeout_kind?: string;
+  error?: string;
+}): void {
+  writeReport({
+    final_mode: input.state.mode,
+    terminal: input.state.terminal,
+    rounds: input.state.roundCount,
+    triggers: input.triggers,
+    actions: input.state.actions,
+    terminal_actions: input.state.terminalActions,
+    world: input.state.world,
+    session_id: input.session_id,
+    author_driver: input.drivers ? 'unified' : 'default',
+    upload: uploadReportFromWorld(input.state.world, uploadScript, input.upload),
+    ...(input.timeout_kind ? { timeout_kind: input.timeout_kind } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  });
+}
+
+function uploadReportFromWorld(world: Record<string, unknown>, script: UploadScript, upload: UploadAttempt): Record<string, unknown> {
+  const source = recordFromWorldPath(world, script.resultPath);
+  const fullText = typeof source.full_text === 'string' ? source.full_text : '';
+  return {
+    source_status: stringValue(source.status),
+    char_count: numberValue(source.char_count) ?? 0,
+    expected_char_count: script.expectedCharCount,
+    source_ready: valueAtWorldPath(world, script.sourceReadyPath) === true,
+    full_text_excerpt: fullText.slice(0, 4_000),
+    sentinel_present: fullText.includes(script.sentinel),
+    uploaded_file_id: upload.uploadedFileId,
+    refs_landed: refsLanded(world, upload.uploadedFileId),
+    upload_accepted: upload.uploadAccepted,
+  };
+}
+
+function refsLanded(world: Record<string, unknown>, fileId: string | null): boolean {
+  if (!fileId) {
+    return false;
+  }
+  if (valueAtWorldPath(world, 'inputs.document_intake.file_refs.0.fileId') === fileId) {
+    return true;
+  }
+  const directRefs = valueAtWorldPath(world, 'inputs.document_intake.file_refs');
+  if (Array.isArray(directRefs) && directRefs.some((ref) => isRecord(ref) && ref.fileId === fileId)) {
+    return true;
+  }
+  const root = valueAtWorldPath(world, 'inputs.document_intake');
+  return isRecord(root) &&
+    Array.isArray(root.file_refs) &&
+    root.file_refs.some((ref) => isRecord(ref) && ref.fileId === fileId);
+}
+
+function recordFromWorldPath(world: Record<string, unknown>, path: string): Record<string, unknown> {
+  const direct = valueAtWorldPath(world, path);
+  const record = isRecord(direct) ? { ...direct } : {};
+  const prefix = path + '.';
+  for (const [key, value] of Object.entries(world)) {
+    if (!key.startsWith(prefix)) continue;
+    const field = key.slice(prefix.length);
+    if (field.length > 0 && !field.includes('.')) {
+      record[field] = value;
+    }
+  }
+  return record;
+}
+
+function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(world, path)) {
+    return world[path];
+  }
+  let cursor: unknown = world;
+  for (const part of path.split('.')) {
+    if (!isRecord(cursor) || !Object.prototype.hasOwnProperty.call(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function buildUploadFixtureText(sentinel: string): string {
+  return [
+    \`PGAS upload live-drive fixture.\`,
+    \`Sentinel: \${sentinel}\`,
+    'This ASCII source document exists only for the upload live-drive gate.',
+    'The generated program must read these exact bytes through request.documents content_text.',
+  ].join('\\n');
+}
+
+function noUploadAttempt(): UploadAttempt {
+  return {
+    attempted: false,
+    uploadAccepted: false,
+    uploadedFileId: null,
+    fileRef: null,
+  };
+}
+
+function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
+  if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+  const result = (round as { result?: unknown }).result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+  const terminal = (result as { terminal?: unknown }).terminal;
+  if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+  const name = (terminal as { name?: unknown }).name;
+  if (typeof name !== 'string' || name.length === 0) return [];
+  const payload = (terminal as { payload?: unknown }).payload;
+  return [{ name, payload_excerpt: JSON.stringify(payload ?? null).slice(0, 4_000) }];
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function numberField(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function writeReport(report: Record<string, unknown>): void {
+  if (REPORT_PATH.length > 0) {
+    writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+main().catch((error: unknown) => {
+  writeReport({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+  process.exit(1);
+});
+`;
+}
+
 function renderConfirmationLiveDriveRunnerSource(slug: string): string {
   const pascal = toPascalCase(slug);
   return `import { writeFileSync } from 'node:fs';
@@ -1406,6 +1988,7 @@ interface DriveReport {
   author_driver?: unknown;
   status_history?: unknown;
   delegation?: unknown;
+  upload?: unknown;
   timeout_kind?: unknown;
   error?: unknown;
 }
@@ -1477,6 +2060,21 @@ function parseDelegationReport(value: unknown): GeneratedLiveDriveDelegationRepo
   };
 }
 
+function parseUploadReport(value: unknown): GeneratedLiveDriveUploadReport | null {
+  if (!isRecord(value)) return null;
+  return {
+    source_status: nullableString(value.source_status),
+    char_count: numberOrZero(value.char_count),
+    expected_char_count: numberOrZero(value.expected_char_count),
+    source_ready: value.source_ready === true,
+    full_text_excerpt: stringOrEmpty(value.full_text_excerpt),
+    sentinel_present: value.sentinel_present === true,
+    uploaded_file_id: nullableString(value.uploaded_file_id),
+    refs_landed: value.refs_landed === true,
+    upload_accepted: value.upload_accepted === true,
+  };
+}
+
 function noConfirmationScriptChoreography(providerHits: number): GeneratedLiveDriveChoreographyVerdict {
   return {
     decision_table_respected: true,
@@ -1502,6 +2100,22 @@ function noDelegationScriptVerdict(providerHits: number): GeneratedLiveDriveDele
     provider_hits_ok: providerHits >= 1,
     no_stub_markers: true,
     notes: providerHits >= 1 ? ['delegation_script_absent'] : ['delegation_script_absent', 'provider_hits_below_minimum'],
+  };
+}
+
+function noUploadScriptVerdict(providerHits: number): GeneratedLiveDriveUploadVerdict {
+  return {
+    upload_engaged: false,
+    upload_accepted: false,
+    refs_landed: false,
+    content_extracted: false,
+    sentinel_present: false,
+    extraction_exact: false,
+    source_ready: false,
+    parent_complete: false,
+    provider_hits_ok: providerHits >= 1,
+    no_stub_markers: true,
+    notes: providerHits >= 1 ? ['upload_script_absent'] : ['upload_script_absent', 'provider_hits_below_minimum'],
   };
 }
 
