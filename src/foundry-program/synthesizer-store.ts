@@ -25,6 +25,10 @@ export interface SynthesisContext {
     confirmation_loops: Array<{
       collection: string;
       proposed_status: string;
+      seed: {
+        source_stage: string;
+        id_prefix?: string;
+      };
       item_id_field?: string;
       item_title_field?: string;
       decisions: Record<string, {
