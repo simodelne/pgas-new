@@ -36,8 +36,8 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // provider (qwen36-27b: seed→propose→approve/request_revision/reject applied
     // per item, program reached complete, fail-closed gate green) — so synthesizes.
     expect(capabilityStatus('per_item_confirmation')).toBe('synthesizes');
+    expect(capabilityStatus('delegation_child_session')).toBe('scaffolds_with_gap');
     for (const cap of [
-      'delegation_child_session',
       'delegation_research_agent',
       'document_upload_intake',
       'rich_frontend',
@@ -140,6 +140,30 @@ describe('adversarial detection (Codex #167 review)', () => {
   it('flags a child-session delegation via structural fields (target_spec) [#3]', () => {
     expect(caps({ delegation: { ingest: { target_spec: 'document-ingest', payload_map: {} } } }))
       .toContain('delegation_child_session');
+  });
+
+  it('classifies synthesize_child.kind=worker as child-session, not research-agent', () => {
+    const result = caps({
+      delegation: {
+        children: [
+          {
+            id: 'worker',
+            stage: 'dispatch',
+            synthesize_child: {
+              kind: 'worker',
+              purpose: 'Handle delegated work.',
+              result_fields: { seeded_topic: 'string' },
+            },
+            payload_map: { 'request.topic': 'inputs.initial_user_text' },
+            result_path: 'dispatch.delegation.worker.result',
+            max_delegated_rounds: 12,
+            optional: true,
+          },
+        ],
+      },
+    });
+    expect(result).toContain('delegation_child_session');
+    expect(result).not.toContain('delegation_research_agent');
   });
 
   it('does NOT flag a linear summarizer that mentions "user" near the noun "decision" [re-review #1]', () => {

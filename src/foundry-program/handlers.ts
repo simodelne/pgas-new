@@ -642,6 +642,7 @@ export const handlers: Record<string, ToolHandler> = {
           manifest: parseWiringManifestDomainField(domain),
           stageSlugs: existingRepoStageSlugs(synthesized),
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedRegistrationTs: synthesized.registration_ts,
           synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
           synthesizedHandlersIndexTs: synthesized.handlers_index_ts,
@@ -653,12 +654,14 @@ export const handlers: Record<string, ToolHandler> = {
           ...program,
           outDir: targetDir,
           synthesizedSpecYaml: synthesized.spec_yaml,
+          synthesizedRegistrationTs: synthesized.registration_ts,
           synthesizedContractsTs: synthesized.contracts_ts,
           synthesizedHandlersTs: synthesized.handlers_ts,
           synthesizedHandlersIndexTs: synthesized.handlers_index_ts,
           synthesizedStageSources: stageSources,
           synthesizedToolsTs: synthesized.tools_ts,
           synthesizedSmokeTestTs: synthesized.smoke_test_ts,
+          synthesizedChildArtifacts: synthesized.child_artifacts,
         });
     assertAllPlannedArtifactsWritten(domain, result.written);
 

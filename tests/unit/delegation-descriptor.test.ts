@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { load } from 'js-yaml';
 import { CapabilityRefusalError } from '../../src/foundry-program/capability-registry.js';
 import {
   assertDelegationChildrenDescriptor,
   synthesizeProgramSpecFromDomain,
+  type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
 
 const stages = [
@@ -33,8 +35,8 @@ function validDelegation(): Record<string, unknown> {
           kind: 'research_agent',
           purpose: 'Research the intake topic and return concise findings.',
           result_fields: {
-            findings: 'string',
-            confidence: 'string',
+            summary: 'string',
+            seeded_topic: 'string',
           },
         },
         payload_map: {
@@ -61,6 +63,23 @@ function validChild(): Record<string, unknown> {
     throw new Error('test fixture missing child descriptor');
   }
   return child;
+}
+
+function validWorkerDelegation(): Record<string, unknown> {
+  const child = validChild();
+  return {
+    ...validDelegation(),
+    children: [
+      {
+        ...child,
+        synthesize_child: {
+          ...(child.synthesize_child as Record<string, unknown>),
+          kind: 'worker',
+          purpose: 'Handle delegated worker analysis and echo the seeded topic.',
+        },
+      },
+    ],
+  };
 }
 
 function expectValidationThrow(delegation: Record<string, unknown>, pattern: RegExp): void {
@@ -197,7 +216,94 @@ describe('delegation children descriptor synthesis gate', () => {
     'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'dispatch_research.ready' }),
   };
 
-  it('still refuses valid delegation children at the capability gate until emitters land', () => {
+  it('synthesizes worker delegation parent wiring and child artifacts', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      ...linearDomain,
+      'intake.delegation_json': JSON.stringify(validWorkerDelegation()),
+    });
+    const parsed = load(artifact.spec_yaml) as ParsedDelegationSpec;
+
+    expect(parsed.channels.research_call).toEqual({
+      direction: 'Out',
+      sync: 'Sync',
+      target_spec: 'research',
+      result_path: 'dispatch_research.delegation.research.result',
+      max_delegated_rounds: 12,
+      round_timeout_ms: 120000,
+      optional: true,
+    });
+    expect(parsed.action_map.request_research).toEqual({
+      channel: 'research_call',
+      result_path: 'dispatch_research.delegation.research.result',
+      mutations: [
+        { op: 'MSet', path: 'dispatch_research.delegation.research.requested', value: true },
+      ],
+      description: expect.stringContaining('research child program'),
+      arg_descriptions: {
+        request: 'Object with the request for the child (include a short topic/query string).',
+      },
+    });
+    expect(parsed.modes.dispatch_research.vocabulary).toContain('request_research');
+    expect(parsed.modes.dispatch_research.channels).toContain('research_call');
+    expect(parsed.modes.dispatch_research.preconditions.request_research).toEqual([
+      { kind: 'FieldFalsy', path: 'dispatch_research.delegation.research.requested' },
+    ]);
+    expect(parsed.modes.dispatch_research.preconditions.complete_dispatch_research).toEqual(
+      expect.arrayContaining([
+        { kind: 'FieldTruthy', path: 'dispatch_research.delegation.research.settled' },
+      ]),
+    );
+    expect(parsed.reactions.settle_research_delegation).toEqual({
+      event: 'AfterRound',
+      watch: [],
+      write_scope: [
+        'dispatch_research.delegation.research.settled',
+        'dispatch_research.delegation.research.degraded',
+        'dispatch_research.delegation.research.degrade_reason',
+      ],
+    });
+    expect(parsed.projection.dispatch_research.include).toEqual(expect.arrayContaining([
+      'dispatch_research.delegation.research.result',
+      'dispatch_research.delegation.research.result.status',
+      'dispatch_research.delegation.research.result.seeded_topic',
+      'dispatch_research.delegation.research.settled',
+      'dispatch_research.delegation.research.degraded',
+      'dispatch_research.delegation.research.degrade_reason',
+    ]));
+    expect(parsed.projection.complete.include).toEqual(expect.arrayContaining([
+      'dispatch_research.delegation.research.result',
+      'dispatch_research.delegation.research.result.seeded_topic',
+    ]));
+    expect(parsed.schema).toMatchObject({
+      'dispatch_research.delegation.research.result': 'object',
+      'dispatch_research.delegation.research.result.status': 'string',
+      'dispatch_research.delegation.research.result.sessionId': 'string',
+      'dispatch_research.delegation.research.result.rounds': 'number',
+      'dispatch_research.delegation.research.result.summary': 'string',
+      'dispatch_research.delegation.research.result.seeded_topic': 'string',
+      'dispatch_research.delegation.research.settled': 'boolean',
+      'dispatch_research.delegation.research.degraded': 'boolean',
+      'dispatch_research.delegation.research.degrade_reason': 'string',
+      'dispatch_research.delegation.research.requested': 'boolean',
+    });
+    expect(parsed.guidance.dispatch_research.join('\n')).not.toContain('delegation intake captured');
+    expect(parsed.guidance.dispatch_research.join('\n')).toContain('Call request_research exactly once');
+    expect(parsed.prompts.dispatch_research).toContain('Call request_research once with a request object');
+    expect(artifact.handlers_ts).toContain("['settle_research_delegation', (snapshot, trigger, mode) =>");
+    expect(artifact.handlers_ts).toContain('settleDelegationResult(');
+    expect(artifact.smoke_test_ts).toContain('generated delegation smoke');
+    expect(artifact.smoke_test_ts).toContain('createPgasServer');
+    expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
+
+    const childArtifacts = (artifact as SynthesizedSpec & { child_artifacts?: Array<SynthesizedSpec & { slug: string; name: string }> }).child_artifacts;
+    expect(childArtifacts).toHaveLength(1);
+    expect(childArtifacts?.[0]?.slug).toBe('research');
+    expect(childArtifacts?.[0]?.spec_yaml).toContain('inputs.request.topic');
+    expect(childArtifacts?.[0]?.spec_yaml).toContain('work.result.seeded_topic');
+    expect(childArtifacts?.[0]?.spec_yaml).toContain('from_state: inputs.request.topic');
+  });
+
+  it('continues to refuse research-agent child synthesis until PR-D5', () => {
     expect(() =>
       synthesizeProgramSpecFromDomain({
         ...linearDomain,
@@ -215,3 +321,24 @@ describe('delegation children descriptor synthesis gate', () => {
     ).not.toThrow();
   });
 });
+
+interface ParsedDelegationSpec {
+  channels: Record<string, Record<string, unknown>>;
+  modes: Record<string, {
+    channels: string[];
+    vocabulary: string[];
+    preconditions: Record<string, Array<Record<string, unknown>>>;
+  }>;
+  projection: Record<string, { include: string[]; exclude: string[] }>;
+  schema: Record<string, string>;
+  prompts: Record<string, string>;
+  guidance: Record<string, string[]>;
+  reactions: Record<string, { event: string; watch?: string[]; write_scope: string[] }>;
+  action_map: Record<string, {
+    channel?: string;
+    result_path?: string;
+    mutations?: Array<Record<string, unknown>>;
+    description?: string;
+    arg_descriptions?: Record<string, string>;
+  }>;
+}
