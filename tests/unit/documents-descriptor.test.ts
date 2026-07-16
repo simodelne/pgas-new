@@ -23,7 +23,7 @@ function validDocuments(patch: Record<string, unknown> = {}): Record<string, unk
     stage: 'ingest_source',
     upload_types: ['text/plain', 'text/markdown'],
     extraction: 'self_contained',
-    result_path: 'ingest_source.source',
+    target: { root: 'work.source' },
     required: true,
     fidelity_floor: { min_chars: 40 },
     ...patch,
@@ -64,10 +64,10 @@ function linearDomain(overrides: Record<string, unknown> = {}): Record<string, u
     ]),
     'intake.transitions_json': JSON.stringify([
       { from: 'intake', to: 'ingest_source', trigger: 'started', guard_field: 'intake.started' },
-      { from: 'ingest_source', to: 'complete', trigger: 'ingested', guard_field: 'ingest_source.ready' },
+      { from: 'ingest_source', to: 'complete', trigger: 'ingested', guard_field: 'work.source_ready' },
     ]),
     'intake.delegation_json': JSON.stringify({ enabled: false }),
-    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'ingest_source.ready' }),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'work.source_ready' }),
     ...overrides,
   };
 }
@@ -123,10 +123,10 @@ describe('documents descriptor validation', () => {
     ).not.toThrow();
   });
 
-  it('requires result_path to stay under the host stage namespace', () => {
+  it('rejects result paths under the engine-owned document intake namespace', () => {
     expectValidationThrow(
-      validDocuments({ result_path: 'work.source' }),
-      /result_path must be under ingest_source\./u,
+      validDocuments({ target: { root: 'inputs.document_intake.source' } }),
+      /result_path must not be under inputs\.document_intake/u,
     );
   });
 
@@ -141,7 +141,7 @@ describe('documents descriptor validation', () => {
 });
 
 describe('documents descriptor capability routing', () => {
-  it('detects documents_json as document_upload_intake while the registry still refuses it', () => {
+  it('detects documents_json as document_upload_intake while the registry scaffolds it with a live-drive gap', () => {
     const demands = detectRequestedCapabilities({
       documents: validDocuments(),
     });
@@ -149,7 +149,7 @@ describe('documents descriptor capability routing', () => {
       capability: 'document_upload_intake',
       evidence: 'intake.documents_json declares a documents upload descriptor',
     });
-    expect(capabilityStatus('document_upload_intake')).toBe('refuses');
+    expect(capabilityStatus('document_upload_intake')).toBe('scaffolds_with_gap');
   });
 
   it('keeps the existing upload/ingest text detector routed to document_upload_intake', () => {
@@ -159,18 +159,18 @@ describe('documents descriptor capability routing', () => {
     expect(demands.map((demand) => demand.capability)).toContain('document_upload_intake');
   });
 
-  it('validates documents_json before the current capability gate refuses synthesis', () => {
+  it('validates documents_json before synthesis proceeds', () => {
     expect(() =>
       synthesizeProgramSpecFromDomain(linearDomain({
         'intake.documents_json': JSON.stringify(validDocuments({ upload_types: ['image/png'] })),
       })),
     ).toThrow(/upload_types must be a subset of the engine upload allow-list/u);
 
-    expect(() =>
-      synthesizeProgramSpecFromDomain(linearDomain({
-        'intake.documents_json': JSON.stringify(validDocuments()),
-      })),
-    ).toThrow(CapabilityRefusalError);
+    const artifact = synthesizeProgramSpecFromDomain(linearDomain({
+      'intake.documents_json': JSON.stringify(validDocuments()),
+    }));
+    expect(artifact.spec_yaml).toContain('document_upload:');
+    expect(artifact.spec_yaml).toContain('ingest_documents:');
   });
 });
 
