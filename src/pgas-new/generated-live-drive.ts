@@ -252,6 +252,8 @@ export interface GeneratedLiveDriveDelegationAssessmentInput {
   providerHits: number;
   parentProviderHitMinimum?: number;
   stubFindings?: readonly string[];
+  /** the delegation host stage; its items_json is legitimately empty (it delegates, not produces items). */
+  hostStage?: string;
 }
 
 export function deriveConfirmationScript(
@@ -409,7 +411,14 @@ export function assessDelegationEngagement(
     notes.push(`provider_hits_below_parent_plus_child:min=${String(providerHitMinimum)}:actual=${String(input.providerHits)}`);
   }
 
-  const stubFindings = input.stubFindings ?? [];
+  // The delegation host stage delegates; it does not produce items, so its items_json is legitimately
+  // an empty array which the generic stub scan flags as a "default [] fallback" false positive (proven
+  // by the qwen delegation drive: every other criterion green, only no_stub_markers red on
+  // `<hostStage>.items_json: empty_array`). Exclude ONLY the host stage's items_json; every other stub still counts.
+  const hostItemsPrefix = input.hostStage ? `${input.hostStage}.items_json` : null;
+  const stubFindings = (input.stubFindings ?? []).filter(
+    (finding) => hostItemsPrefix === null || !finding.startsWith(hostItemsPrefix),
+  );
   const noStubMarkers = stubFindings.length === 0;
   if (!noStubMarkers) {
     notes.push(`stub_markers_present:${stubFindings.slice(0, 3).join(';')}`);
@@ -493,6 +502,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
           providerHits,
           parentProviderHitMinimum: 1,
           stubFindings: generatedStageOutputStubFindings(world),
+          hostStage: options.delegationScript.stage,
         })
       : noDelegationScriptVerdict(providerHits);
     const choreography = options.confirmationScript
