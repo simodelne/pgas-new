@@ -211,13 +211,15 @@ export function deriveConfirmationScript(
   lifecycle?: CollectionLifecycleForScript,
 ): GeneratedLiveDriveConfirmationScript {
   const decisionTable = Object.fromEntries(
-    Object.entries(descriptor.decisions).map(([decision, config]) => [decision, config.to]),
+    Object.entries(descriptor.decisions).map(([decision, config]) => [canonicalConfirmationDecision(decision), config.to]),
   );
-  const declaredDecisions = new Set(Object.keys(decisionTable));
+  const declaredDecisions = new Set(Object.keys(descriptor.decisions));
+  const runtimeDecisions = new Set(Object.keys(decisionTable));
   const decisions = cannedOrder.flatMap((entry) => {
     const decision = typeof entry === 'string' ? { decision: entry } : entry;
-    return declaredDecisions.has(decision.decision)
-      ? [{ decision: decision.decision, ...(decision.instruction ? { instruction: decision.instruction } : {}) }]
+    const canonicalDecision = canonicalConfirmationDecision(decision.decision);
+    return declaredDecisions.has(decision.decision) || runtimeDecisions.has(canonicalDecision)
+      ? [{ decision: canonicalDecision, ...(decision.instruction ? { instruction: decision.instruction } : {}) }]
       : [];
   });
   return {
@@ -232,6 +234,12 @@ export function deriveConfirmationScript(
     decisionTable,
     terminalStatuses: [...descriptor.aggregate.terminal_statuses],
   };
+}
+
+function canonicalConfirmationDecision(decision: string): string {
+  if (decision === 'revise') return 'request_revision';
+  if (decision === 'skip') return 'reject';
+  return decision;
 }
 
 export function assessChoreography(
@@ -629,9 +637,10 @@ async function main(): Promise<void> {
       }
       triggers += 1;
       state = await waitForRound(client, sessionId, before);
+      const recordedDecision = canonicalConfirmationDecision(decision.decision);
       recordStatusSnapshot(statusHistory, state, confirmationScript, {
         index: proposed.index,
-        decision: decision.decision,
+        decision: recordedDecision,
         ...(decision.instruction ? { instruction: decision.instruction } : {}),
       });
       continue;
@@ -800,25 +809,16 @@ function buildConfirmationPayload(
   decision: { decision: string; instruction?: string },
 ): Record<string, unknown> {
   void script;
-  const envelope = {
-    decision: decision.decision,
-    instruction: decision.instruction ?? '',
-    timestamp: new Date().toISOString(),
-    target_item_index: target.index,
-    target_item_id: target.id ?? '',
-    target_item_title: target.title ?? '',
-    target_item_status: target.status ?? '',
-  };
-  return {
-    'inputs.user_decision': envelope,
-    'inputs.user_decision.decision': envelope.decision,
-    'inputs.user_decision.instruction': envelope.instruction,
-    'inputs.user_decision.timestamp': envelope.timestamp,
-    'inputs.user_decision.target_item_index': envelope.target_item_index,
-    'inputs.user_decision.target_item_id': envelope.target_item_id,
-    'inputs.user_decision.target_item_title': envelope.target_item_title,
-    'inputs.user_decision.target_item_status': envelope.target_item_status,
-  };
+  void target;
+  const canonicalDecision = canonicalConfirmationDecision(decision.decision);
+  const instruction = decision.instruction ?? '';
+  return { decision: canonicalDecision, ...(instruction.length > 0 ? { instruction } : {}) };
+}
+
+function canonicalConfirmationDecision(decision: string): string {
+  if (decision === 'revise') return 'request_revision';
+  if (decision === 'skip') return 'reject';
+  return decision;
 }
 
 function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {

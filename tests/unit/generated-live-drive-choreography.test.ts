@@ -36,7 +36,6 @@ const script = deriveConfirmationScript(loopDescriptor, [
   { decision: 'approve' },
   { decision: 'revise', instruction: 'Tighten the item before proposing it again.' },
   { decision: 'skip' },
-  { decision: 'reject' },
 ]);
 
 describe('generated live-drive choreography helpers', () => {
@@ -51,13 +50,13 @@ describe('generated live-drive choreography helpers', () => {
       fallbackDecision: 'approve',
       decisions: [
         { decision: 'approve' },
-        { decision: 'revise', instruction: 'Tighten the item before proposing it again.' },
-        { decision: 'skip' },
+        { decision: 'request_revision', instruction: 'Tighten the item before proposing it again.' },
+        { decision: 'reject' },
       ],
       decisionTable: {
         approve: 'accepted',
-        revise: 'proposed',
-        skip: 'skipped',
+        request_revision: 'proposed',
+        reject: 'skipped',
       },
       terminalStatuses: ['accepted', 'skipped'],
     });
@@ -69,7 +68,7 @@ describe('generated live-drive choreography helpers', () => {
       history(1, ['proposed', 'pending']),
       history(2, ['accepted', 'pending'], { index: 0, decision: 'approve' }),
       history(3, ['accepted', 'proposed']),
-      history(4, ['accepted', 'skipped'], { index: 1, decision: 'skip' }),
+      history(4, ['accepted', 'skipped'], { index: 1, decision: 'reject' }),
     ], script, 2);
 
     expect(verdict).toEqual({
@@ -131,6 +130,11 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).toContain('status_history');
     expect(source).toContain('confirmationScript.fallbackDecision');
     expect(source).toContain('const fallbackDecision = { decision: confirmationScript.fallbackDecision };');
+    expect(source).toContain("if (decision === 'revise') return 'request_revision';");
+    expect(source).toContain("if (decision === 'skip') return 'reject';");
+    expect(source).toContain('return { decision: canonicalDecision');
+    expect(source).not.toContain("'inputs.user_decision'");
+    expect(source).not.toContain('target_item_index');
   });
 
   it('keeps the no-script runner source byte-identical to the entry-channel-only baseline', () => {

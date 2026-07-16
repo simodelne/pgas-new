@@ -151,11 +151,13 @@ describe('confirmation_loop descriptor synthesis', () => {
       'inputs.user_decision.target_item_title',
       'inputs.user_decision.target_item_status',
     ]);
-    expect(parsed.confirmation_pairing).toEqual({
+    const pairing = parsed.confirmation_pairing;
+    expect(pairing).toEqual({
       prefixes: ['work_units.items'],
       policy: 'reject',
-      terminals: expect.arrayContaining(['propose_item', 'approve_item', 'revise_item', 'skip_item']),
+      terminals: expect.arrayContaining(['propose_item', 'approve_item', 'request_revision_item', 'reject_item']),
     });
+    expect(pairing?.terminals).not.toEqual(expect.arrayContaining(['revise_item', 'skip_item']));
     expect(parsed.action_map.propose_item.awaits_user_decision).toEqual({
       channel: 'user_confirmation',
       intent: 'present_for_approval',
@@ -234,6 +236,8 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(artifact.handlers_ts).toContain("['save_review_work_decision', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain("['enforce_review_work_status', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain("['choreograph_review_work_collection', (snapshot, trigger, mode) =>");
+    expect(artifact.handlers_ts).toContain('"request_revision"');
+    expect(artifact.handlers_ts).toContain('"reject"');
     expect(artifact.handlers_ts).toContain('reconstructArray(Object.fromEntries(snapshot), itemsPath)');
     expect(artifact.smoke_test_ts).toContain('runs the confirmation loop choreography hermetically');
     expect(artifact.smoke_test_ts).toContain("title: 'Verify Pre-Launch System Health Checks'");
@@ -250,7 +254,7 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(() => assertConfirmationPairingTerminals(parsed)).not.toThrow();
   });
 
-  it('records user decisions and enforces approve, revise, skip, demotion, and aggregate status', () => {
+  it('records user decisions and enforces approve, request_revision, reject, demotion, and aggregate status', () => {
     const save = createConfirmationLoopSaveDecisionReaction(confirmationLoop, indexedLifecycle);
     const enforce = createConfirmationLoopEnforceStatusReaction(confirmationLoop, indexedLifecycle);
 
@@ -265,14 +269,14 @@ describe('confirmation_loop descriptor synthesis', () => {
     const revised = runEnforce(enforce, [
       { id: 'wu-1', title: 'One', status: 'proposed' },
       { id: 'wu-2', title: 'Two', status: 'pending' },
-    ], savedPending(save, 'revise', 0, 'Tighten the summary.'));
+    ], savedPending(save, 'request_revision', 0, 'Tighten the summary.'));
     expect(revised.valueAt('work_units.items.0.status')).toBe('proposed');
     expect(revised.valueAt('work_units.items.0.user_instruction')).toBe('Tighten the summary.');
 
     const skipped = runEnforce(enforce, [
       { id: 'wu-1', title: 'One', status: 'proposed' },
       { id: 'wu-2', title: 'Two', status: 'accepted' },
-    ], savedPending(save, 'skip', 0));
+    ], savedPending(save, 'reject', 0));
     expect(skipped.valueAt('work_units.items.0.status')).toBe('skipped');
     expect(skipped.valueAt('work_units.all_terminal')).toBe(true);
 
@@ -509,7 +513,7 @@ describe('confirmation_loop descriptor synthesis', () => {
     drifted.confirmation_pairing = {
       prefixes: ['work_units.items'],
       policy: 'reject',
-      terminals: ['propose_item', 'approve_item', 'revise_item', 'skip_item'],
+      terminals: ['propose_item', 'approve_item', 'request_revision_item', 'reject_item'],
     };
 
     expect(() => assertConfirmationPairingTerminals(drifted)).toThrow(/write_item_directly/u);

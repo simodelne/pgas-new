@@ -1128,13 +1128,31 @@ function confirmationLoopDecisionActionNames(
   total: number,
 ): string[] {
   void index;
-  return Object.keys(loop.decisions).map((decision) =>
-    total === 1 ? `${safeIdentifier(decision)}_item` : `${safeIdentifier(decision)}_${safeIdentifier(loop.stage)}_item`,
+  return Object.keys(loop.decisions).map((decision) => {
+    const runtimeDecision = confirmationLoopRuntimeDecisionName(decision);
+    return total === 1
+      ? `${safeIdentifier(runtimeDecision)}_item`
+      : `${safeIdentifier(runtimeDecision)}_${safeIdentifier(loop.stage)}_item`;
+  },
   );
 }
 
 function confirmationLoopPendingPath(loop: ConfirmationLoopDescriptor): string {
   return loop.pending_action_path ?? `decisions.pending_${safeIdentifier(loop.stage)}_action`;
+}
+
+function confirmationLoopRuntimeDecisionName(decision: string): string {
+  if (decision === 'revise') return 'request_revision';
+  if (decision === 'skip') return 'reject';
+  return decision;
+}
+
+function confirmationLoopRuntimeDecisions(
+  decisions: Record<string, ConfirmationLoopDecisionDescriptor>,
+): Record<string, ConfirmationLoopDecisionDescriptor> {
+  return Object.fromEntries(
+    Object.entries(decisions).map(([decision, config]) => [confirmationLoopRuntimeDecisionName(decision), config]),
+  );
 }
 
 function confirmationLoopSummaryPath(loop: ConfirmationLoopDescriptor): string {
@@ -1943,7 +1961,7 @@ function renderConfirmationLoopReactionEntries(
   lifecycle: CollectionLifecycleDescriptor,
 ): string {
   return loops.map((loop) => {
-    const decisions = Object.fromEntries(Object.entries(loop.decisions).map(([name, decision]) => [name, decision]));
+    const decisions = confirmationLoopRuntimeDecisions(loop.decisions);
     return `,
   [${tsString(confirmationLoopSaveReactionName(loop))}, (snapshot, trigger, mode) => {
     void trigger;
@@ -2036,13 +2054,7 @@ function confirmationLoopNormalizeDecision(
   if (Object.prototype.hasOwnProperty.call(decisions, decision)) {
     return decision;
   }
-  if (decision === 'request_revision' && Object.prototype.hasOwnProperty.call(decisions, 'revise')) {
-    return 'revise';
-  }
-  if (decision === 'reject' && Object.prototype.hasOwnProperty.call(decisions, 'skip')) {
-    return 'skip';
-  }
-  return decision;
+  return '';
 }
 
 function confirmationLoopEnforceStatus(
@@ -2747,53 +2759,78 @@ function renderConfirmationLoopSmokeTestSource(
     confirmationLoopChoreographReactionName(loop),
   ]);
   return `import { describe, expect, it } from 'vitest';
-import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
 import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
 import { reactionHandlers } from '../src/programs/${slug}/handlers.js';
 
 describe('generated confirmation-loop smoke', () => {
-  it('runs the confirmation loop choreography hermetically for ${name}', async () => {
+  it('runs the confirmation loop choreography hermetically through the route for ${name}', async () => {
     const entry = create${toPascalCase(slug)}ProgramEntry();
     expect(entry).toBeTruthy();
     for (const reaction of [${reactionNames.map(tsString).join(', ')}]) {
       expect(reactionHandlers.has(reaction)).toBe(true);
     }
 
-    const harness = await createTestHarness(entry, {
-      programName: ${tsString(slug)},
-      defaultChannel: ${tsString(entryChannel)},
-      authorResponses: [
-        effect('begin_work', {}),
-        effect(${tsString(`complete_${safeIdentifier(loop.seed.source_stage)}`)}, {
-          result_json: JSON.stringify({ planned: true }),
-          items_json: JSON.stringify([
-            {
-              id: 'wu-1',
-              title: 'Verify Pre-Launch System Health Checks',
-              description: 'Confirm critical services are healthy before launch.',
-              status: 'pending_review',
-            },
-            {
-              id: 'wu-2',
-              title: 'Validate Deployment Rollback Procedures',
-              description: 'Check rollback commands and ownership before release.',
-            },
-          ]),
-        }, 'widget_output'),
-        effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
-          ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString(field === 'proposed_text' ? 'First proposal' : 'First proposal')},`).join('\n          ')}
-        }),
-        effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
-          ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString(field === 'proposed_text' ? 'Second proposal' : 'Second proposal')},`).join('\n          ')}
-        }),
-        effect('record_user_note', { note: 'All confirmation-loop items resolved.' }),
-      ],
+    const server = await createPgasServer({
+      programs: [{ name: ${tsString(slug)}, entry }],
+      drivers: {
+        authorHandle: scriptedAuthor([
+          effect('begin_work', {}),
+          effect(${tsString(`complete_${safeIdentifier(loop.seed.source_stage)}`)}, {
+            result_json: JSON.stringify({ planned: true }),
+            items_json: JSON.stringify([
+              {
+                id: 'wu-1',
+                title: 'Verify Pre-Launch System Health Checks',
+                description: 'Confirm critical services are healthy before launch.',
+                status: 'pending_review',
+              },
+              {
+                id: 'wu-2',
+                title: 'Validate Deployment Rollback Procedures',
+                description: 'Check rollback commands and ownership before release.',
+              },
+              {
+                id: 'wu-3',
+                title: 'Confirm Launch Communications Owner',
+                description: 'Confirm the launch communication owner before release.',
+              },
+            ]),
+          }, 'widget_output'),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('First proposal')},`).join('\n            ')}
+          }),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Second proposal')},`).join('\n            ')}
+          }),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Second proposal revised')},`).join('\n            ')}
+          }),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Third proposal')},`).join('\n            ')}
+          }),
+          effect('record_user_note', { note: 'All confirmation-loop items resolved.' }),
+        ]),
+        observerHandle: {
+          modelId: 'generated-confirmation-loop-smoke-observer',
+          async complete() {
+            return 'noop';
+          },
+        },
+      },
+      devMode: true,
+      telemetry: { enabled: false },
+      port: 0,
     });
+    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
 
     try {
-      await harness.trigger('start generated confirmation-loop smoke');
-      await harness.trigger('plan generated confirmation-loop items');
-      let snapshot = await harness.snapshot();
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'start generated confirmation-loop smoke' });
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'plan generated confirmation-loop items' });
+      let snapshot = await readSnapshot(client, sessionId);
       expect(snapshot.mode).toBe(${tsString(loop.stage)});
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${loop.item_id_field ?? lifecycle.item.id_field}`)}]).toBe('wu-1');
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${loop.item_title_field ?? 'title'}`)}]).toBe('Verify Pre-Launch System Health Checks');
@@ -2801,30 +2838,90 @@ describe('generated confirmation-loop smoke', () => {
       expect(snapshot.domain[${tsString(`${loop.collection}.1.${loop.item_id_field ?? lifecycle.item.id_field}`)}]).toBe('wu-2');
       expect(snapshot.domain[${tsString(`${loop.collection}.1.${loop.item_title_field ?? 'title'}`)}]).toBe('Validate Deployment Rollback Procedures');
       expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe(${tsString(confirmationLoopInitialStatus(lifecycle))});
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${loop.item_id_field ?? lifecycle.item.id_field}`)}]).toBe('wu-3');
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${loop.item_title_field ?? 'title'}`)}]).toBe('Confirm Launch Communications Owner');
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${lifecycle.item.status_field}`)}]).toBe(${tsString(confirmationLoopInitialStatus(lifecycle))});
 
-      await harness.trigger('propose first generated item');
-      snapshot = await harness.snapshot();
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'propose first generated item' });
+      snapshot = await readSnapshot(client, sessionId);
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
       expect(snapshot.domain[${tsString(`${loop.collection}.0.proposed_text`)}]).toBe('First proposal');
 
-      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve', instruction: '', timestamp: '2026-07-16T00:00:00.000Z' } });
-      snapshot = await harness.snapshot();
+      await client.sessions.trigger(sessionId, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      snapshot = await readSnapshot(client, sessionId);
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${lifecycle.item.status_field}`)}]).toBe('accepted');
       expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
       expect(snapshot.domain[${tsString(`${loop.collection}.1.proposed_text`)}]).toBe('Second proposal');
 
-      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'reject', instruction: '', timestamp: '2026-07-16T00:00:01.000Z' } });
-      snapshot = await harness.snapshot();
-      expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe('skipped');
+      await client.sessions.trigger(sessionId, {
+        channel: 'user_confirmation',
+        payload: { decision: 'request_revision', instruction: 'Tighten the proposed wording before asking again.' },
+      });
+      snapshot = await readSnapshot(client, sessionId);
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.user_instruction`)}]).toBe('Tighten the proposed wording before asking again.');
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.proposed_text`)}]).toBe('Second proposal revised');
+
+      await client.sessions.trigger(sessionId, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      snapshot = await readSnapshot(client, sessionId);
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe('accepted');
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.proposed_text`)}]).toBe('Third proposal');
+
+      await client.sessions.trigger(sessionId, { channel: 'user_confirmation', payload: { decision: 'reject' } });
+      snapshot = await readSnapshot(client, sessionId);
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${lifecycle.item.status_field}`)}]).toBe('skipped');
       expect(snapshot.domain[${tsString(loop.aggregate.guard_field)}]).toBe(true);
       expect(snapshot.mode).toBe('complete');
     } finally {
-      await harness.close();
+      await server.close();
     }
   });
 });
 
-function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output'): TestHarnessAuthorResponse {
+interface SmokeSnapshot {
+  mode: string | null;
+  terminal: boolean;
+  domain: Record<string, unknown>;
+}
+
+type ScriptedAuthorResponse = ReturnType<typeof effect>;
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<SmokeSnapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    terminal: Boolean(state?.terminal ?? envelope.terminal),
+    domain: world.domain as Record<string, unknown>,
+  };
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-confirmation-loop-smoke-author',
+    async complete() {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated confirmation-loop smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      return JSON.stringify(response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
   return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
 }
 `;
@@ -3273,7 +3370,7 @@ function confirmationLoopSaveDecision(
 ): ReactionResult | undefined {
   const rawDecision = snapshot.get('inputs.user_decision.decision');
   const normalizedDecision = typeof rawDecision === 'string' ? rawDecision.trim() : '';
-  const decision = confirmationLoopNormalizeDecision(normalizedDecision, loop.decisions);
+  const decision = confirmationLoopNormalizeDecision(normalizedDecision, confirmationLoopRuntimeDecisions(loop.decisions));
   if (decision.length === 0) {
     return undefined;
   }
@@ -3304,13 +3401,7 @@ function confirmationLoopNormalizeDecision(
   if (Object.prototype.hasOwnProperty.call(decisions, decision)) {
     return decision;
   }
-  if (decision === 'request_revision' && Object.prototype.hasOwnProperty.call(decisions, 'revise')) {
-    return 'revise';
-  }
-  if (decision === 'reject' && Object.prototype.hasOwnProperty.call(decisions, 'skip')) {
-    return 'skip';
-  }
-  return decision;
+  return '';
 }
 
 function confirmationLoopEnforceStatus(
@@ -3563,7 +3654,7 @@ function applyConfirmationPendingDecision(
   lifecycle: CollectionLifecycleDescriptor,
   pending: PendingConfirmationDecision,
 ): void {
-  const decision = loop.decisions[pending.decision];
+  const decision = confirmationLoopRuntimeDecisions(loop.decisions)[pending.decision];
   const fingerprint = confirmationLoopPendingFingerprint(pending);
   if (!decision) {
     mutations.push(
