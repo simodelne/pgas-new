@@ -342,6 +342,9 @@ describe('generated program live drive gate', () => {
 
     emitEvidence(drive);
     process.stdout.write(`[live-drive] choreography=${JSON.stringify(drive.choreography)}\n`);
+    process.stdout.write(`[seed-diag] terminal_actions=${JSON.stringify(drive.terminal_actions)}\n`);
+    process.stdout.write(`[seed-diag] status_history=${JSON.stringify(drive.status_history)}\n`);
+    process.stdout.write(`[seed-diag] world=${JSON.stringify(drive.world)}\n`);
 
     expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
     expect(drive.choreography.loop_engaged).toBe(true);

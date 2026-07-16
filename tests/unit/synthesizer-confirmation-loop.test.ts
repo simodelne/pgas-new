@@ -236,7 +236,8 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(artifact.handlers_ts).toContain("['choreograph_review_work_collection', (snapshot, trigger, mode) =>");
     expect(artifact.handlers_ts).toContain('reconstructArray(Object.fromEntries(snapshot), itemsPath)');
     expect(artifact.smoke_test_ts).toContain('runs the confirmation loop choreography hermetically');
-    expect(artifact.smoke_test_ts).toContain("items_json: JSON.stringify(['Draft launch checklist', 'Confirm owner handoff'])");
+    expect(artifact.smoke_test_ts).toContain("title: 'Verify Pre-Launch System Health Checks'");
+    expect(artifact.smoke_test_ts).toContain("status: 'pending_review'");
     expect(artifact.smoke_test_ts).not.toContain('complete_review_work');
     // Regression (confirmation live-drive RED, 2026-07-16 — SpecWiringError
     // HANDLER_NO_ACTION): the loop stage advances via the aggregate guard, not a
@@ -307,6 +308,68 @@ describe('confirmation_loop descriptor synthesis', () => {
   it('seeds items from the source stage and applies staged proposals once by nonce', () => {
     const choreograph = createConfirmationLoopChoreographCollectionReaction(confirmationLoop, indexedLifecycle);
 
+    const objectChoreograph = createConfirmationLoopChoreographCollectionReaction(confirmationLoop, {
+      ...clone(indexedLifecycle),
+      item: {
+        ...indexedLifecycle.item,
+        schema: {
+          ...indexedLifecycle.item.schema,
+          description: 'string',
+        },
+      },
+    });
+    const objectSeeded = runChoreograph(objectChoreograph, [
+      ['plan_work.items_json', JSON.stringify([
+        {
+          id: 'wu-1',
+          title: 'Verify Pre-Launch System Health Checks',
+          description: 'Confirm critical services are healthy before launch.',
+          status: 'pending_review',
+        },
+        {
+          id: 'wu-2',
+          title: 'Validate Deployment Rollback Procedures',
+          description: 'Check rollback commands and ownership before release.',
+        },
+      ])],
+    ]);
+    expect(objectSeeded.valueAt('work_units.items.0')).toEqual({
+      id: 'wu-1',
+      title: 'Verify Pre-Launch System Health Checks',
+      proposed_text: '',
+      user_instruction: '',
+      description: 'Confirm critical services are healthy before launch.',
+      status: 'pending',
+    });
+    expect(objectSeeded.valueAt('work_units.items.1')).toEqual({
+      id: 'wu-2',
+      title: 'Validate Deployment Rollback Procedures',
+      proposed_text: '',
+      user_instruction: '',
+      description: 'Check rollback commands and ownership before release.',
+      status: 'pending',
+    });
+    expect(objectSeeded.valueAt('summary.confirmation_loop.seed_state')).toBe('seeded');
+    expect(objectSeeded.valueAt('summary.confirmation_loop.seed_state')).not.toBe('invalid_items_json');
+
+    const mixedSeeded = runChoreograph(objectChoreograph, [
+      ['plan_work.items_json', JSON.stringify([
+        { name: 'Review fallback title source' },
+        'Confirm owner handoff',
+      ])],
+    ]);
+    expect(mixedSeeded.valueAt('work_units.items.0')).toMatchObject({
+      id: 'unit-1',
+      title: 'Review fallback title source',
+      status: 'pending',
+    });
+    expect(mixedSeeded.valueAt('work_units.items.1')).toMatchObject({
+      id: 'unit-2',
+      title: 'Confirm owner handoff',
+      status: 'pending',
+    });
+    expect(mixedSeeded.valueAt('summary.confirmation_loop.seed_state')).toBe('seeded');
+
     const seeded = runChoreograph(choreograph, [
       ['plan_work.items_json', JSON.stringify(['Draft launch checklist', 'Confirm owner handoff'])],
     ]);
@@ -330,6 +393,11 @@ describe('confirmation_loop descriptor synthesis', () => {
       ['plan_work.items_json', '{not json'],
     ]);
     expect(invalidSeed.valueAt('summary.confirmation_loop.seed_state')).toBe('invalid_items_json');
+
+    const emptySeedArray = runChoreograph(choreograph, [
+      ['plan_work.items_json', JSON.stringify([])],
+    ]);
+    expect(emptySeedArray.valueAt('summary.confirmation_loop.seed_state')).toBe('invalid_items_json');
 
     const invalidSeedArray = runChoreograph(choreograph, [
       ['plan_work.items_json', JSON.stringify(['valid title', 123])],
