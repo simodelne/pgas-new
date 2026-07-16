@@ -7,7 +7,7 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { DelegationDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import type { DelegationChildDescriptor, DelegationDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
@@ -17,6 +17,7 @@ import {
   type StageArchetype,
 } from './stage-classifier.js';
 import {
+  REASONING_CONTRACT_VERSION,
   reasoningFieldSummary,
   runtimeTypeNameFor,
   type ReasoningStageContract,
@@ -142,13 +143,21 @@ export interface SynthesizedSpec {
   spec_yaml: string;
   mode_names: string[];
   sha256: string;
+  registration_ts?: string;
   contracts_ts: string;
   handlers_ts: string;
   handlers_index_ts: string;
   tools_ts: string;
   smoke_test_ts: string;
+  child_artifacts?: SynthesizedChildArtifact[];
   stage_classification: ClassifiedStage[];
   body_stage_slugs: string[];
+  synthesis_context: SynthesisContext;
+}
+
+export interface SynthesizedChildArtifact extends Omit<SynthesizedSpec, 'child_artifacts' | 'synthesis_context'> {
+  slug: string;
+  name: string;
   synthesis_context: SynthesisContext;
 }
 
@@ -228,6 +237,7 @@ export function synthesizeProgramSpecFromDomain(
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
   const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
   const confirmationLoops = interaction?.confirmation_loops ?? [];
+  const delegationChildren = delegation.children ?? [];
 
   if (delegation.children !== undefined) {
     assertStages(stages);
@@ -318,6 +328,7 @@ export function synthesizeProgramSpecFromDomain(
       .map((action) => action.name),
   );
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
+  const childArtifacts = synthesizeDelegationChildArtifacts(slug, name, delegationChildren);
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
     NAME: name,
@@ -329,7 +340,11 @@ export function synthesizeProgramSpecFromDomain(
   spec.preamble = `Program: ${name}. ${purpose}\n\nThis spec was synthesized mechanically by pgas-new.`;
   spec.initial = firstMode;
   spec.terminal = terminalModes;
-  spec.features = unique([...(Array.isArray(spec.features) ? spec.features as string[] : []), 'reactions']);
+  spec.features = unique([
+    ...(Array.isArray(spec.features) ? spec.features as string[] : []),
+    'reactions',
+    ...(delegationChildren.length > 0 ? ['delegation'] : []),
+  ]);
 
   const sourceModes = recordField(spec, 'modes');
   const synthesizedModes: MutableRecord = {};
@@ -359,6 +374,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentModeWiring(synthesizedModes, completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentModeWiring(synthesizedModes, confirmationLoops);
+  applyDelegationModeWiring(synthesizedModes, delegationChildren);
   spec.modes = synthesizedModes;
 
   spec.proceed_to = Object.fromEntries(
@@ -413,6 +429,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleProjection(projection, completion.collection_lifecycle);
   }
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle);
+  applyDelegationProjection(projection, delegationChildren, modeNames);
   spec.projection = projection;
 
   const prompts: MutableRecord = {
@@ -427,6 +444,7 @@ export function synthesizeProgramSpecFromDomain(
     prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
   }
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle);
+  applyDelegationPrompts(prompts, delegationChildren);
   spec.prompts = prompts;
 
   spec.ingestion = {
@@ -447,6 +465,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
   applyConfirmationLoopReactions(recordField(spec, 'reactions'), confirmationLoops, completion.collection_lifecycle);
+  applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren);
 
   spec.channels = {
     ...recordField(spec, 'channels'),
@@ -457,6 +476,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentChannel(recordField(spec, 'channels'), completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentChannel(recordField(spec, 'channels'), confirmationLoops, completion.collection_lifecycle);
+  applyDelegationChannel(recordField(spec, 'channels'), delegationChildren);
   applyControlPlaneEntryChannel(spec, entryChannel);
 
   const actionMap = recordField(spec, 'action_map');
@@ -475,6 +495,8 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentActions(actionMap, completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentActions(actionMap, confirmationLoops, completion.collection_lifecycle);
+  applyDelegationActions(actionMap, delegationChildren);
+  applyDelegationActionPreconditions(synthesizedModes, delegationChildren, transitionActionsBySource);
   applyConfirmationLoopPairing(spec, confirmationLoops);
 
   const schema = recordField(spec, 'schema');
@@ -518,9 +540,11 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
   }
   applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
+  applyDelegationSchema(schema, delegationChildren);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle);
+  applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(specYaml);
@@ -541,6 +565,7 @@ export function synthesizeProgramSpecFromDomain(
       flatMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
       confirmationLoops,
+      delegationChildren,
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
@@ -552,9 +577,16 @@ export function synthesizeProgramSpecFromDomain(
       flatMirrorStages,
       collectionLifecycle: completion.collection_lifecycle,
       confirmationLoops,
+      delegationChildren,
     }, reasoningContractsBySlug),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops),
-    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops),
+    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren),
+    ...(delegationChildren.length > 0 ? {
+      registration_ts: renderRegistrationSource(toPascalCase(slug), {
+        delegationPolicy: delegationPolicyForChildren(delegationChildren),
+      }),
+    } : {}),
+    ...(childArtifacts.length > 0 ? { child_artifacts: childArtifacts } : {}),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
     synthesis_context: {
@@ -856,6 +888,236 @@ function applyCollectionLifecycleIntentModeWiring(
     mode.vocabulary = unique([...vocabulary, transition.action]);
     mode.channels = unique([...channels, COLLECTION_LIFECYCLE_EVENT_CHANNEL]);
   }
+}
+
+function applyDelegationChannel(
+  channels: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    channels[delegationChannelName(child)] = {
+      direction: 'Out',
+      sync: 'Sync',
+      target_spec: delegationTargetSpec(child),
+      result_path: child.result_path,
+      max_delegated_rounds: child.max_delegated_rounds,
+      ...(child.round_timeout_ms !== undefined ? { round_timeout_ms: child.round_timeout_ms } : {}),
+      optional: true,
+    };
+  }
+}
+
+function applyDelegationSchema(
+  schema: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    const base = delegationStateBase(child);
+    schema[child.result_path] = 'object';
+    schema[`${child.result_path}.status`] = 'string';
+    schema[`${child.result_path}.sessionId`] = 'string';
+    schema[`${child.result_path}.rounds`] = 'number';
+    schema[`${child.result_path}.mode`] = 'string';
+    schema[`${child.result_path}.reason`] = 'string';
+    schema[`${child.result_path}.optional`] = 'boolean';
+    schema[`${child.result_path}.result`] = 'object';
+    for (const [field, type] of delegationResultFields(child)) {
+      schema[`${child.result_path}.${field}`] = type;
+    }
+    schema[`${base}.settled`] = 'boolean';
+    schema[`${base}.degraded`] = 'boolean';
+    schema[`${base}.degrade_reason`] = 'string';
+    schema[`${base}.requested`] = 'boolean';
+  }
+}
+
+function applyDelegationActions(
+  actionMap: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    const actionName = delegationRequestActionName(child);
+    if (Object.prototype.hasOwnProperty.call(actionMap, actionName)) {
+      throw new Error(`delegation request action collides with generated action_map: ${actionName}`);
+    }
+    actionMap[actionName] = {
+      channel: delegationChannelName(child),
+      result_path: child.result_path,
+      mutations: [
+        { op: 'MSet', path: `${delegationStateBase(child)}.requested`, value: true },
+      ],
+      description: `Dispatch the ${child.id} child program and wait for the routed delegation result.`,
+      arg_descriptions: {
+        request: 'Object with the request for the child (include a short topic/query string).',
+      },
+    };
+  }
+}
+
+function applyDelegationActionPreconditions(
+  modes: MutableRecord,
+  children: DelegationChildDescriptor[],
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+): void {
+  for (const child of children) {
+    const mode = recordField(modes, child.stage);
+    appendModePrecondition(
+      mode,
+      delegationRequestActionName(child),
+      { kind: 'FieldFalsy', path: `${delegationStateBase(child)}.requested` },
+    );
+    for (const action of transitionActionsBySource.get(child.stage) ?? []) {
+      appendModePrecondition(
+        mode,
+        action.name,
+        { kind: 'FieldTruthy', path: `${delegationStateBase(child)}.settled` },
+      );
+    }
+  }
+}
+
+function applyDelegationReactions(
+  reactions: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    const base = delegationStateBase(child);
+    reactions[delegationSettleReactionName(child)] = {
+      event: 'AfterRound',
+      watch: [],
+      write_scope: [
+        `${base}.settled`,
+        `${base}.degraded`,
+        `${base}.degrade_reason`,
+      ],
+    };
+  }
+}
+
+function applyDelegationModeWiring(
+  modes: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    const mode = recordField(modes, child.stage);
+    const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
+    const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+    mode.vocabulary = unique([...vocabulary, delegationRequestActionName(child)]);
+    mode.channels = unique([...channels, delegationChannelName(child)]);
+  }
+}
+
+function applyDelegationProjection(
+  projection: MutableRecord,
+  children: DelegationChildDescriptor[],
+  modeNames: string[],
+): void {
+  for (const child of children) {
+    const hostIndex = modeNames.indexOf(child.stage);
+    const resultPaths = delegationResultProjectionPaths(child);
+    const hostPaths = [
+      ...resultPaths,
+      `${delegationStateBase(child)}.settled`,
+      `${delegationStateBase(child)}.degraded`,
+      `${delegationStateBase(child)}.degrade_reason`,
+    ];
+    const hostProjection = recordField(projection, child.stage);
+    const hostInclude = Array.isArray(hostProjection.include) ? hostProjection.include as string[] : [];
+    hostProjection.include = unique([...hostInclude, ...hostPaths]);
+    if (!Array.isArray(hostProjection.exclude)) {
+      hostProjection.exclude = [];
+    }
+    for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
+      const downstreamProjection = recordField(projection, modeName);
+      const include = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
+      downstreamProjection.include = unique([...include, ...resultPaths]);
+      if (!Array.isArray(downstreamProjection.exclude)) {
+        downstreamProjection.exclude = [];
+      }
+    }
+  }
+}
+
+function applyDelegationPrompts(
+  prompts: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
+    prompts[child.stage] = `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
+  }
+}
+
+function applyDelegationGuidance(
+  guidance: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  for (const child of children) {
+    const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
+    guidance[child.stage] = [
+      ...existing,
+      `Call ${delegationRequestActionName(child)} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
+      `Wait until ${delegationStateBase(child)}.settled is true, then use the stage transition action.`,
+      `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
+    ];
+  }
+}
+
+function appendModePrecondition(
+  mode: MutableRecord,
+  actionName: string,
+  predicate: Record<string, unknown>,
+): void {
+  const raw = mode.preconditions;
+  if (raw !== undefined && (!raw || typeof raw !== 'object' || Array.isArray(raw))) {
+    throw new Error('mode preconditions must be a mapping');
+  }
+  const preconditions = (raw ?? {}) as MutableRecord;
+  const current = Array.isArray(preconditions[actionName]) ? preconditions[actionName] as Record<string, unknown>[] : [];
+  preconditions[actionName] = [...current, predicate];
+  mode.preconditions = preconditions;
+}
+
+function delegationChannelName(child: DelegationChildDescriptor): string {
+  return `${child.id}_call`;
+}
+
+function delegationRequestActionName(child: DelegationChildDescriptor): string {
+  return `request_${child.id}`;
+}
+
+function delegationSettleReactionName(child: DelegationChildDescriptor): string {
+  return `settle_${child.id}_delegation`;
+}
+
+function delegationStateBase(child: DelegationChildDescriptor): string {
+  return `${child.stage}.delegation.${child.id}`;
+}
+
+function delegationTargetSpec(child: DelegationChildDescriptor): string {
+  if (child.target_spec) {
+    return child.target_spec;
+  }
+  const childSlug = child.synthesize_child?.slug?.trim();
+  return childSlug && childSlug.length > 0 ? childSlug : child.id;
+}
+
+function delegationResultFields(child: DelegationChildDescriptor): Array<[string, string]> {
+  return Object.entries(child.synthesize_child?.result_fields ?? {});
+}
+
+function delegationResultProjectionPaths(child: DelegationChildDescriptor): string[] {
+  return unique([
+    child.result_path,
+    `${child.result_path}.status`,
+    `${child.result_path}.reason`,
+    `${child.result_path}.optional`,
+    `${child.result_path}.mode`,
+    `${child.result_path}.rounds`,
+    `${child.result_path}.sessionId`,
+    `${child.result_path}.result`,
+    ...delegationResultFields(child).map(([field]) => `${child.result_path}.${field}`),
+  ]);
 }
 
 function applyCollectionLifecycleIntentActions(
@@ -1544,6 +1806,7 @@ function renderHandlersSource(
     flatMirrorStages: ReadonlySet<string>;
     collectionLifecycle?: CollectionLifecycleDescriptor;
     confirmationLoops: ConfirmationLoopDescriptor[];
+    delegationChildren: DelegationChildDescriptor[];
   },
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
@@ -1563,6 +1826,7 @@ function renderHandlersSource(
   const usesIndexedCollectionLifecycle = options.includeReactionHandlers &&
     options.collectionLifecycle?.storage.representation === 'indexed_array';
   const usesConfirmationLoopHandlers = options.includeReactionHandlers && confirmationLoops.length > 0;
+  const usesDelegationHandlers = options.includeReactionHandlers && options.delegationChildren.length > 0;
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
@@ -1640,14 +1904,17 @@ ${fieldResolvers}
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
     : '';
   const reactionImport = options.includeReactionHandlers
-    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers ? 'ReactionResult, ' : ''}`
+    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers ? 'ReactionResult, ' : ''}`
     : '';
-  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
+  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
   const confirmationReactionEntries = usesConfirmationLoopHandlers && options.collectionLifecycle
     ? renderConfirmationLoopReactionEntries(confirmationLoops, options.collectionLifecycle)
+    : '';
+  const delegationReactionEntries = usesDelegationHandlers
+    ? renderDelegationReactionEntries(options.delegationChildren)
     : '';
   const lifecycleIntentHelper = lifecycleTransitions.length > 0
     ? `
@@ -1666,8 +1933,11 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
   const confirmationReactionHelper = usesConfirmationLoopHandlers
     ? renderConfirmationLoopReactionHelper()
     : '';
+  const delegationReactionHelper = usesDelegationHandlers
+    ? renderDelegationReactionHelper()
+    : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -2039,6 +2309,72 @@ function renderConfirmationLoopReactionEntries(
     );
   }]`;
   }).join('');
+}
+
+function renderDelegationReactionEntries(children: DelegationChildDescriptor[]): string {
+  return children.map((child) => {
+    const base = delegationStateBase(child);
+    return `,
+  [${tsString(delegationSettleReactionName(child))}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return settleDelegationResult(
+      snapshot,
+      ${tsString(child.result_path)},
+      ${tsString(`${base}.settled`)},
+      ${tsString(`${base}.degraded`)},
+      ${tsString(`${base}.degrade_reason`)},
+    );
+  }]`;
+  }).join('');
+}
+
+function renderDelegationReactionHelper(): string {
+  return `
+
+function settleDelegationResult(
+  snapshot: ReadonlyMap<string, unknown>,
+  resultPath: string,
+  settledPath: string,
+  degradedPath: string,
+  degradeReasonPath: string,
+): ReactionResult | undefined {
+  if (snapshot.get(settledPath) === true) {
+    return undefined;
+  }
+  const direct = snapshot.get(resultPath);
+  const result = direct && typeof direct === 'object' && !Array.isArray(direct)
+    ? direct as Record<string, unknown>
+    : {};
+  const status = typeof result.status === 'string'
+    ? result.status
+    : snapshot.get(\`\${resultPath}.status\`);
+  if (typeof status !== 'string' || status.length === 0) {
+    return undefined;
+  }
+  if (status === 'complete') {
+    return {
+      mutations: [
+        { op: 'MSet' as const, path: settledPath, value: true },
+        { op: 'MSet' as const, path: degradedPath, value: false },
+        { op: 'MSet' as const, path: degradeReasonPath, value: '' },
+      ],
+    };
+  }
+  if (status !== 'failed' && status !== 'declined') {
+    return undefined;
+  }
+  const reason = typeof result.reason === 'string'
+    ? result.reason
+    : snapshot.get(\`\${resultPath}.reason\`);
+  return {
+    mutations: [
+      { op: 'MSet' as const, path: settledPath, value: true },
+      { op: 'MSet' as const, path: degradedPath, value: true },
+      { op: 'MSet' as const, path: degradeReasonPath, value: typeof reason === 'string' && reason.length > 0 ? reason : status },
+    ],
+  };
+}`;
 }
 
 function renderConfirmationLoopReactionHelper(): string {
@@ -2686,7 +3022,12 @@ function renderSmokeTestSource(
   completion: Completion,
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
   confirmationLoops: ConfirmationLoopDescriptor[] = [],
+  delegationChildren: DelegationChildDescriptor[] = [],
 ): string {
+  const delegationSmokeChild = delegationChildren.find((child) => child.synthesize_child?.kind === 'worker');
+  if (delegationSmokeChild) {
+    return renderDelegationSmokeTestSource(slug, name, entryChannel, delegationSmokeChild, transitionActions);
+  }
   if (confirmationLoops.length > 0) {
     return renderConfirmationLoopSmokeTestSource(slug, name, entryChannel, confirmationLoops, completion.collection_lifecycle);
   }
@@ -3035,6 +3376,517 @@ function sampleSmokeValue(fieldPath: string[]): unknown {
     return 'sample_code';
   }
   return `${field.replace(/_/gu, '-')}-sample`;
+}
+
+function synthesizeDelegationChildArtifacts(
+  parentSlug: string,
+  parentName: string,
+  children: DelegationChildDescriptor[],
+): SynthesizedChildArtifact[] {
+  return children
+    .filter((child) => child.synthesize_child?.kind === 'worker')
+    .map((child) => synthesizeWorkerChildArtifact(parentSlug, parentName, child));
+}
+
+function synthesizeWorkerChildArtifact(
+  parentSlug: string,
+  parentName: string,
+  child: DelegationChildDescriptor,
+): SynthesizedChildArtifact {
+  if (!child.synthesize_child) {
+    throw new Error(`delegation child ${child.id} is missing synthesize_child`);
+  }
+  const childSlug = delegationTargetSpec(child);
+  const childName = `${parentName} ${toPascalCase(child.id)} Worker`;
+  const childDomain = workerChildDomain(parentSlug, childSlug, childName, child);
+  const artifact = synthesizeProgramSpecFromDomain(childDomain, {
+    reasoningContracts: {
+      work: workerChildReasoningContract(child),
+    },
+  });
+  const specYaml = patchWorkerChildSpecForDelegation(artifact.spec_yaml, child);
+  return {
+    ...artifact,
+    slug: childSlug,
+    name: childName,
+    spec_yaml: specYaml,
+    sha256: createHash('sha256').update(specYaml).digest('hex'),
+    registration_ts: renderRegistrationSource(toPascalCase(childSlug), {
+      delegationResultPolicy: delegationResultPolicyForChild(child),
+    }),
+  };
+}
+
+function workerChildDomain(
+  parentSlug: string,
+  childSlug: string,
+  childName: string,
+  child: DelegationChildDescriptor,
+): Record<string, unknown> {
+  const resultFields = child.synthesize_child?.result_fields ?? {};
+  return {
+    'program.slug': childSlug,
+    'program.name': childName,
+    'program.target_dir': `/tmp/${childSlug}`,
+    'intake.purpose': `Handle a delegated worker task for ${parentSlug}.`,
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      {
+        slug: 'receive',
+        is_bootstrap: true,
+        domain_spec: {
+          reads: ['inputs.request.topic', 'inputs.domain_context.source_program'],
+          produces: {},
+          rules: ['Accept the delegated request seeded by the parent session.'],
+          invariants: ['Do not invent a different request topic.'],
+        },
+      },
+      {
+        slug: 'work',
+        domain_spec: {
+          reads: ['inputs.request.topic', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
+          produces: {
+            result_json: Object.fromEntries(Object.keys(resultFields).map((field) => [field, 'string'])),
+            items_json: [`${child.id}:<seeded_topic>`],
+          },
+          rules: [
+            'Produce the delegated worker result from the seeded request.',
+            'Echo inputs.request.topic exactly into work.result.seeded_topic when that field exists.',
+          ],
+          invariants: ['The exported seeded_topic proves parent input enrichment reached the child.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'receive', to: 'work', trigger: 'received', guard_field: 'receive.started' },
+      { from: 'work', to: 'complete', trigger: 'completed', guard_field: 'work.done' },
+    ]),
+    'intake.delegation_json': JSON.stringify({
+      enabled: false,
+      stages: {
+        work: { kind: 'llm-reasoning', reasoning_per_turn: true },
+      },
+    }),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'work.done' }),
+  };
+}
+
+function workerChildReasoningContract(child: DelegationChildDescriptor): ReasoningStageContract {
+  const rawFields = child.synthesize_child?.result_fields ?? {};
+  const fields = Object.entries(rawFields).map(([name, rawType]) => ({
+    name,
+    type: reasoningFieldTypeFor(rawType),
+    description: name === 'seeded_topic'
+      ? 'Exact echo of inputs.request.topic supplied by parent input enrichment.'
+      : `Delegated worker ${name.replace(/_/gu, ' ')} result.`,
+  }));
+  const cannedResult = Object.fromEntries(fields.map((field) => [
+    field.name,
+    field.type === 'number'
+      ? 1
+      : field.type === 'boolean'
+        ? true
+        : field.type === 'string_array'
+          ? [`${field.name}-sample`]
+          : field.name === 'seeded_topic'
+            ? 'seeded delegation topic'
+            : `${field.name}-sample`,
+  ]));
+  return {
+    contract_version: REASONING_CONTRACT_VERSION,
+    stage: 'work',
+    reasoning_prompt: `Complete delegated worker request ${child.id}. Use the projected inputs.request.topic and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
+    result_schema: {
+      fields,
+      allow_extra_fields: true,
+    },
+    items_schema: {
+      templates: [`${child.id}:summary:<summary>`],
+      description: 'One concise delegated-work item summary.',
+    },
+    canned_example: {
+      result: cannedResult,
+      items: [`${child.id}:summary:complete`],
+    },
+    contract_source: 'deterministic_fallback',
+  };
+}
+
+function patchWorkerChildSpecForDelegation(specYaml: string, child: DelegationChildDescriptor): string {
+  const spec = load(specYaml) as MutableRecord;
+  const schema = recordField(spec, 'schema');
+  schema['inputs.request'] = 'object';
+  schema['inputs.request.intent'] = 'string';
+  schema['inputs.request.query'] = 'string';
+  schema['inputs.request.topic'] = 'string';
+  schema['inputs.domain_context'] = 'object';
+  schema['inputs.domain_context.source_program'] = 'string';
+  schema['inputs.domain_context.source_session_id'] = 'string';
+  schema['inputs.domain_context.owner_session_id'] = 'string';
+  schema['inputs.domain_context.target_program'] = 'string';
+  schema['inputs.domain_context.delegation_chain'] = 'array';
+  schema['inputs.domain_context.original_request'] = 'string';
+
+  const projection = recordField(spec, 'projection');
+  for (const modeName of ['receive', 'work', 'complete']) {
+    const modeProjection = recordField(projection, modeName);
+    const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
+    modeProjection.include = unique([
+      ...include,
+      'inputs.request',
+      'inputs.request.intent',
+      'inputs.request.query',
+      'inputs.request.topic',
+      'inputs.domain_context',
+      'inputs.domain_context.source_program',
+      'inputs.domain_context.original_request',
+    ]);
+  }
+
+  const prompts = recordField(spec, 'prompts');
+  prompts.receive = `${String(prompts.receive ?? '')}\nAccept the delegated request; inputs.request and inputs.domain_context are seeded by the parent delegation.`;
+  prompts.work = `${String(prompts.work ?? '')}\nUse inputs.request.topic as the delegated topic. The seeded_topic result field, when present, must echo that exact value.`;
+
+  const actionMap = recordField(spec, 'action_map');
+  const completeWork = recordField(actionMap, 'complete_work');
+  const mutations = Array.isArray(completeWork.mutations) ? completeWork.mutations as MutableRecord[] : [];
+  for (const mutation of mutations) {
+    if (mutation.path === 'work.result.seeded_topic') {
+      mutation.value = '';
+      mutation.from_arg = 'seeded_topic';
+      mutation.from_state = 'inputs.request.topic';
+    }
+  }
+  completeWork.mutations = mutations;
+
+  const rendered = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
+  validateSynthesizedSpec(rendered);
+  return rendered;
+}
+
+function reasoningFieldTypeFor(value: string): ReasoningStageContract['result_schema']['fields'][number]['type'] {
+  const normalized = value.toLowerCase().replace(/[-\s]+/gu, '_');
+  if (normalized === 'number') return 'number';
+  if (normalized === 'boolean') return 'boolean';
+  if (normalized === 'string_array' || normalized === 'array') return 'string_array';
+  return 'string';
+}
+
+function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
+  allowedTargetPrograms: string[];
+  inputEnrichment: Array<{ source: string; target: string }>;
+} {
+  return {
+    allowedTargetPrograms: unique(children.map(delegationTargetSpec)),
+    inputEnrichment: children.flatMap((child) =>
+      Object.entries(child.payload_map).map(([target, source]) => ({ source, target })),
+    ),
+  };
+}
+
+function delegationResultPolicyForChild(child: DelegationChildDescriptor): {
+  fields: Array<{ path: string; key: string }>;
+} {
+  return {
+    fields: [
+      { path: 'work.result', key: 'result' },
+      ...delegationResultFields(child).map(([field]) => ({ path: `work.result.${field}`, key: field })),
+    ],
+  };
+}
+
+function renderRegistrationSource(
+  pascalName: string,
+  policies: {
+    delegationPolicy?: { allowedTargetPrograms: string[]; inputEnrichment: Array<{ source: string; target: string }> };
+    delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
+  } = {},
+): string {
+  const policyEntries = [
+    policies.delegationPolicy
+      ? `    delegationPolicy: ${renderTsValue(policies.delegationPolicy)},`
+      : '',
+    policies.delegationResultPolicy
+      ? `    delegationResultPolicy: ${renderTsValue(policies.delegationResultPolicy)},`
+      : '',
+  ].filter(Boolean).join('\n');
+  return `import {
+  createProgramAdapters,
+  createToolRegistry,
+  loadSpecWithPatterns,
+  type ProgramEntry,
+} from '@simodelne/pgas-server/plugin.js';
+import { handlers, reactionHandlers } from './handlers.js';
+import { register${pascalName}Tools } from './tools.js';
+
+export function create${pascalName}ProgramEntry(): ProgramEntry {
+  const specPath = decodeURIComponent(new URL('./specs.yml', import.meta.url).pathname);
+  const { spec } = loadSpecWithPatterns(specPath);
+  const toolRegistry = createToolRegistry();
+  register${pascalName}Tools(toolRegistry);
+
+  return {
+    spec,
+    reactionHandlers,
+${policyEntries ? `${policyEntries}\n` : ''}    createAdapters: (ctx) => {
+      const adapters = createProgramAdapters(spec, ctx, handlers);
+      if (spec.tools) {
+        for (const [name, decl] of spec.tools) {
+          if (toolRegistry.has(name)) {
+            adapters.outputs.set(decl.channelId, toolRegistry.createAdapter(name));
+          }
+        }
+      }
+      return adapters;
+    },
+  };
+}
+`;
+}
+
+function renderTsValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(renderTsValue).join(', ')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entryValue]) => `${key}: ${renderTsValue(entryValue)}`);
+    return `{ ${entries.join(', ')} }`;
+  }
+  if (typeof value === 'string') {
+    return tsString(value);
+  }
+  return JSON.stringify(value);
+}
+
+function renderDelegationSmokeTestSource(
+  slug: string,
+  name: string,
+  entryChannel: string,
+  child: DelegationChildDescriptor,
+  transitionActions: TransitionAction[],
+): string {
+  const childSlug = delegationTargetSpec(child);
+  const parentPascal = toPascalCase(slug);
+  const childPascal = toPascalCase(childSlug);
+  const transitionAction = transitionActions.find((action) => action.source === child.stage);
+  const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
+  const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const resultPath = child.result_path;
+  const base = delegationStateBase(child);
+  return `import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import {
+  createProgramAdapters,
+  createToolRegistry,
+  loadSpecWithPatterns,
+  type ProgramEntry,
+} from '@simodelne/pgas-server/plugin.js';
+import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { handlers, reactionHandlers } from '../src/programs/${slug}/handlers.js';
+import { register${parentPascal}Tools } from '../src/programs/${slug}/tools.js';
+import { create${childPascal}ProgramEntry } from '../src/programs/${childSlug}/registration.js';
+
+describe('generated delegation smoke', () => {
+  it('runs synthesized delegation hermetically through the route for ${name}', async () => {
+    const complete = await runDelegationScenario({
+      script: [
+        scripted(effect('begin_work', {})),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'complete-child' } }, ${tsString(delegationChannelName(child))})),
+        scripted(effect('begin_work', {}), 'seeded delegation topic'),
+        scripted(effect('complete_work', {
+          result_json: JSON.stringify({ summary: 'child completed delegated work' }),
+          items_json: JSON.stringify(['delegated-work-complete']),
+          summary: 'child completed delegated work',
+          seeded_topic: 'seeded delegation topic',
+        }), 'seeded delegation topic'),
+        scripted(effect(${tsString(transitionActionName)}, {
+          result_json: JSON.stringify({ parent: 'complete after delegation' }),
+          items_json: JSON.stringify(['parent-complete']),
+        }, ${tsString(transitionChannel)})),
+      ],
+    });
+    const result = resultAt(complete.afterDelegation.domain, ${tsString(resultPath)});
+    expect(result.status).toBe('complete');
+    expect(Number(result.rounds)).toBeGreaterThanOrEqual(1);
+    expect(result.mode).toBe('complete');
+    expect(result.seeded_topic).toBe('seeded delegation topic');
+    expect(complete.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
+    expect(complete.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(false);
+    expect(complete.final.mode).toBe('complete');
+
+    const degraded = await runDelegationScenario({
+      parentMaxDelegatedRounds: 1,
+      script: [
+        scripted(effect('begin_work', {})),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'force-degrade' } }, ${tsString(delegationChannelName(child))})),
+        scripted(effect('begin_work', {}), 'seeded delegation topic'),
+        scripted(effect(${tsString(transitionActionName)}, {
+          result_json: JSON.stringify({ parent: 'complete after degraded delegation' }),
+          items_json: JSON.stringify(['parent-complete-after-degrade']),
+        }, ${tsString(transitionChannel)})),
+      ],
+    });
+    const degradeResult = resultAt(degraded.afterDelegation.domain, ${tsString(resultPath)});
+    expect(degradeResult.status).toBe('failed');
+    expect(degradeResult.optional).toBe(true);
+    expect(degraded.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
+    expect(degraded.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(true);
+    expect(String(degraded.afterDelegation.domain[${tsString(`${base}.degrade_reason`)}]).length).toBeGreaterThan(0);
+    expect(degraded.final.mode).toBe('complete');
+  });
+});
+
+interface DelegationScenario {
+  parentMaxDelegatedRounds?: number;
+  script: ScriptedAuthorResponse[];
+}
+
+interface ScriptedAuthorResponse {
+  response: ReturnType<typeof effect>;
+  expectPromptIncludes?: string;
+}
+
+interface Snapshot {
+  mode: string | null;
+  domain: Record<string, unknown>;
+}
+
+async function runDelegationScenario(scenario: DelegationScenario): Promise<{ afterDelegation: Snapshot; final: Snapshot }> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-delegation-smoke-'));
+  const server = await createPgasServer({
+    programs: [
+      {
+        name: ${tsString(slug)},
+        entry: scenario.parentMaxDelegatedRounds === undefined
+          ? create${parentPascal}ProgramEntry()
+          : createPatchedParentEntry(tempDir, scenario.parentMaxDelegatedRounds),
+      },
+      { name: ${tsString(childSlug)}, entry: create${childPascal}ProgramEntry() },
+    ],
+    drivers: {
+      authorHandle: scriptedAuthor(scenario.script),
+      observerHandle: {
+        modelId: 'generated-delegation-smoke-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch delegated worker' });
+    const afterDelegation = await readSnapshot(client, sessionId);
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    const final = await readSnapshot(client, sessionId);
+    return { afterDelegation, final };
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): ProgramEntry {
+  const sourcePath = decodeURIComponent(new URL('../src/programs/${slug}/specs.yml', import.meta.url).pathname);
+  const source = readFileSync(sourcePath, 'utf8');
+  const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
+  const specPath = join(tempDir, 'parent-patched-specs.yml');
+  writeFileSync(specPath, patched, 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  const toolRegistry = createToolRegistry();
+  register${parentPascal}Tools(toolRegistry);
+  return {
+    spec,
+    reactionHandlers,
+    delegationPolicy: {
+      allowedTargetPrograms: [${tsString(childSlug)}],
+      inputEnrichment: ${JSON.stringify(delegationPolicyForChildren([child]).inputEnrichment)},
+    },
+    createAdapters: (ctx) => {
+      const adapters = createProgramAdapters(spec, ctx, handlers);
+      if (spec.tools) {
+        for (const [name, decl] of spec.tools) {
+          if (toolRegistry.has(name)) {
+            adapters.outputs.set(decl.channelId, toolRegistry.createAdapter(name));
+          }
+        }
+      }
+      return adapters;
+    },
+  };
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    domain: world.domain as Record<string, unknown>,
+  };
+}
+
+function resultAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
+  const direct = domain[pathKey];
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return direct as Record<string, unknown>;
+  }
+  const prefix = \`\${pathKey}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(domain)) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return result;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-delegation-smoke-author',
+    async complete(prompt: string) {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated delegation smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      if (response.expectPromptIncludes && !prompt.includes(response.expectPromptIncludes)) {
+        throw new Error(\`expected generated delegation prompt to include \${response.expectPromptIncludes}\`);
+      }
+      return JSON.stringify(response.response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function scripted(response: ReturnType<typeof effect>, expectPromptIncludes?: string): ScriptedAuthorResponse {
+  return { response, ...(expectPromptIncludes ? { expectPromptIncludes } : {}) };
+}
+`;
 }
 
 function actionsForCompletionPath(actions: TransitionAction[], finalStage: string): TransitionAction[] {
@@ -3922,7 +4774,8 @@ function guidanceFor(
   const baseGuidance = [
     'Use the synthesized JSON-string scalar fields for structured handler results.',
   ];
-  if (Object.keys(delegation).length > 0) {
+  const hasChildrenDescriptor = Array.isArray(delegation.children);
+  if (Object.keys(delegation).length > 0 && !hasChildrenDescriptor) {
     baseGuidance.push(`delegation intake captured for this program: ${JSON.stringify(delegation)}.`);
   }
   return Object.fromEntries(modeNames.map((modeName) => {

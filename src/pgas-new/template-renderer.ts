@@ -24,12 +24,14 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
+  synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
   synthesizedHandlersIndexTs?: string;
   synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
   synthesizedSmokeTestTs?: string;
+  synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -39,6 +41,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   template?: ProgramTemplate;
   mandate?: string;
   synthesizedSpecYaml?: string;
+  synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
   synthesizedHandlersIndexTs?: string;
@@ -61,12 +64,36 @@ interface TemplateSpec {
 
 interface SynthesizedSources {
   specYaml?: string;
+  registrationTs?: string;
   contractsTs?: string;
   handlersTs?: string;
   handlersIndexTs?: string;
   stageSources?: Record<string, string>;
   toolsTs?: string;
   smokeTestTs?: string;
+  childArtifacts: SynthesizedChildSources[];
+}
+
+interface SynthesizedChildSourceInput {
+  slug: string;
+  name: string;
+  spec_yaml: string;
+  registration_ts?: string;
+  contracts_ts: string;
+  handlers_ts: string;
+  handlers_index_ts: string;
+  stage_sources?: Record<string, string>;
+  tools_ts: string;
+  smoke_test_ts: string;
+}
+
+interface SynthesizedChildSources extends SynthesizedSources {
+  slug: string;
+  name: string;
+}
+
+interface ResolvedSynthesizedSources extends SynthesizedSources {
+  slug: string;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -99,13 +126,14 @@ const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
 
 export function renderStandaloneScaffold(options: RenderStandaloneOptions): RenderResult {
   const synthesizedSources = synthesizedSourcesFor(options);
-  const plan = createStandaloneArtifactPlan(
+  const basePlan = createStandaloneArtifactPlan(
     { slug: options.slug, name: options.name },
     {
       stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
     },
   );
+  const plan = withSynthesizedChildArtifacts(basePlan, synthesizedSources.childArtifacts);
   assertSupportedTemplate(options.template);
 
   assertNoExistingArtifacts(options.outDir, plan);
@@ -342,6 +370,9 @@ function templateForStandaloneArtifact(
   slug: string,
   synthesizedSources: SynthesizedSources,
 ): TemplateSpec | undefined {
+  if (artifact.path === 'src/server.ts' && synthesizedSources.childArtifacts.length > 0) {
+    return inlineTemplate(renderMultiProgramServerSource(slug, synthesizedSources.childArtifacts.map((child) => child.slug)));
+  }
   const synthesizedTemplate = templateForSynthesizedArtifact(artifact, slug, synthesizedSources);
   if (synthesizedTemplate) {
     return synthesizedTemplate;
@@ -633,45 +664,176 @@ function templateForSynthesizedArtifact(
   slug: string,
   synthesizedSources: SynthesizedSources,
 ): TemplateSpec | undefined {
-  if (!synthesizedSources.specYaml) {
+  const selected = synthesizedSourcesForArtifact(artifact.path, slug, synthesizedSources);
+  if (!selected?.specYaml) {
     return undefined;
   }
-  if (artifact.path.endsWith(`/${slug}/specs.yml`)) {
-    return inlineTemplate(synthesizedSources.specYaml);
+  if (artifact.path.endsWith(`/${selected.slug}/specs.yml`)) {
+    return inlineTemplate(selected.specYaml);
   }
-  if (artifact.path.endsWith(`/${slug}/registration.ts`)) {
-    if (artifact.path !== `src/programs/${slug}/registration.ts`) {
+  if (artifact.path.endsWith(`/${selected.slug}/registration.ts`)) {
+    if (selected.registrationTs) {
+      return inlineTemplate(selected.registrationTs);
+    }
+    if (artifact.path !== `src/programs/${selected.slug}/registration.ts`) {
       return spec('consumer/registration-attached.ts.tmpl', ['CAMEL_NAME', 'PASCAL_NAME', 'SLUG']);
     }
     return spec('program/registration-skeleton.ts.tmpl', ['PASCAL_NAME']);
   }
-  if (artifact.path.endsWith(`/${slug}/contracts.ts`) && synthesizedSources.contractsTs) {
-    return inlineTemplate(synthesizedSources.contractsTs);
+  if (artifact.path.endsWith(`/${selected.slug}/contracts.ts`) && selected.contractsTs) {
+    return inlineTemplate(selected.contractsTs);
   }
-  if (artifact.path.endsWith(`/${slug}/handlers.ts`) && synthesizedSources.handlersTs) {
-    return inlineTemplate(synthesizedSources.handlersTs);
+  if (artifact.path.endsWith(`/${selected.slug}/handlers.ts`) && selected.handlersTs) {
+    return inlineTemplate(selected.handlersTs);
   }
-  if (artifact.path.endsWith(`/${slug}/handlers/index.ts`) && synthesizedSources.handlersIndexTs) {
-    return inlineTemplate(synthesizedSources.handlersIndexTs);
+  if (artifact.path.endsWith(`/${selected.slug}/handlers/index.ts`) && selected.handlersIndexTs) {
+    return inlineTemplate(selected.handlersIndexTs);
   }
-  const stageMatch = artifact.path.match(new RegExp(`/${slug}/stages/([^/]+)\\.ts$`, 'u'));
-  if (stageMatch?.[1] && synthesizedSources.stageSources?.[stageMatch[1]]) {
-    return inlineTemplate(synthesizedSources.stageSources[stageMatch[1]]);
+  const stageMatch = artifact.path.match(new RegExp(`/${selected.slug}/stages/([^/]+)\\.ts$`, 'u'));
+  if (stageMatch?.[1] && selected.stageSources?.[stageMatch[1]]) {
+    return inlineTemplate(selected.stageSources[stageMatch[1]]);
   }
-  if (artifact.path.endsWith(`/${slug}/tools.ts`) && synthesizedSources.toolsTs) {
-    return inlineTemplate(synthesizedSources.toolsTs);
+  if (artifact.path.endsWith(`/${selected.slug}/tools.ts`) && selected.toolsTs) {
+    return inlineTemplate(selected.toolsTs);
   }
-  if (artifact.path === 'tests/generated-program-smoke.test.ts' && synthesizedSources.smokeTestTs) {
-    return inlineTemplate(synthesizedSources.smokeTestTs);
+  if (artifact.path === 'tests/generated-program-smoke.test.ts' && selected.smokeTestTs) {
+    return inlineTemplate(selected.smokeTestTs);
   }
   return undefined;
 }
 
+function synthesizedSourcesForArtifact(
+  artifactPath: string,
+  primarySlug: string,
+  sources: SynthesizedSources,
+): ResolvedSynthesizedSources | undefined {
+  if (artifactPath === 'tests/generated-program-smoke.test.ts') {
+    return { ...sources, slug: primarySlug };
+  }
+  if (artifactPathBelongsToProgram(artifactPath, primarySlug)) {
+    return { ...sources, slug: primarySlug };
+  }
+  return sources.childArtifacts.find((child) =>
+    artifactPathBelongsToProgram(artifactPath, child.slug));
+}
+
+function artifactPathBelongsToProgram(artifactPath: string, slug: string): boolean {
+  return artifactPath.includes(`/${slug}/`) || artifactPath.startsWith(`${slug}/`);
+}
+
+function withSynthesizedChildArtifacts(plan: ArtifactPlan, children: SynthesizedChildSources[]): ArtifactPlan {
+  if (children.length === 0) {
+    return plan;
+  }
+  return {
+    ...plan,
+    artifacts: uniquePlannedArtifacts([
+      ...plan.artifacts,
+      ...children.flatMap(childProgramArtifacts),
+    ]),
+  };
+}
+
+function childProgramArtifacts(child: SynthesizedChildSources): PlannedArtifact[] {
+  const slug = child.slug;
+  const stageSlugs = Object.keys(child.stageSources ?? {});
+  return [
+    plannedArtifact('spec', `src/programs/${slug}/specs.yml`, 'Declare synthesized delegated child PGAS program spec.', 'branch_write', [
+      'spec-load',
+    ]),
+    plannedArtifact('registration', `src/programs/${slug}/registration.ts`, 'Register synthesized delegated child program using public plugin.js helpers.', 'branch_write', [
+      'typecheck',
+    ]),
+    ...(stageSlugs.length > 0
+      ? [
+          plannedArtifact('contract', `src/programs/${slug}/contracts.ts`, 'Declare delegated child stage contracts.', 'domain_synthesis', [
+            'typecheck',
+          ]),
+          ...stageSlugs.map((stageSlug) =>
+            plannedArtifact('stage', `src/programs/${slug}/stages/${stageSlug}.ts`, `Implement delegated child stage ${stageSlug}.`, 'domain_synthesis', [
+              'typecheck',
+            ])),
+        ]
+      : []),
+    plannedArtifact('handler', `src/programs/${slug}/handlers.ts`, 'Implement delegated child handlers and reactions.', 'branch_write', [
+      'typecheck',
+    ]),
+    plannedArtifact('handler', `src/programs/${slug}/handlers/index.ts`, 'Expose delegated child handlers from the handler directory.', 'branch_write', [
+      'typecheck',
+    ]),
+    plannedArtifact('handler', `src/programs/${slug}/handlers/_resolver.ts`, 'Resolve delegated child handler values from payload or state.', 'branch_write', [
+      'typecheck',
+    ]),
+    plannedArtifact('tool', `src/programs/${slug}/tools.ts`, 'Declare delegated child action metadata.', 'branch_write', [
+      'typecheck',
+    ]),
+  ];
+}
+
+function plannedArtifact(
+  kind: PlannedArtifact['kind'],
+  path: string,
+  purpose: string,
+  mode_introduced: PlannedArtifact['mode_introduced'],
+  verification: string[],
+): PlannedArtifact {
+  return {
+    kind,
+    path,
+    purpose,
+    owner: 'pgas-new',
+    mode_introduced,
+    verification,
+  };
+}
+
+function uniquePlannedArtifacts(artifacts: PlannedArtifact[]): PlannedArtifact[] {
+  const seen = new Set<string>();
+  return artifacts.filter((artifact) => {
+    if (seen.has(artifact.path)) {
+      return false;
+    }
+    seen.add(artifact.path);
+    return true;
+  });
+}
+
+function renderMultiProgramServerSource(primarySlug: string, childSlugs: string[]): string {
+  const imports = [
+    `import { create${toPascalCase(primarySlug)}ProgramEntry } from './programs/${primarySlug}/registration.js';`,
+    ...childSlugs.map((slug) => `import { create${toPascalCase(slug)}ProgramEntry } from './programs/${slug}/registration.js';`),
+  ].join('\n');
+  const programs = [
+    `{ name: '${primarySlug}', entry: create${toPascalCase(primarySlug)}ProgramEntry() }`,
+    ...childSlugs.map((slug) => `{ name: '${slug}', entry: create${toPascalCase(slug)}ProgramEntry() }`),
+  ].join(',\n    ');
+  return `import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { resolveAuthorDrivers } from './author-driver.js';
+${imports}
+
+// Opt-in unified native-tools author driver (PGAS_AUTHOR_DRIVER=unified).
+// Default (env unset): \`drivers\` is undefined, no \`drivers\` key is passed,
+// and the engine boots its legacy JSON author path exactly as before.
+const drivers = resolveAuthorDrivers();
+
+const server = await createPgasServer({
+  programs: [
+    ${programs},
+  ],
+  devMode: process.env.PGAS_DEV_MODE === '1',
+  ...(drivers ? { drivers } : {}),
+});
+
+await server.start();
+`;
+}
+
 function templateForHandlerDirectoryArtifact(artifact: PlannedArtifact, slug: string): TemplateSpec | undefined {
-  if (artifact.path.endsWith(`/${slug}/handlers/index.ts`)) {
+  void slug;
+  if (artifact.path.endsWith('/handlers/index.ts')) {
     return spec('program/handlers-index.ts.tmpl', []);
   }
-  if (artifact.path.endsWith(`/${slug}/handlers/_resolver.ts`)) {
+  if (artifact.path.endsWith('/handlers/_resolver.ts')) {
     return spec('program/handlers-resolver.ts.tmpl', []);
   }
   return undefined;
@@ -713,21 +875,37 @@ function selectTokens(tokens: Record<string, string>, names: readonly string[]):
 
 function synthesizedSourcesFor(options: {
   synthesizedSpecYaml?: string;
+  synthesizedRegistrationTs?: string;
   synthesizedContractsTs?: string;
   synthesizedHandlersTs?: string;
   synthesizedHandlersIndexTs?: string;
   synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
   synthesizedSmokeTestTs?: string;
+  synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
 }): SynthesizedSources {
   return {
     specYaml: options.synthesizedSpecYaml,
+    registrationTs: options.synthesizedRegistrationTs,
     contractsTs: options.synthesizedContractsTs,
     handlersTs: options.synthesizedHandlersTs,
     handlersIndexTs: options.synthesizedHandlersIndexTs,
     stageSources: options.synthesizedStageSources,
     toolsTs: options.synthesizedToolsTs,
     smokeTestTs: options.synthesizedSmokeTestTs,
+    childArtifacts: (options.synthesizedChildArtifacts ?? []).map((child) => ({
+      slug: child.slug,
+      name: child.name,
+      specYaml: child.spec_yaml,
+      registrationTs: child.registration_ts,
+      contractsTs: child.contracts_ts,
+      handlersTs: child.handlers_ts,
+      handlersIndexTs: child.handlers_index_ts,
+      stageSources: child.stage_sources,
+      toolsTs: child.tools_ts,
+      smokeTestTs: child.smoke_test_ts,
+      childArtifacts: [],
+    })),
   };
 }
 

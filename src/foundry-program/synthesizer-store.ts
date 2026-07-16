@@ -116,12 +116,17 @@ export interface SynthesizedArtifact {
   spec_yaml: string;
   mode_names: string[];
   sha256: string;
+  registration_ts?: string;
   created_at: string;
   contracts_ts: string;
   handlers_ts: string;
   handlers_index_ts: string;
   tools_ts: string;
   smoke_test_ts: string;
+  child_artifacts?: Array<Omit<SynthesizedArtifact, 'created_at' | 'child_artifacts'> & {
+    slug: string;
+    name: string;
+  }>;
   stage_classification: unknown[];
   body_stage_slugs: string[];
   synthesis_context?: SynthesisContext;

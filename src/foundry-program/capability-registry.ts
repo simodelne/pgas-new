@@ -63,10 +63,10 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'delegation_child_session',
-    status: 'refuses',
-    evidence: 'no synthesis of child-session delegation wiring (spawn / payload_map / result routing / degrade).',
-    since_version: '3.22.0',
-    gap_note: 'uplift PR-5 (delegation emission). Engine target_spec / max_delegated_rounds / optional-degrade are public on 3.18.0.',
+    status: 'scaffolds_with_gap',
+    evidence: 'child-session delegation is synthesized with parent channel/action/projection/schema/reaction wiring, recursive worker-child synthesis, registration policies, and route-level hermetic smoke proof.',
+    since_version: '3.24.0',
+    gap_note: 'child-session delegation is synthesized + route-level hermetic-proven; live-drive (real provider) not yet proven — flips to synthesizes on a green PR-D4 delegation live-drive.',
   },
   {
     capability: 'delegation_research_agent',
@@ -254,7 +254,7 @@ function detectDelegationCapabilities(delegation: Record<string, unknown> | unde
         ? child.synthesize_child as Record<string, unknown>
         : undefined;
       const kind = typeof synthesizeChild?.kind === 'string' ? synthesizeChild.kind.toLowerCase() : '';
-      const capability = /research/.test(kind) || synthesizeChild
+      const capability = /research/.test(kind)
         ? 'delegation_research_agent'
         : 'delegation_child_session';
       demands.push({
