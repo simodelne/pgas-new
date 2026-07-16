@@ -516,7 +516,7 @@ export function synthesizeProgramSpecFromDomain(
       collectionLifecycle: completion.collection_lifecycle,
       confirmationLoops,
     }, reasoningContractsBySlug),
-    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle),
+    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
@@ -1343,6 +1343,22 @@ function uniqueGuardField(base: string, used: Set<string>): string {
   return field;
 }
 
+// Confirmation-loop stages advance via the aggregate guard (work.items_all_terminal),
+// NOT a generated complete_<stage> transition action — so the action_map + proceed_to
+// suppress those transition actions (see suppressedTransitionActionNames). The
+// handler/tool codegen MUST apply the same suppression, or the generated program emits
+// an orphaned complete_<stage> handler/tool and the engine's validateSpecWiring rejects
+// it at boot (HANDLER_NO_ACTION) — the exact defect the confirmation live-drive caught.
+function codegenStageActions(
+  transitionActions: TransitionAction[],
+  confirmationLoops: ConfirmationLoopDescriptor[],
+): TransitionAction[] {
+  const loopStageNames = new Set(confirmationLoops.map((loop) => loop.stage));
+  return transitionActions.filter(
+    (action) => action.name !== 'begin_work' && !loopStageNames.has(action.source),
+  );
+}
+
 function renderHandlersSource(
   transitionActions: TransitionAction[],
   options: {
@@ -1366,11 +1382,11 @@ function renderHandlersSource(
     };
   },`
     : '';
-  const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
+  const confirmationLoops = options.collectionLifecycle ? options.confirmationLoops : [];
+  const stageActions = codegenStageActions(transitionActions, confirmationLoops);
   const lifecycleTransitions = options.collectionLifecycle
     ? collectionLifecycleLlmTransitions(options.collectionLifecycle)
     : [];
-  const confirmationLoops = options.collectionLifecycle ? options.confirmationLoops : [];
   const usesIndexedCollectionLifecycle = options.includeReactionHandlers &&
     options.collectionLifecycle?.storage.representation === 'indexed_array';
   const usesConfirmationLoopHandlers = options.includeReactionHandlers && confirmationLoops.length > 0;
@@ -1998,8 +2014,9 @@ function renderToolsSource(
   transitionActions: TransitionAction[],
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
   collectionLifecycle?: CollectionLifecycleDescriptor,
+  confirmationLoops: ConfirmationLoopDescriptor[] = [],
 ): string {
-  const stageActions = transitionActions.filter((action) => action.name !== 'begin_work');
+  const stageActions = codegenStageActions(transitionActions, confirmationLoops);
   const lifecycleTransitions = collectionLifecycle
     ? collectionLifecycleLlmTransitions(collectionLifecycle)
     : [];
