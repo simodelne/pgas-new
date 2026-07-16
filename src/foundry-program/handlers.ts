@@ -139,10 +139,30 @@ function applyOptionalDelegationSentinel(payload: Record<string, unknown>): Reco
   return normalized === raw ? payload : { ...payload, delegation_json: normalized };
 }
 
+export function normalizeDocumentsSentinelValue(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === 'none' || trimmed === 'no' || trimmed === 'n/a' || trimmed === '') {
+    return '{"enabled":false}';
+  }
+  const bare = raw.trim();
+  if (!bare.startsWith('{') && !bare.startsWith('[') && /^[A-Za-z_$][\w$-]*\s*:/.test(bare)) {
+    return `{${bare}}`;
+  }
+  return raw;
+}
+
+function applyOptionalDocumentsSentinel(payload: Record<string, unknown>): Record<string, unknown> {
+  const raw = payload.documents_json;
+  if (typeof raw !== 'string') return payload;
+  const normalized = normalizeDocumentsSentinelValue(raw);
+  return normalized === raw ? payload : { ...payload, documents_json: normalized };
+}
+
 const intakeJsonPaths = [
   'intake.stages_json',
   'intake.transitions_json',
   'intake.delegation_json',
+  'intake.documents_json',
   'intake.completion_json',
 ] as const;
 
@@ -211,7 +231,11 @@ export const reactionHandlers: Map<string, ReactionHandler> = new Map([
       // the state value BEFORE parsing, or the raw "none" fails "expected a JSON
       // object" here and stalls the intake (observed live 2026-07-04, scenario A
       // 3/3 at record_q5_delegation). Non-sentinel malformed delegation still rejects.
-      const value = path === 'intake.delegation_json' ? normalizeDelegationSentinelValue(stored) : stored;
+      const value = path === 'intake.delegation_json'
+        ? normalizeDelegationSentinelValue(stored)
+        : path === 'intake.documents_json'
+          ? normalizeDocumentsSentinelValue(stored)
+          : stored;
       const expectedType = path === 'intake.stages_json' || path === 'intake.transitions_json' ? 'array' : 'object';
       const normalized = parseAndNormalizeJson(value, path);
       assertJsonTopLevelType(normalized.value, expectedType, path);
@@ -457,6 +481,16 @@ export const handlers: Record<string, ToolHandler> = {
       kind: 'pgas_new_q5_delegation_recorded',
       delegation: delegation.value,
       delegation_json: delegation.canonical,
+    };
+  },
+
+  async record_documents_descriptor(payload) {
+    const normalized = applyOptionalDocumentsSentinel(payload);
+    const documents = optionalJsonField(normalized, 'documents', 'documents_json', 'object');
+    return {
+      kind: 'pgas_new_documents_descriptor_recorded',
+      documents: documents.value,
+      documents_json: documents.canonical,
     };
   },
 

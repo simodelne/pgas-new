@@ -29,6 +29,17 @@ export interface DelegationDescriptor extends Record<string, unknown> {
   children?: DelegationChildDescriptor[];
 }
 
+export interface DocumentsDescriptor {
+  version?: number;
+  stage: string;
+  upload_types: string[];
+  extraction: 'self_contained' | 'host_connector';
+  result_path: string;
+  required: boolean;
+  fidelity_floor?: Record<string, unknown>;
+  connector_slug?: string;
+}
+
 export interface SynthesisContext {
   program_slug: string;
   program_name: string;
@@ -52,6 +63,7 @@ export interface SynthesisContext {
     guard_field?: string;
   }>;
   delegation: DelegationDescriptor;
+  documents?: DocumentsDescriptor;
   interaction?: {
     confirmation_loops: Array<{
       collection: string;

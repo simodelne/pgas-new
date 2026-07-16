@@ -10,6 +10,7 @@ const semanticTools = [
   'record_q3_stages',
   'record_q4_transitions',
   'record_q5_delegation',
+  'record_documents_descriptor',
   'record_q6_completion',
   'record_program_intake_finalize',
   'confirm_design',
