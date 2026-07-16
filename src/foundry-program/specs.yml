@@ -584,12 +584,18 @@ action_map:
           "{\"stages\":{\"scope_definition\":{\"kind\":\"llm-reasoning\",\"reasoning_per_turn\":true},\"fee_modelling\":{\"kind\":\"pure-compute\"},\"crm_lookup\":{\"kind\":\"external-adapter\"}}}"
         - Legacy direct per-stage kind control is still accepted:
           "{\"scope_definition\":{\"kind\":\"llm-reasoning\",\"target\":\"define_scope\"},\"fee_modelling\":{\"kind\":\"pure-compute\",\"target\":\"compute_fee_model\"}}"
+        - Optional delegation children descriptor, file-suppliable for tests,
+          alongside the per-stage "stages" key:
+          "{\"stages\":{\"dispatch_research\":{\"kind\":\"llm-reasoning\",\"reasoning_per_turn\":true}},\"children\":[{\"id\":\"research\",\"stage\":\"dispatch_research\",\"synthesize_child\":{\"kind\":\"research_agent\",\"purpose\":\"Research the intake topic and return concise findings.\",\"result_fields\":{\"findings\":\"string\",\"confidence\":\"string\"}},\"payload_map\":{\"request.topic\":\"intake.summary\",\"domain_context.original_request\":\"inputs.initial_user_text\"},\"result_path\":\"dispatch_research.delegation.research.result\",\"max_delegated_rounds\":12,\"round_timeout_ms\":120000,\"optional\":true}]}"
 
         Use kind when the user explicitly says a stage is deterministic,
         LLM reasoning, or an external adapter. Valid kind values include
         llm-reasoning, pure-compute, and external-adapter. Use
         reasoning_per_turn=true only when a stage must run agent reasoning on
         each turn.
+        For children, v1 accepts exactly one static target_spec child or one
+        synthesize_child child, requires optional=true (degrade-only), and does
+        not synthesize fan_out, dynamic_target_arg, or delegation_mode=continue.
 
         Do NOT HTML-escape the string. Use raw " characters, not &quot;.
 

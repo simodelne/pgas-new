@@ -7,8 +7,8 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
-import { assertSynthesizableCapabilities } from './capability-registry.js';
+import type { DelegationDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import { CapabilityRefusalError, assertSynthesizableCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
@@ -56,6 +56,20 @@ interface Completion {
 
 interface Interaction {
   confirmation_loops: ConfirmationLoopDescriptor[];
+}
+
+export interface DelegationChildrenValidationContext {
+  programSlug: string;
+  programName: string;
+  stages: Array<{
+    slug: string;
+    is_bootstrap?: boolean;
+    is_terminal?: boolean;
+    domain_spec?: StageDomainSpec;
+  }>;
+  actionNames: Iterable<string>;
+  channelNames: Iterable<string>;
+  schemaPaths: Iterable<string>;
 }
 
 interface CollectionLifecycleDescriptor {
@@ -209,11 +223,25 @@ export function synthesizeProgramSpecFromDomain(
   const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
-  const delegation = parseJsonDomainField<Record<string, unknown>>(domain, 'intake.delegation_json');
+  const delegation = parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json');
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
   const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
   const confirmationLoops = interaction?.confirmation_loops ?? [];
+
+  if (delegation.children !== undefined) {
+    assertStages(stages);
+    assertTransitions(transitions);
+    assertCompletion(completion);
+    assertDelegationChildrenDescriptor(delegation, {
+      programSlug: slug,
+      programName: name,
+      stages,
+      actionNames: collectGeneratedActionNamesForDelegationValidation(transitions, completion, stages[0]?.slug ?? ''),
+      channelNames: collectGeneratedChannelNamesForDelegationValidation(entryChannel),
+      schemaPaths: collectParentSchemaPathsForDelegationValidation(stages, entryChannel, initialEntryPath, transitions, completion),
+    });
+  }
 
   // #166 capability gate (uplift PR-1): safe-stop rather than silently emit an
   // inadequate linear scaffold when the program demands synthesis capabilities the
@@ -4318,6 +4346,253 @@ function assertConfirmationLoopDescriptors(
     if (loopIndex === undefined || sourceIndex >= loopIndex) {
       throw new Error('confirmation_loop seed.source_stage must precede the confirmation_loop stage');
     }
+  }
+}
+
+export function assertDelegationChildrenDescriptor(
+  delegation: Record<string, unknown>,
+  context: DelegationChildrenValidationContext,
+): void {
+  const childrenRaw = delegation.children;
+  if (childrenRaw === undefined) {
+    return;
+  }
+  const children = requiredArray(childrenRaw, 'delegation.children');
+  if (children.length !== 1) {
+    throw new Error('delegation.children must declare exactly one child');
+  }
+  const child = requiredRecord(children[0], 'delegation.children[0]');
+  assertDelegationV1Scope(delegation, child);
+
+  const id = requiredString(child.id, 'delegation.children[0].id');
+  if (!/^[a-z][a-z0-9_]*$/u.test(id)) {
+    throw new Error(`delegation.children[0].id must be a slug-safe identifier; got ${id}`);
+  }
+  const actionNames = new Set(context.actionNames);
+  const requestAction = `request_${id}`;
+  if (actionNames.has(requestAction)) {
+    throw new Error(`delegation child ${requestAction} action collides with generated action set`);
+  }
+  const channelNames = new Set(context.channelNames);
+  const callChannel = `${id}_call`;
+  if (channelNames.has(callChannel)) {
+    throw new Error(`delegation child ${callChannel} channel collides with generated channel set`);
+  }
+
+  const stage = requiredString(child.stage, 'delegation.children[0].stage');
+  const stageRecord = context.stages.find((candidate) => candidate.slug === stage);
+  if (!stageRecord || stageRecord.is_bootstrap === true || stageRecord.is_terminal === true) {
+    throw new Error(`delegation.children[0].stage must reference a declared non-bootstrap non-terminal stage; got ${stage}`);
+  }
+
+  const hasTargetSpec = child.target_spec !== undefined;
+  const hasSynthesizeChild = child.synthesize_child !== undefined;
+  if (hasTargetSpec === hasSynthesizeChild) {
+    throw new Error('delegation.children[0] must declare exactly one of target_spec or synthesize_child');
+  }
+
+  if (hasTargetSpec) {
+    const targetSpec = requiredString(child.target_spec, 'delegation.children[0].target_spec');
+    const normalizedTarget = normalizeProgramNameForSelfTarget(targetSpec);
+    if (
+      normalizedTarget === normalizeProgramNameForSelfTarget(context.programSlug) ||
+      normalizedTarget === normalizeProgramNameForSelfTarget(context.programName)
+    ) {
+      throw new Error('delegation.children[0].target_spec must not reference the parent program');
+    }
+  }
+
+  if (hasSynthesizeChild) {
+    const synthesizeChild = requiredRecord(child.synthesize_child, 'delegation.children[0].synthesize_child');
+    const kind = requiredString(synthesizeChild.kind, 'delegation.children[0].synthesize_child.kind');
+    if (kind !== 'research_agent' && kind !== 'worker') {
+      throw new Error(`delegation.children[0].synthesize_child.kind must be research_agent or worker; got ${kind}`);
+    }
+    requiredString(synthesizeChild.purpose, 'delegation.children[0].synthesize_child.purpose');
+    const resultFields = requiredRecord(synthesizeChild.result_fields, 'delegation.children[0].synthesize_child.result_fields');
+    if (Object.keys(resultFields).length === 0) {
+      throw new Error('delegation.children[0].synthesize_child.result_fields must declare at least one field');
+    }
+    for (const [field, type] of Object.entries(resultFields)) {
+      if (!/^[a-z][a-z0-9_]*$/u.test(field)) {
+        throw new Error(`delegation.children[0].synthesize_child.result_fields key must be slug-safe; got ${field}`);
+      }
+      requiredString(type, `delegation.children[0].synthesize_child.result_fields.${field}`);
+    }
+    const childSlug = typeof synthesizeChild.slug === 'string' && synthesizeChild.slug.trim().length > 0
+      ? synthesizeChild.slug
+      : id;
+    if (normalizeProgramNameForSelfTarget(childSlug) === normalizeProgramNameForSelfTarget(context.programSlug)) {
+      throw new Error('delegation.children[0].synthesized child slug must not match the parent program slug');
+    }
+  }
+
+  const payloadMap = requiredRecord(child.payload_map, 'delegation.children[0].payload_map');
+  const schemaPaths = new Set(context.schemaPaths);
+  for (const [target, source] of Object.entries(payloadMap)) {
+    const targetPath = requiredString(target, 'delegation.children[0].payload_map target');
+    if (!targetPath.startsWith('request.') && !targetPath.startsWith('domain_context.')) {
+      throw new Error(`delegation.children[0].payload_map target ${targetPath} must start with request. or domain_context.`);
+    }
+    const sourcePath = requiredString(source, `delegation.children[0].payload_map.${targetPath}`);
+    if (!delegationSchemaPathDeclared(sourcePath, schemaPaths)) {
+      throw new Error(`delegation.children[0].payload_map source ${sourcePath} must be declared in the parent schema`);
+    }
+  }
+
+  const resultPath = requiredString(child.result_path, 'delegation.children[0].result_path');
+  if (!resultPath.startsWith(`${stage}.`)) {
+    throw new Error(`delegation.children[0].result_path must be under ${stage}.`);
+  }
+
+  const maxDelegatedRounds = child.max_delegated_rounds;
+  if (
+    typeof maxDelegatedRounds !== 'number' ||
+    !Number.isInteger(maxDelegatedRounds) ||
+    maxDelegatedRounds <= 0 ||
+    maxDelegatedRounds > 80
+  ) {
+    throw new Error('delegation.children[0].max_delegated_rounds must be a positive integer <= 80');
+  }
+
+  if (child.round_timeout_ms !== undefined) {
+    const timeout = child.round_timeout_ms;
+    if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout <= 0) {
+      throw new Error('delegation.children[0].round_timeout_ms must be a positive integer when present');
+    }
+  }
+}
+
+function assertDelegationV1Scope(
+  delegation: Record<string, unknown>,
+  child: Record<string, unknown>,
+): void {
+  const refusals: Array<{ capability: string; evidence: string }> = [];
+  const note = 'v1 delegation is single static/synthesized child, degrade-only (optional:true); fan-out / dynamic targeting / continue-mode / strict delegation are not yet synthesizable';
+  const add = (capability: string, reason: string): void => {
+    refusals.push({
+      capability,
+      evidence: `${note} — ${capability} stays refuses (${reason})`,
+    });
+  };
+  if (delegation.fan_out !== undefined || child.fan_out !== undefined) {
+    add('delegation_research_agent', 'fan_out');
+  }
+  if (delegation.dynamic_target_arg !== undefined || child.dynamic_target_arg !== undefined) {
+    add('delegation_child_session', 'dynamic_target_arg');
+  }
+  const delegationMode = typeof child.delegation_mode === 'string'
+    ? child.delegation_mode
+    : typeof delegation.delegation_mode === 'string'
+      ? delegation.delegation_mode
+      : '';
+  if (delegationMode.toLowerCase() === 'continue') {
+    add('delegation_child_session', 'delegation_mode: continue');
+  }
+  if (child.optional !== true) {
+    add('delegation_child_session', 'strict delegation');
+  }
+  if (refusals.length > 0) {
+    throw new CapabilityRefusalError(refusals);
+  }
+}
+
+function normalizeProgramNameForSelfTarget(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/gu, '_').replace(/^_+|_+$/gu, '');
+}
+
+function delegationSchemaPathDeclared(path: string, schemaPaths: ReadonlySet<string>): boolean {
+  if (schemaPaths.has(path)) {
+    return true;
+  }
+  return [...schemaPaths].some((schemaPath) => {
+    if (!schemaPath.includes('*')) {
+      return false;
+    }
+    const escaped = schemaPath
+      .split('*')
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+      .join('[^.]+');
+    return new RegExp(`^${escaped}$`, 'u').test(path);
+  });
+}
+
+function collectGeneratedActionNamesForDelegationValidation(
+  transitions: IntakeTransition[],
+  completion: Completion,
+  firstMode: string,
+): Set<string> {
+  const actionNames = new Set(CONTROL_PLANE_ACTIONS);
+  for (const action of planTransitionActions(transitions, completion, firstMode)) {
+    actionNames.add(action.name);
+  }
+  return actionNames;
+}
+
+function collectGeneratedChannelNamesForDelegationValidation(entryChannel: string): Set<string> {
+  return new Set([
+    entryChannel,
+    USER_CONFIRMATION_CHANNEL,
+    'system_mode_entry',
+    'widget_output',
+    'stage_output',
+    COLLECTION_LIFECYCLE_EVENT_CHANNEL,
+  ]);
+}
+
+function collectParentSchemaPathsForDelegationValidation(
+  stages: Stage[],
+  entryChannel: string,
+  initialEntryPath: string,
+  transitions: IntakeTransition[],
+  completion: Completion,
+): Set<string> {
+  const schemaPaths = new Set<string>([
+    `inputs.${entryChannel}`,
+    initialEntryPath,
+  ]);
+  for (const transition of transitions) {
+    const guardField = guardFieldForTransition(transition, completion);
+    if (guardField) {
+      schemaPaths.add(guardField);
+    }
+  }
+  for (const stage of stages) {
+    if (stage.domain_spec) {
+      for (const readPath of stage.domain_spec.reads) {
+        schemaPaths.add(readPath);
+      }
+      collectDomainSpecProducedPaths(stage.slug, stage.domain_spec.produces, schemaPaths);
+    }
+    if (stage.is_terminal === true) {
+      continue;
+    }
+    schemaPaths.add(`${stage.slug}.result_json`);
+    schemaPaths.add(`${stage.slug}.items_json`);
+    schemaPaths.add(`${stage.slug}.output`);
+    schemaPaths.add(`${stage.slug}.output.result_json`);
+    schemaPaths.add(`${stage.slug}.output.items_json`);
+    schemaPaths.add(`${stage.slug}.output.digest`);
+  }
+  return schemaPaths;
+}
+
+function collectDomainSpecProducedPaths(
+  stageSlug: string,
+  produces: Record<string, unknown>,
+  schemaPaths: Set<string>,
+): void {
+  const resultJson = produces.result_json;
+  if (resultJson && typeof resultJson === 'object' && !Array.isArray(resultJson)) {
+    for (const field of Object.keys(resultJson)) {
+      schemaPaths.add(`${stageSlug}.${field}`);
+      schemaPaths.add(`${stageSlug}.result.${field}`);
+      schemaPaths.add(`${stageSlug}.output.result_json.${field}`);
+    }
+  }
+  if (Array.isArray(produces.items_json)) {
+    schemaPaths.add(`${stageSlug}.items_json`);
+    schemaPaths.add(`${stageSlug}.output.items_json`);
   }
 }
 
