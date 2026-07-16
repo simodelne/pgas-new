@@ -57,10 +57,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'per_item_confirmation',
-    status: 'scaffolds_with_gap',
-    evidence: 'confirmation_loop descriptors synthesize decision_targeting + confirmation_pairing + reaction-owned per-item status enforcement on indexed_array collections; emission is unit-proven (generated enforce-reaction behavior: approve/revise/skip, one-proposed-at-a-time demotion + violation, aggregate flip) and engine-spec-valid (loadSpecWithPatterns).',
+    status: 'synthesizes',
+    evidence: 'confirmation_loop descriptors synthesize a seeded indexed_array collection (from an upstream llm-reasoning stage), decision_targeting + confirmation_pairing, and AfterIngestion reaction-owned per-item status enforcement (approve/request_revision/reject → accepted/proposed/skipped, one-proposed-at-a-time demotion, aggregate flip). PROVEN end-to-end by the choreography live-drive hard gate against a real provider (qwen36-27b): the generated program booted on createPgasServer, planned + proposed items, applied scripted decisions through the real route, and reached complete — provider_hits=7, decisions_applied=3, proposed_overlap_max=1, loop_engaged=true, both items accepted, all_terminal=true. The verdict is fail-closed (PR-5b), so a stall cannot read green; this is live-proven, not mock.',
     since_version: '3.23.0',
-    gap_note: 'uplift PR-4 (choreography live-drive v2): emission is NOT yet proven end-to-end by the live-drive hard gate with a real provider making per-item decisions. Per this registry\'s own bar (synthesizes = live-drive-proven, not mock-green), it stays scaffolds_with_gap until PR-4 boots a generated confirmation-loop program on the engine and asserts the decision table + one-proposed-at-a-time invariant live.',
   },
   {
     capability: 'delegation_child_session',
