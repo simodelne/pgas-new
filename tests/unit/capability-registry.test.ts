@@ -39,7 +39,10 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // Delegation live-drive green on qwen (real child session ran + returned, parent complete,
     // fail-closed delegation_engaged verdict all-green) — so synthesizes.
     expect(capabilityStatus('delegation_child_session')).toBe('synthesizes');
-    expect(capabilityStatus('delegation_research_agent')).toBe('scaffolds_with_gap');
+    // Self-contained research-agent delegation live-drive green on qwen (research child ran +
+    // returned, parent complete, fail-closed verdict all-green) — so synthesizes. The backed
+    // variant declares a per-program host-connector gap, not a registry-level refusal.
+    expect(capabilityStatus('delegation_research_agent')).toBe('synthesizes');
     for (const cap of [
       'document_upload_intake',
       'rich_frontend',
