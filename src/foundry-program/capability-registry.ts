@@ -63,10 +63,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'delegation_child_session',
-    status: 'scaffolds_with_gap',
-    evidence: 'child-session delegation is synthesized with parent channel/action/projection/schema/reaction wiring, recursive worker-child synthesis, registration policies, and route-level hermetic smoke proof.',
+    status: 'synthesizes',
+    evidence: 'child-session delegation is synthesized (parent channel/action/projection/schema + AfterRound settle reaction, recursive worker-child synthesis, delegationPolicy/inputEnrichment + child delegationResultPolicy, two-program server.ts) and PROVEN end-to-end by the delegation live-drive against a real provider (qwen36-27b): the synthesized parent booted on createPgasServer, dispatched a real Service child that ran 2 provider rounds and returned a genuine result echoing the seeded topic, the AfterRound reaction settled, and the parent reached complete. delegation_engaged verdict all-green (result_complete, distinct child session, child_rounds>=1, settled, parent complete, provider_hits>=parent+child, no stub markers) — fail-closed, so a stall/mock cannot read green.',
     since_version: '3.24.0',
-    gap_note: 'child-session delegation is synthesized + route-level hermetic-proven; live-drive (real provider) not yet proven — flips to synthesizes on a green PR-D4 delegation live-drive.',
   },
   {
     capability: 'delegation_research_agent',

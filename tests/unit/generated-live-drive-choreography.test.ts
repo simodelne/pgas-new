@@ -190,6 +190,32 @@ describe('generated delegation live-drive verdict helpers', () => {
     expect(verdict.notes).toEqual([]);
   });
 
+  it('excludes ONLY the delegation host stage items_json from the stub scan (qwen-drive false positive), still counts real stubs', () => {
+    const base = {
+      report: delegationReport({ result_status: 'complete', child_session_id: 'child-1', child_rounds: 2, settled: true, degraded: false }),
+      parentSessionId: 'parent-1',
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 3,
+      parentProviderHitMinimum: 1,
+      hostStage: 'dispatch_research',
+    };
+    // host stage's empty items_json is a legitimate delegation-stage output, not a stub -> engaged
+    const engaged = assessDelegationEngagement({
+      ...base,
+      stubFindings: ['dispatch_research.items_json: empty_array'],
+    });
+    expect(engaged.no_stub_markers).toBe(true);
+    expect(engaged.delegation_engaged).toBe(true);
+    // a REAL stub on another path is still counted -> fail-closed
+    const stubbed = assessDelegationEngagement({
+      ...base,
+      stubFindings: ['dispatch_research.items_json: empty_array', 'other_stage.result_json: empty_object'],
+    });
+    expect(stubbed.no_stub_markers).toBe(false);
+    expect(stubbed.delegation_engaged).toBe(false);
+  });
+
   it('fails closed when no landed delegation result exists', () => {
     const verdict = assessDelegationEngagement({
       report: null,
