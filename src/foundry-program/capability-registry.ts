@@ -69,10 +69,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'delegation_research_agent',
-    status: 'refuses',
-    evidence: 'no synthesis of a research-agent child pattern (fan-out with caps, timeout→degrade).',
-    since_version: '3.22.0',
-    gap_note: 'uplift PR-6 (research-agent child synthesis), gated on the default-delegation-resolution spike.',
+    status: 'synthesizes',
+    evidence: "self-contained research-agent child (receive → research[llm-reasoning, reasoning contract from result_fields] → complete) is synthesized on the delegation machinery and PROVEN end-to-end by the delegation live-drive against a real provider (qwen36-27b): the parent dispatched a real Service research child that ran 2 provider rounds and returned a genuine summary echoing the seeded topic, settled, and the parent reached complete. delegation_engaged verdict all-green (provider_hits=14, fail-closed — a stall/mock cannot read green). The BACKED variant (research_backend: host_connector) synthesizes the child + emits ONLY a typed host-connector contract + fixture mock + a per-program capability_gaps entry — the research backend is never foundry code (scope directive).",
+    since_version: '3.24.0',
   },
   {
     capability: 'document_upload_intake',

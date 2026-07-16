@@ -64,6 +64,7 @@ export interface ArtifactPlan {
 export interface GeneratedArtifactPlanOptions {
   stageSlugs?: string[];
   includeSmokeTest?: boolean;
+  capabilityGaps?: readonly unknown[];
   requestedArtifactPaths?: string[];
 }
 
@@ -87,6 +88,11 @@ export function createStandaloneArtifactPlan(
       artifact('metadata', `.pgas/pgas-new/${slug}/artifacts.json`, 'Record generated artifacts as first-class outputs.', 'scaffold_plan', [
         'artifact-plan',
       ]),
+      ...((options.capabilityGaps?.length ?? 0) > 0
+        ? [artifact('metadata', 'README.md', 'Document generated host connector gaps and handoff contracts.', 'scaffold_plan', [
+            'artifact-plan',
+          ])]
+        : []),
       artifact('package', 'package.json', 'Define the standalone TypeScript/Node PGAS consumer package.', 'branch_write', [
         'npm-install',
         'typecheck',

@@ -112,13 +112,18 @@ function classifyStage(
   const formulaicStage = hasAny(stageScopedText, COMPUTE_TERMS);
 
   if (explicitArchetype === 'external-adapter' || (!explicitArchetype && (hasAny(externalStageText, EXTERNAL_TERMS) || hasExternalDelegation(stageDelegation)))) {
+    const explicitGap = explicitDelegationIntegrationGap(stageDelegation);
     return {
       slug,
       archetype: 'external-adapter',
       adapter_kind: 'in_memory_mock',
+      ...(explicitGap ? {
+        integration_gap: true,
+        audit_note: explicitGap,
+      } : {}),
       rationale: explicitArchetype === 'external-adapter'
-        ? `external adapter: ${slug} was explicitly marked as an external adapter stage in Q5 delegation.`
-        : `external adapter: ${slug} references an integration/service boundary, so synthesis emits an in-memory mock.`,
+        ? `external adapter: ${slug} was explicitly marked as an external adapter stage in Q5 delegation.${explicitGap ? ' Host connector implementation is required outside foundry code.' : ''}`
+        : `external adapter: ${slug} references an integration/service boundary, so synthesis emits an in-memory mock.${explicitGap ? ' Host connector implementation is required outside foundry code.' : ''}`,
     };
   }
 
@@ -166,6 +171,18 @@ function explicitDelegationArchetype(value: unknown): StageArchetype | undefined
   if (['pure-compute', 'pure_compute', 'compute', 'deterministic'].includes(explicit)) return 'pure-compute';
   if (['external-adapter', 'external_adapter', 'adapter', 'integration'].includes(explicit)) return 'external-adapter';
   if (record.reasoning_per_turn === true) return 'llm-reasoning';
+  return undefined;
+}
+
+function explicitDelegationIntegrationGap(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.integration_gap === true || record.host_required === true || record.research_backend === 'host_connector') {
+    const connector = typeof record.connector_slug === 'string' && record.connector_slug.trim().length > 0
+      ? record.connector_slug.trim()
+      : 'research';
+    return `research backend is host-required — implement the ${connector} connector`;
+  }
   return undefined;
 }
 

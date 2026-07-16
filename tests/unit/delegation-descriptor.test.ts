@@ -82,6 +82,22 @@ function validWorkerDelegation(): Record<string, unknown> {
   };
 }
 
+function withSynthesizeChild(patch: Record<string, unknown>): Record<string, unknown> {
+  const child = validChild();
+  return {
+    ...validDelegation(),
+    children: [
+      {
+        ...child,
+        synthesize_child: {
+          ...(child.synthesize_child as Record<string, unknown>),
+          ...patch,
+        },
+      },
+    ],
+  };
+}
+
 function expectValidationThrow(delegation: Record<string, unknown>, pattern: RegExp): void {
   expect(() => assertDelegationChildrenDescriptor(delegation, validationContext)).toThrow(pattern);
 }
@@ -103,6 +119,19 @@ function expectCapabilityRefusal(delegation: Record<string, unknown>, capability
 describe('delegation children descriptor validation', () => {
   it('accepts a single static synthesized child descriptor', () => {
     expect(() => assertDelegationChildrenDescriptor(validDelegation(), validationContext)).not.toThrow();
+  });
+
+  it('accepts research-agent backend defaults and rejects unknown backend values', () => {
+    expect(() =>
+      assertDelegationChildrenDescriptor(withSynthesizeChild({ research_backend: 'self_contained' }), validationContext),
+    ).not.toThrow();
+    expect(() =>
+      assertDelegationChildrenDescriptor(withSynthesizeChild({ research_backend: 'host_connector' }), validationContext),
+    ).not.toThrow();
+    expectValidationThrow(
+      withSynthesizeChild({ research_backend: 'web_scraper' }),
+      /synthesize_child\.research_backend must be self_contained or host_connector/u,
+    );
   });
 
   it('ignores delegation descriptors without children', () => {
@@ -303,13 +332,61 @@ describe('delegation children descriptor synthesis gate', () => {
     expect(childArtifacts?.[0]?.spec_yaml).toContain('from_state: inputs.request.topic');
   });
 
-  it('continues to refuse research-agent child synthesis until PR-D5', () => {
-    expect(() =>
-      synthesizeProgramSpecFromDomain({
-        ...linearDomain,
-        'intake.delegation_json': JSON.stringify(validDelegation()),
+  it('synthesizes self-contained research-agent child artifacts', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      ...linearDomain,
+      'intake.delegation_json': JSON.stringify(validDelegation()),
+    });
+    const parsed = load(artifact.spec_yaml) as ParsedDelegationSpec;
+
+    expect(parsed.channels.research_call.target_spec).toBe('research');
+    expect(artifact.smoke_test_ts).toContain('generated delegation smoke');
+    expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
+
+    const childArtifacts = (artifact as SynthesizedSpec & { child_artifacts?: Array<SynthesizedSpec & { slug: string; name: string }> }).child_artifacts;
+    expect(childArtifacts).toHaveLength(1);
+    const child = childArtifacts?.[0];
+    expect(child?.slug).toBe('research');
+    expect(child?.spec_yaml).toContain('receive:');
+    expect(child?.spec_yaml).toContain('research:');
+    expect(child?.spec_yaml).toContain('complete:');
+    expect(child?.spec_yaml).toContain('research.result.seeded_topic');
+    expect(child?.spec_yaml).toContain('from_state: inputs.request.topic');
+    expect(child?.contracts_ts).toContain('stageReasoningContracts');
+    expect(child?.contracts_ts).toContain('"stage": "research"');
+    expect(child?.registration_ts).toContain("path: 'research.result.seeded_topic'");
+  });
+
+  it('synthesizes host-backed research-agent child with connector contract and capability gap', () => {
+    const artifact = synthesizeProgramSpecFromDomain({
+      ...linearDomain,
+      'intake.delegation_json': JSON.stringify(withSynthesizeChild({ research_backend: 'host_connector' })),
+    });
+    const parent = artifact as SynthesizedSpec & {
+      child_artifacts?: Array<SynthesizedSpec & { slug: string; name: string; stage_sources?: Record<string, string> }>;
+      capability_gaps?: Array<Record<string, unknown>>;
+    };
+    const child = parent.child_artifacts?.[0];
+
+    expect(parent.capability_gaps).toEqual([
+      expect.objectContaining({
+        capability: 'delegation_research_agent',
+        stage: 'research',
+        connector_slug: 'research',
+        message: expect.stringContaining('research backend is host-required'),
       }),
-    ).toThrow(CapabilityRefusalError);
+    ]);
+    expect(child?.stage_classification).toContainEqual(expect.objectContaining({
+      slug: 'research',
+      archetype: 'external-adapter',
+      adapter_kind: 'in_memory_mock',
+      integration_gap: true,
+    }));
+    expect(child?.contracts_ts).toContain('export interface ResearchHostConnector');
+    expect(child?.contracts_ts).toContain('export const researchHostConnectorContract');
+    expect(child?.contracts_ts).toContain('export const capabilityGaps');
+    expect(child?.stage_sources?.research).toContain("adapter_kind: 'in_memory_mock'");
+    expect(child?.registration_ts).toContain("path: 'research.output.result_json'");
   });
 
   it('preserves synthesis for programs without children descriptors', () => {
