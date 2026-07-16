@@ -1,3 +1,26 @@
+export interface DelegationChildSynthesizeDescriptor {
+  kind: 'research_agent' | 'worker';
+  purpose: string;
+  result_fields: Record<string, string>;
+  slug?: string;
+}
+
+export interface DelegationChildDescriptor {
+  id: string;
+  stage: string;
+  target_spec?: string;
+  synthesize_child?: DelegationChildSynthesizeDescriptor;
+  payload_map: Record<string, string>;
+  result_path: string;
+  max_delegated_rounds: number;
+  round_timeout_ms?: number;
+  optional: true;
+}
+
+export interface DelegationDescriptor extends Record<string, unknown> {
+  children?: DelegationChildDescriptor[];
+}
+
 export interface SynthesisContext {
   program_slug: string;
   program_name: string;
@@ -20,7 +43,7 @@ export interface SynthesisContext {
     trigger?: string;
     guard_field?: string;
   }>;
-  delegation: Record<string, unknown>;
+  delegation: DelegationDescriptor;
   interaction?: {
     confirmation_loops: Array<{
       collection: string;

@@ -240,8 +240,32 @@ function collectStringLeaves(value: unknown, out: string[], depth = 0): void {
 function detectDelegationCapabilities(delegation: Record<string, unknown> | undefined): CapabilityDemand[] {
   if (!delegation || typeof delegation !== 'object') return [];
   const demands: CapabilityDemand[] = [];
+  if (Array.isArray(delegation.children)) {
+    for (const [index, rawChild] of delegation.children.entries()) {
+      if (!rawChild || typeof rawChild !== 'object' || Array.isArray(rawChild)) {
+        demands.push({
+          capability: 'delegation_child_session',
+          evidence: `delegation.children[${index}] declares a child-session delegation descriptor`,
+        });
+        continue;
+      }
+      const child = rawChild as Record<string, unknown>;
+      const synthesizeChild = child.synthesize_child && typeof child.synthesize_child === 'object' && !Array.isArray(child.synthesize_child)
+        ? child.synthesize_child as Record<string, unknown>
+        : undefined;
+      const kind = typeof synthesizeChild?.kind === 'string' ? synthesizeChild.kind.toLowerCase() : '';
+      const capability = /research/.test(kind) || synthesizeChild
+        ? 'delegation_research_agent'
+        : 'delegation_child_session';
+      demands.push({
+        capability,
+        evidence: `delegation.children[${index}] declares a ${capability === 'delegation_research_agent' ? 'research-agent' : 'child-session'} delegation descriptor`,
+      });
+    }
+  }
   for (const [slug, raw] of Object.entries(delegation)) {
     if (!raw || typeof raw !== 'object') continue;
+    if (slug === 'children' && Array.isArray(raw)) continue;
     const entry = raw as Record<string, unknown>;
     const kind = typeof entry.kind === 'string' ? entry.kind.toLowerCase() : '';
     const explicitResearch = /research/.test(kind) || 'synthesize_child' in entry;
