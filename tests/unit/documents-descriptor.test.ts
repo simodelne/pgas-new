@@ -141,7 +141,7 @@ describe('documents descriptor validation', () => {
 });
 
 describe('documents descriptor capability routing', () => {
-  it('detects documents_json as document_upload_intake while the registry scaffolds it with a live-drive gap', () => {
+  it('detects documents_json as document_upload_intake (registry: synthesizes, live-drive proven)', () => {
     const demands = detectRequestedCapabilities({
       documents: validDocuments(),
     });
@@ -149,7 +149,7 @@ describe('documents descriptor capability routing', () => {
       capability: 'document_upload_intake',
       evidence: 'intake.documents_json declares a documents upload descriptor',
     });
-    expect(capabilityStatus('document_upload_intake')).toBe('scaffolds_with_gap');
+    expect(capabilityStatus('document_upload_intake')).toBe('synthesizes');
   });
 
   it('keeps the existing upload/ingest text detector routed to document_upload_intake', () => {

@@ -43,7 +43,9 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // returned, parent complete, fail-closed verdict all-green) — so synthesizes. The backed
     // variant declares a per-program host-connector gap, not a registry-level refusal.
     expect(capabilityStatus('delegation_research_agent')).toBe('synthesizes');
-    expect(capabilityStatus('document_upload_intake')).toBe('scaffolds_with_gap');
+    // Self-contained text upload live-drive green on qwen (program read the uploaded file's
+    // exact bytes — char_count match + run-nonce sentinel present, fail-closed) — so synthesizes.
+    expect(capabilityStatus('document_upload_intake')).toBe('synthesizes');
     for (const cap of [
       'rich_frontend',
       'export_docx_trackchange',

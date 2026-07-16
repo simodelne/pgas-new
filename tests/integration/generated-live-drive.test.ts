@@ -550,7 +550,7 @@ describe('generated program live drive gate', () => {
 
   liveIt('drives a generated self-contained text upload intake through real file upload and provider stages', { timeout: LIVE_TIMEOUT_MS }, async () => {
     const env = requireLiveDriveEnv();
-    const { targetDir, uploadScript } = liveSynthesizeAndRenderUpload();
+    const { targetDir, uploadScript } = await liveSynthesizeAndRenderUpload(env);
 
     const drive = await driveGeneratedProgramLive({
       targetDir,
@@ -567,6 +567,7 @@ describe('generated program live drive gate', () => {
     emitEvidence(drive);
     process.stdout.write(`[live-drive] upload=${JSON.stringify(drive.upload)}\n`);
     process.stdout.write(`[live-drive] upload_verdict=${JSON.stringify(drive.upload_verdict)}\n`);
+    process.stdout.write(`[upload-diag] runner_exit=${drive.runner_exit_code} runner_error=${String(drive.runner_error)}\n[upload-diag] runner_output=${drive.runner_output_excerpt}\n`);
 
     expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
     expect(drive.upload_engaged).toBe(true);
@@ -664,12 +665,22 @@ async function liveSynthesizeAndRender(env: LiveDriveEnv): Promise<{ contractFie
   return { contractFields, targetDir };
 }
 
-function liveSynthesizeAndRenderUpload(): {
+async function liveSynthesizeAndRenderUpload(env: LiveDriveEnv): Promise<{
   targetDir: string;
   uploadScript: GeneratedLiveDriveUploadScript;
-} {
+}> {
+  const cacheDir = trackedTempRoot('pgas-new-live-drive-upload-cache-');
   const targetDir = trackedTempRoot('pgas-new-live-drive-upload-render-');
-  const artifact = artifactFromDomain(uploadDomain);
+  // The upload program's stages are pure-compute — they need LLM-generated bodies +
+  // contracts (which the product foundry produces at branch_write via domain synthesis).
+  // Mirror liveSynthesizeAndRender: run synthesizeDomainLogic so the rendered scaffold
+  // includes contracts.ts + stages/ (otherwise handlers.ts imports crash the runner at boot).
+  const artifact = await withRequiredLlmContract(() =>
+    synthesizeDomainLogic(artifactFromDomain(uploadDomain), {
+      cacheDir,
+      providerUrl: env.baseUrl,
+      model: env.model,
+    }));
   const documents = artifact.synthesis_context?.documents;
   expect(documents, 'upload documents descriptor').toBeTruthy();
 

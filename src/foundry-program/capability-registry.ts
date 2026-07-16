@@ -75,10 +75,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'document_upload_intake',
-    status: 'scaffolds_with_gap',
-    evidence: 'self-contained text/markdown upload-intake is synthesized and route-level hermetic-proven through createPgasServer + client.files.upload; live-drive proof is still pending.',
+    status: 'synthesizes',
+    evidence: 'self-contained text/markdown upload-intake is synthesized (document_upload channel + ingestion + zero-LLM-arg ingest_documents handler reading request.documents content_text + source_ready reaction + park/request + skip paths) and PROVEN end-to-end by the upload live-drive against a real provider (qwen36-27b): the generated program booted on createPgasServer, a per-run sentinel text file was uploaded via client.files.upload, and the program read its EXACT bytes — char_count matched the fixture byte-length exactly (260==260) and the run-nonce sentinel was present in work.source.full_text, source_ready true, parent complete. Fail-closed upload_engaged verdict all-green (extraction_exact + sentinel_present unfakeable by mock or LLM paraphrase). DOCX/PDF extraction remains a host connector (never foundry code); scanned/complex-layout permanently out of synthesis scope.',
     since_version: '3.25.0',
-    gap_note: 'self-contained text/markdown upload-intake is synthesized + route-level hermetic-proven; flips to synthesizes on a green upload live-drive (PR-U4). DOCX/PDF extraction is a host connector (PR-U5), backend never foundry code.',
   },
   {
     capability: 'rich_frontend',
