@@ -7,7 +7,7 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentsDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
@@ -71,6 +71,15 @@ export interface DelegationChildrenValidationContext {
   actionNames: Iterable<string>;
   channelNames: Iterable<string>;
   schemaPaths: Iterable<string>;
+}
+
+export interface DocumentsValidationContext {
+  stages: Array<{
+    slug: string;
+    is_bootstrap?: boolean;
+    is_terminal?: boolean;
+  }>;
+  delegation?: Record<string, unknown>;
 }
 
 interface CollectionLifecycleDescriptor {
@@ -217,6 +226,24 @@ const USER_DECISION_INGESTION_PATHS = [
   'inputs.user_decision.target_item_title',
   'inputs.user_decision.target_item_status',
 ];
+const DOCUMENT_UPLOAD_TYPES = new Map<string, string>([
+  ['text', 'text/plain'],
+  ['plain', 'text/plain'],
+  ['text/plain', 'text/plain'],
+  ['markdown', 'text/markdown'],
+  ['md', 'text/markdown'],
+  ['text/markdown', 'text/markdown'],
+  ['pdf', 'application/pdf'],
+  ['application/pdf', 'application/pdf'],
+  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  ['zip', 'application/zip'],
+  ['application/zip', 'application/zip'],
+  ['application/x-zip-compressed', 'application/x-zip-compressed'],
+]);
+const SELF_CONTAINED_DOCUMENT_UPLOAD_TYPES = new Set(['text/plain', 'text/markdown']);
+const DOCUMENT_SELF_CONTAINED_GAP_NOTE =
+  'DOCX/PDF extraction is a host connector — use extraction: host_connector (PR-U5); self-contained is text/markdown only';
 
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -235,6 +262,8 @@ export function synthesizeProgramSpecFromDomain(
   const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
   const delegation = parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json');
+  const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
+  const documents = normalizeDocumentsDescriptor(rawDocuments);
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
   const collectionLifecycle = normalizeCollectionLifecycleDescriptor(completion.collection_lifecycle);
   const interaction = normalizeInteractionDescriptor(optionalJsonDomainField(domain, 'intake.interaction_json'));
@@ -254,6 +283,10 @@ export function synthesizeProgramSpecFromDomain(
       schemaPaths: collectParentSchemaPathsForDelegationValidation(stages, entryChannel, initialEntryPath, transitions, completion),
     });
   }
+  if (rawDocuments !== undefined && documents !== undefined) {
+    assertStages(stages);
+    assertDocumentsDescriptor(documents, { stages, delegation });
+  }
 
   // #166 capability gate (uplift PR-1): safe-stop rather than silently emit an
   // inadequate linear scaffold when the program demands synthesis capabilities the
@@ -261,7 +294,7 @@ export function synthesizeProgramSpecFromDomain(
   // document upload, rich frontend, DOCX/track-changes). No detectors fire for
   // today's linear / external-adapter programs, so this is a no-op for them and
   // golden byte-identity is preserved.
-  assertSynthesizableCapabilities({ purpose, stages, delegation, completion });
+  assertSynthesizableCapabilities({ purpose, stages, delegation, documents, completion });
 
   assertStages(stages);
   assertTransitions(transitions);
@@ -601,6 +634,7 @@ export function synthesizeProgramSpecFromDomain(
       stages,
       transitions,
       delegation,
+      ...(documents ? { documents } : {}),
       ...(interaction ? { interaction } : {}),
       completion,
     },
@@ -631,6 +665,7 @@ export function resynthesizeWithReasoningContracts(
     'intake.stages_json': JSON.stringify(context.stages),
     'intake.transitions_json': JSON.stringify(context.transitions),
     'intake.delegation_json': JSON.stringify(context.delegation),
+    ...(context.documents ? { 'intake.documents_json': JSON.stringify(context.documents) } : {}),
     'intake.completion_json': JSON.stringify(context.completion),
     ...(context.interaction ? { 'intake.interaction_json': JSON.stringify(context.interaction) } : {}),
   }, { ...options, reasoningContracts: contracts });
@@ -5528,6 +5563,126 @@ function assertConfirmationLoopDescriptors(
   }
 }
 
+function normalizeDocumentsDescriptor(value: unknown): DocumentsDescriptor | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>).enabled === false) {
+    return undefined;
+  }
+  const descriptor = documentsDescriptorRecord(value);
+  const stage = requiredString(descriptor.stage, 'documents.stage');
+  const uploadTypes = normalizeDocumentUploadTypes(descriptor.upload_types);
+  const extraction = normalizeDocumentsExtraction(descriptor.extraction);
+  const resultPath = documentsResultPath(descriptor);
+  const required = descriptor.required === undefined
+    ? false
+    : requiredBoolean(descriptor.required, 'documents.required');
+  return {
+    ...optionalNumberField(descriptor, 'version', 'documents.version'),
+    stage,
+    upload_types: uploadTypes,
+    extraction,
+    result_path: resultPath,
+    required,
+    ...optionalRecordField(descriptor, 'fidelity_floor', 'documents.fidelity_floor'),
+    ...optionalStringField(descriptor, 'connector_slug', 'documents.connector_slug'),
+  };
+}
+
+export function assertDocumentsDescriptor(
+  documents: unknown,
+  context: DocumentsValidationContext,
+): void {
+  const descriptor = normalizeDocumentsDescriptorForAssertion(documents);
+  const stageRecord = context.stages.find((candidate) => candidate.slug === descriptor.stage);
+  if (!stageRecord || stageRecord.is_bootstrap === true || stageRecord.is_terminal === true) {
+    throw new Error(`documents.stage must reference a declared non-bootstrap non-terminal stage; got ${descriptor.stage}`);
+  }
+
+  const nonSelfContainedTypes = descriptor.upload_types.filter((uploadType) => !SELF_CONTAINED_DOCUMENT_UPLOAD_TYPES.has(uploadType));
+  if (descriptor.extraction === 'self_contained' && nonSelfContainedTypes.length > 0) {
+    throw new CapabilityRefusalError([{
+      capability: 'document_upload_intake',
+      evidence: DOCUMENT_SELF_CONTAINED_GAP_NOTE,
+    }]);
+  }
+
+  if (!descriptor.result_path.startsWith(`${descriptor.stage}.`)) {
+    throw new Error(`documents.result_path must be under ${descriptor.stage}.`);
+  }
+
+  const delegationChildren = Array.isArray(context.delegation?.children)
+    ? context.delegation.children
+    : [];
+  for (const [index, rawChild] of delegationChildren.entries()) {
+    if (!rawChild || typeof rawChild !== 'object' || Array.isArray(rawChild)) {
+      continue;
+    }
+    const childStage = (rawChild as Record<string, unknown>).stage;
+    if (childStage === descriptor.stage) {
+      throw new Error(`documents descriptor and delegation.children[${index}] must not share host stage ${descriptor.stage}`);
+    }
+  }
+}
+
+function normalizeDocumentsDescriptorForAssertion(documents: unknown): DocumentsDescriptor {
+  if (documents === undefined) {
+    throw new Error('documents descriptor is required');
+  }
+  const descriptor = normalizeDocumentsDescriptor(documents);
+  if (!descriptor) {
+    throw new Error('documents descriptor is required');
+  }
+  return descriptor;
+}
+
+function documentsDescriptorRecord(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      throw new Error('documents must declare exactly one descriptor');
+    }
+    return requiredRecord(value[0], 'documents[0]');
+  }
+  return requiredRecord(value, 'documents');
+}
+
+function normalizeDocumentUploadTypes(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('documents.upload_types must be a non-empty array');
+  }
+  return value.map((item, index) => {
+    const raw = requiredString(item, `documents.upload_types[${index}]`).trim().toLowerCase();
+    const normalized = DOCUMENT_UPLOAD_TYPES.get(raw);
+    if (!normalized) {
+      throw new Error(`documents.upload_types must be a subset of the engine upload allow-list; got ${raw}`);
+    }
+    return normalized;
+  });
+}
+
+function normalizeDocumentsExtraction(value: unknown): DocumentsDescriptor['extraction'] {
+  if (value === undefined) {
+    return 'self_contained';
+  }
+  const extraction = requiredString(value, 'documents.extraction');
+  if (extraction !== 'self_contained' && extraction !== 'host_connector') {
+    throw new Error(`documents.extraction must be self_contained or host_connector; got ${extraction}`);
+  }
+  return extraction;
+}
+
+function documentsResultPath(descriptor: Record<string, unknown>): string {
+  if (descriptor.result_path !== undefined) {
+    return requiredString(descriptor.result_path, 'documents.result_path');
+  }
+  const target = descriptor.target;
+  if (target && typeof target === 'object' && !Array.isArray(target)) {
+    return requiredString((target as Record<string, unknown>).root, 'documents.target.root');
+  }
+  throw new Error('documents.result_path is required');
+}
+
 export function assertDelegationChildrenDescriptor(
   delegation: Record<string, unknown>,
   context: DelegationChildrenValidationContext,
@@ -5884,6 +6039,30 @@ function optionalStringField(
     return {};
   }
   return { [key]: requiredString(value, label) };
+}
+
+function optionalNumberField(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): Record<string, number> {
+  const value = record[key];
+  if (value === undefined) {
+    return {};
+  }
+  return { [key]: requiredNumber(value, label) };
+}
+
+function optionalRecordField(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): Record<string, Record<string, unknown>> {
+  const value = record[key];
+  if (value === undefined) {
+    return {};
+  }
+  return { [key]: requiredRecord(value, label) };
 }
 
 function optionalStringProperty(

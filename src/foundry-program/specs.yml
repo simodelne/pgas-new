@@ -28,7 +28,7 @@ channels:
 
 modes:
   intake_intelligence:
-    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_q6_completion, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
+    vocabulary: [record_program_target, choose_design_path, apply_default_skeleton, ask_design_question, record_q1_purpose, record_q2_entry_channel, record_q3_stages, record_q4_transitions, record_q5_delegation, record_documents_descriptor, record_q6_completion, record_program_intake_finalize, confirm_design, reject_design_and_revise_q1, reject_design_and_revise_q2, reject_design_and_revise_q3, reject_design_and_revise_q4, reject_design_and_revise_q5, reject_design_and_revise_q6, record_user_note, pin_notebook_note, confirm_research_scope, record_user_requested_research, web_research, session_new, session_abort_current, session_status, session_history, session_resume, session_help]
     channels: [user_text, user_confirmation, system_mode_entry, widget_output]
     preconditions:
       record_program_target:
@@ -54,6 +54,10 @@ modes:
       record_q5_delegation:
         - { kind: FieldTruthy, path: intake.q4_recorded }
         - { kind: FieldFalsy, path: intake.q5_recorded }
+      record_documents_descriptor:
+        - { kind: FieldTruthy, path: intake.q5_recorded }
+        - { kind: FieldFalsy, path: intake.documents_recorded }
+        - { kind: FieldFalsy, path: intake.q6_recorded }
       record_q6_completion:
         - { kind: FieldTruthy, path: intake.q5_recorded }
         - { kind: FieldFalsy, path: intake.q6_recorded }
@@ -280,6 +284,8 @@ projection:
       - intake.q4_recorded
       - intake.delegation_json
       - intake.q5_recorded
+      - intake.documents_json
+      - intake.documents_recorded
       - intake.completion_json
       - intake.q6_recorded
       - intake.program_intake_finalized
@@ -387,6 +393,9 @@ prompts:
     4. If `choice = "design"`: ask Q1-Q6 by calling `ask_design_question`,
        recording each answer with its corresponding Q-action, then call
        `record_program_intake_finalize`.
+       If and only if the user explicitly needs uploaded document intake,
+       call `record_documents_descriptor` after Q5 and before Q6 with a
+       JSON-string `documents_json` descriptor.
     5. Finally call `confirm_design` to gate transition to repo_targeting.
     6. If the user_confirmation decision is `reject` and the instruction names
        Q1, Q2, Q3, Q4, Q5, or Q6, call the matching
@@ -604,6 +613,32 @@ action_map:
     mutations:
       - { op: MSet, path: intake.delegation_json, from_arg: delegation_json }
       - { op: MSet, path: intake.q5_recorded, value: true }
+    channel: widget_output
+  record_documents_descriptor:
+    description: "Optionally capture the documents upload descriptor after Q5 when the program needs document upload or ingestion."
+    arg_descriptions:
+      documents_json: |
+        Provide a JSON-encoded object. Use raw "none" only when the program
+        does not need uploaded documents; it is normalized to
+        "{\"enabled\":false}".
+
+        Valid example:
+        "{\"stage\":\"ingest_source\",\"upload_types\":[\"text/plain\",\"text/markdown\"],\"extraction\":\"self_contained\",\"result_path\":\"ingest_source.source\",\"required\":false,\"fidelity_floor\":{\"min_chars\":40}}"
+
+        Use upload_types from the engine allow-list: text/plain,
+        text/markdown, application/pdf,
+        application/vnd.openxmlformats-officedocument.wordprocessingml.document,
+        application/zip, or application/x-zip-compressed. self_contained
+        extraction is only valid for text/plain and text/markdown; binary
+        documents require extraction="host_connector" in a later uplift.
+
+        Do NOT HTML-escape the string. Use raw " characters, not &quot;.
+
+        The foundry accepts JSON5-style input as a fallback (unquoted keys,
+        bare identifiers), but emits canonical JSON in governed state.
+    mutations:
+      - { op: MSet, path: intake.documents_json, from_arg: documents_json }
+      - { op: MSet, path: intake.documents_recorded, value: true }
     channel: widget_output
   record_q6_completion:
     description: "Capture Q6 (completion criteria -- terminal stage and completion guard)."
@@ -937,11 +972,13 @@ reactions:
       - intake.q3_recorded
       - intake.q4_recorded
       - intake.q5_recorded
+      - intake.documents_recorded
       - intake.q6_recorded
     write_scope:
       - intake.stages_json
       - intake.transitions_json
       - intake.delegation_json
+      - intake.documents_json
       - intake.completion_json
   normalize_static_verification_status:
     event: AfterMutation
@@ -1010,6 +1047,8 @@ schema:
   intake.q4_recorded: boolean
   intake.delegation_json: string
   intake.q5_recorded: boolean
+  intake.documents_json: string
+  intake.documents_recorded: boolean
   intake.completion_json: string
   intake.q6_recorded: boolean
   intake.program_intake_finalized: boolean
@@ -1096,9 +1135,10 @@ guidance:
     - "Q3 Stages of work — distinct stages, named in order; these become the mode names. Default if skipped: ['start', 'working', 'complete']. If the user's answer contains rich stage objects with domain_spec, rules, invariants, or produces schemas, pass that exact rich object array as stages_json; do not simplify it to a string array."
     - "Q4 Decision points — branches, loops, bail-outs; these become extra transitions, optionally with guards. Default if skipped: no extra transitions."
     - "Q5 Delegation — does any stage delegate to a child session / another program, or need an explicit per-stage execution model? Default if skipped: 'none'. Use {\"stages\":{\"<slug>\":{\"kind\":\"llm-reasoning\"|\"pure-compute\"|\"external-adapter\",\"reasoning_per_turn\":true|false}}} only when the user gives explicit per-stage execution intent; otherwise keep the legacy no-delegation shapes like {}, {\"enabled\":false}, or none."
+    - "Optional Documents Descriptor — after Q5 and before Q6, call record_documents_descriptor only when the user explicitly needs uploaded document intake. Use a JSON-string object with stage, upload_types, extraction, result_path, and optional required/fidelity_floor. For no uploaded documents, skip this action or record 'none'."
     - "Q6 Completion criteria — how do you know the program is done? Default if skipped: terminal mode = last stage, guard = 'work.example_ready'."
     - "If the user replies 'skip' to any Q1-Q6 dimension, record the skip in program.skip_dimensions and use the dimension's default in the JSON-string scalar fields."
-    - "For Q3-Q6, the *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
+    - "For Q3-Q6 and documents_json, the *_json arguments must be JSON-string scalar fields, not nested arrays or objects."
     - "After intake is finalized via apply_default_skeleton OR record_program_intake_finalize, echo back the proposed mode list + transitions + target_dir as plain text (intent='confirm_design') and instruct the user to type /approve or /reject. Wait for the user_confirmation trigger."
     - "When you need user approval (e.g., before confirm_design or approve_artifact_plan), instruct the user to type /approve or /reject (with optional follow-up instruction). The REPL routes these to the user_confirmation channel with structured payload. Do NOT accept plain text replies as approvals."
     - "On user_confirmation with decision='approve', call confirm_design."

@@ -135,6 +135,8 @@ export interface CapabilityDetectionInput {
   readonly stages?: ReadonlyArray<object>;
   /** parsed intake.delegation_json */
   readonly delegation?: Record<string, unknown>;
+  /** parsed intake.documents_json */
+  readonly documents?: unknown;
   /** parsed intake.completion_json (its string leaves are scanned too) */
   readonly completion?: unknown;
   /** any additional free text (e.g. intake notes) to scan */
@@ -291,6 +293,18 @@ function detectDelegationCapabilities(delegation: Record<string, unknown> | unde
   return demands;
 }
 
+function detectDocumentsCapabilities(documents: unknown): CapabilityDemand[] {
+  if (documents === undefined) return [];
+  if (documents && typeof documents === 'object' && !Array.isArray(documents)) {
+    const record = documents as Record<string, unknown>;
+    if (record.enabled === false) return [];
+  }
+  return [{
+    capability: 'document_upload_intake',
+    evidence: 'intake.documents_json declares a documents upload descriptor',
+  }];
+}
+
 export function detectRequestedCapabilities(input: CapabilityDetectionInput): CapabilityDemand[] {
   // Scan ALL string leaves (deep) of purpose + stages (incl. nested domain_spec
   // rules/invariants) + completion + extra text — not just top-level fields.
@@ -321,6 +335,7 @@ export function detectRequestedCapabilities(input: CapabilityDetectionInput): Ca
     const match = detector.pattern.exec(haystack);
     if (match) add(detector.capability, `${detector.label} (matched "${match[0].slice(0, 60).trim()}")`);
   }
+  for (const demand of detectDocumentsCapabilities(input.documents)) add(demand.capability, demand.evidence);
   for (const demand of detectDelegationCapabilities(input.delegation)) add(demand.capability, demand.evidence);
   return [...found.values()];
 }
