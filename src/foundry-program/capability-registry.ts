@@ -75,10 +75,10 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'document_upload_intake',
-    status: 'refuses',
-    evidence: 'no synthesis of an upload/ingest channel or extraction artifact model.',
-    since_version: '3.22.0',
-    gap_note: 'uplift PR-7 (document ingest). Engine POST /sessions/:id/files + FileStore + request_file_upload are public on 3.18.0.',
+    status: 'scaffolds_with_gap',
+    evidence: 'self-contained text/markdown upload-intake is synthesized and route-level hermetic-proven through createPgasServer + client.files.upload; live-drive proof is still pending.',
+    since_version: '3.25.0',
+    gap_note: 'self-contained text/markdown upload-intake is synthesized + route-level hermetic-proven; flips to synthesizes on a green upload live-drive (PR-U4). DOCX/PDF extraction is a host connector (PR-U5), backend never foundry code.',
   },
   {
     capability: 'rich_frontend',

@@ -205,6 +205,13 @@ const PGAS_CHANNEL_ID_MAX_LENGTH = 64;
 const COLLECTION_LIFECYCLE_EVENT_CHANNEL = 'lifecycle_event';
 const COLLECTION_LIFECYCLE_EVENT_CLEAR_VALUE = '';
 const USER_CONFIRMATION_CHANNEL = 'user_confirmation';
+const DOCUMENT_UPLOAD_CHANNEL = 'document_upload';
+const DOCUMENT_INTAKE_ROOT = 'inputs.document_intake';
+const DOCUMENT_REQUEST_ACTION = 'request_documents';
+const DOCUMENT_INGEST_ACTION = 'ingest_documents';
+const DOCUMENT_SKIP_ACTION = 'complete_document_skip';
+const DOCUMENTS_RECEIVED_PATH = 'decisions.documents_received';
+const DOCUMENT_SKIP_STATUS = 'no_documents_available';
 const PROPOSE_ITEM_ACTION = 'propose_item';
 const CONTROL_PLANE_ACTIONS = [
   'record_user_note',
@@ -351,8 +358,17 @@ export function synthesizeProgramSpecFromDomain(
   assertCompletionTransition(transitions, completion);
   const terminalModeSet = new Set(terminalModes);
   const intermediateModes = modeNames.filter((modeName) => modeName !== firstMode && !terminalModeSet.has(modeName));
+  const documentsStageTargetsFinal = documents
+    ? transitions.some((transition) => transition.from === documents.stage && transition.to === completion.final_stage)
+    : false;
+  const effectiveCompletion = documents && documentsStageTargetsFinal
+    ? completionWithDocumentsReadyGuard(completion, documents)
+    : completion;
+  const effectiveTransitions = documents
+    ? transitionsWithDocumentsReadyGuard(transitions, documents)
+    : transitions;
   const transitionActions = decorateTransitionActions(
-    planTransitionActions(transitions, completion, firstMode),
+    planTransitionActions(effectiveTransitions, effectiveCompletion, firstMode),
     stageClassificationBySlug,
   );
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
@@ -410,6 +426,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentModeWiring(synthesizedModes, completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentModeWiring(synthesizedModes, confirmationLoops);
+  applyDocumentsModeWiring(synthesizedModes, documents);
   applyDelegationModeWiring(synthesizedModes, delegationChildren);
   spec.modes = synthesizedModes;
 
@@ -418,6 +435,7 @@ export function synthesizeProgramSpecFromDomain(
       .filter((action) => !suppressedTransitionActionNames.has(action.name))
       .map((action) => [action.name, action.target]),
   );
+  applyDocumentsProceedTo(recordField(spec, 'proceed_to'), documents, transitionActionsBySource);
 
   const startedField = `${firstMode}.started`;
   const guardFieldsByMode = guardFieldsBySourceMode(transitionActions);
@@ -465,6 +483,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleProjection(projection, completion.collection_lifecycle);
   }
   applyConfirmationLoopProjection(projection, confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsProjection(projection, documents, modeNames);
   applyDelegationProjection(projection, delegationChildren, modeNames);
   spec.projection = projection;
 
@@ -480,6 +499,7 @@ export function synthesizeProgramSpecFromDomain(
     prompts[modeName] = promptForStage(modeName, name, stageDomainSpecBySlug.get(modeName), reasoningContractsBySlug.get(modeName));
   }
   applyConfirmationLoopPrompts(prompts, confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsPromptsGuidance(prompts, documents);
   applyDelegationPrompts(prompts, delegationChildren);
   spec.prompts = prompts;
 
@@ -488,6 +508,7 @@ export function synthesizeProgramSpecFromDomain(
     system_mode_entry: ['inputs.mode_entry'],
   };
   applyConfirmationLoopIngestion(recordField(spec, 'ingestion'), confirmationLoops);
+  applyDocumentsIngestion(recordField(spec, 'ingestion'), documents);
 
   spec.reactions = {
     capture_initial_entry_input: {
@@ -501,6 +522,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleReactions(recordField(spec, 'reactions'), completion.collection_lifecycle);
   }
   applyConfirmationLoopReactions(recordField(spec, 'reactions'), confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsReactions(recordField(spec, 'reactions'), documents);
   applyDelegationReactions(recordField(spec, 'reactions'), delegationChildren);
 
   spec.channels = {
@@ -512,6 +534,7 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentChannel(recordField(spec, 'channels'), completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentChannel(recordField(spec, 'channels'), confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsChannel(recordField(spec, 'channels'), documents);
   applyDelegationChannel(recordField(spec, 'channels'), delegationChildren);
   applyControlPlaneEntryChannel(spec, entryChannel);
 
@@ -531,6 +554,8 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleIntentActions(actionMap, completion.collection_lifecycle);
   }
   applyConfirmationLoopIntentActions(actionMap, confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsActions(actionMap, documents);
+  applyDocumentsActionPreconditions(synthesizedModes, documents, transitionActionsBySource);
   applyDelegationActions(actionMap, delegationChildren);
   applyDelegationActionPreconditions(synthesizedModes, delegationChildren, transitionActionsBySource);
   applyConfirmationLoopPairing(spec, confirmationLoops);
@@ -576,10 +601,12 @@ export function synthesizeProgramSpecFromDomain(
     applyCollectionLifecycleSchema(schema, completion.collection_lifecycle);
   }
   applyConfirmationLoopSchema(schema, confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsSchema(schema, documents);
   applyDelegationSchema(schema, delegationChildren);
 
   spec.guidance = guidanceFor(intermediateModes, delegation, stageDomainSpecBySlug, reasoningContractsBySlug);
   applyConfirmationLoopGuidance(recordField(spec, 'guidance'), confirmationLoops, completion.collection_lifecycle);
+  applyDocumentsPromptsGuidance(recordField(spec, 'guidance'), documents);
   applyDelegationGuidance(recordField(spec, 'guidance'), delegationChildren);
 
   const specYaml = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
@@ -602,6 +629,7 @@ export function synthesizeProgramSpecFromDomain(
       collectionLifecycle: completion.collection_lifecycle,
       confirmationLoops,
       delegationChildren,
+      documents,
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
@@ -614,9 +642,10 @@ export function synthesizeProgramSpecFromDomain(
       collectionLifecycle: completion.collection_lifecycle,
       confirmationLoops,
       delegationChildren,
+      documents,
     }, reasoningContractsBySlug),
-    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops),
-    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren),
+    tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents),
+    smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
     ...(delegationChildren.length > 0 ? {
       registration_ts: renderRegistrationSource(toPascalCase(slug), {
@@ -1104,6 +1133,331 @@ function applyDelegationGuidance(
       `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
     ];
   }
+}
+
+function applyDocumentsChannel(
+  channels: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  channels[DOCUMENT_UPLOAD_CHANNEL] = { direction: 'In', sync: 'Async' };
+}
+
+function applyDocumentsIngestion(
+  ingestion: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  ingestion[DOCUMENT_UPLOAD_CHANNEL] = [DOCUMENT_INTAKE_ROOT];
+}
+
+function applyDocumentsSchema(
+  schema: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  const resultPath = documents.result_path;
+  schema[DOCUMENT_INTAKE_ROOT] = 'object';
+  schema[`${DOCUMENT_INTAKE_ROOT}.file_refs`] = 'array';
+  schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*`] = 'object';
+  schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*.fileId`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*.name`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*.mimeType`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.file_refs.*.size`] = 'number';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents`] = 'array';
+  schema[`${DOCUMENT_INTAKE_ROOT}.status`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.source`] = 'string';
+  schema[`${DOCUMENT_INTAKE_ROOT}.completed`] = 'boolean';
+  schema[`${DOCUMENT_INTAKE_ROOT}.documents_requested`] = 'boolean';
+  schema[DOCUMENTS_RECEIVED_PATH] = 'boolean';
+  schema[resultPath] = 'object';
+  schema[`${resultPath}.full_text`] = 'string';
+  schema[`${resultPath}.char_count`] = 'number';
+  schema[`${resultPath}.file_count`] = 'number';
+  schema[`${resultPath}.files_json`] = 'string';
+  schema[`${resultPath}.status`] = 'string';
+  schema[`${resultPath}.reason`] = 'string';
+  schema[documentsSourceReadyPath(documents)] = 'boolean';
+}
+
+function applyDocumentsActions(
+  actionMap: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  for (const actionName of [DOCUMENT_REQUEST_ACTION, DOCUMENT_INGEST_ACTION, ...(!documents.required ? [DOCUMENT_SKIP_ACTION] : [])]) {
+    if (Object.prototype.hasOwnProperty.call(actionMap, actionName)) {
+      throw new Error(`documents action collides with generated action_map: ${actionName}`);
+    }
+  }
+  actionMap[DOCUMENT_REQUEST_ACTION] = {
+    description: 'Ask the user to upload source text or markdown documents and park until document_upload arrives.',
+    mutations: [
+      { op: 'MSet', path: `${DOCUMENT_INTAKE_ROOT}.documents_requested`, value: true },
+    ],
+    channel: 'widget_output',
+    awaits_user_decision: { channel: DOCUMENT_UPLOAD_CHANNEL, intent: 'request_file_upload' },
+  };
+  actionMap[DOCUMENT_INGEST_ACTION] = {
+    description: 'Read engine-injected uploaded documents and write extracted text; call with no document-content arguments.',
+    mutations: [],
+    channel: 'stage_output',
+    result_path: documents.result_path,
+  };
+  if (!documents.required) {
+    actionMap[DOCUMENT_SKIP_ACTION] = {
+      description: 'Acknowledge that optional source documents were skipped and advance with an explicit no-documents record.',
+      mutations: [
+        { op: 'MSet', path: `${documents.result_path}.status`, value: 'skipped_no_documents' },
+        { op: 'MSet', path: `${documents.result_path}.full_text`, value: '' },
+        { op: 'MSet', path: `${documents.result_path}.char_count`, value: 0 },
+        { op: 'MSet', path: `${documents.result_path}.file_count`, value: 0 },
+        { op: 'MSet', path: `${documents.result_path}.files_json`, value: '[]' },
+        { op: 'MSet', path: documentsSourceReadyPath(documents), value: true },
+      ],
+      channel: 'widget_output',
+    };
+  }
+}
+
+function applyDocumentsActionPreconditions(
+  modes: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+): void {
+  if (!documents) {
+    return;
+  }
+  const mode = recordField(modes, documents.stage);
+  const readyPath = documentsSourceReadyPath(documents);
+  appendModePrecondition(
+    mode,
+    DOCUMENT_REQUEST_ACTION,
+    { kind: 'FieldFalsy', path: `${DOCUMENT_INTAKE_ROOT}.documents_requested` },
+  );
+  appendModePrecondition(
+    mode,
+    DOCUMENT_REQUEST_ACTION,
+    { kind: 'FieldFalsy', path: readyPath },
+  );
+  appendModePrecondition(
+    mode,
+    DOCUMENT_INGEST_ACTION,
+    { kind: 'FieldTruthy', path: DOCUMENTS_RECEIVED_PATH },
+  );
+  appendModePrecondition(
+    mode,
+    DOCUMENT_INGEST_ACTION,
+    { kind: 'FieldFalsy', path: readyPath },
+  );
+  if (!documents.required) {
+    appendModePrecondition(
+      mode,
+      DOCUMENT_SKIP_ACTION,
+      { kind: 'FieldTruthy', path: `${DOCUMENT_INTAKE_ROOT}.status` },
+    );
+    appendModePrecondition(
+      mode,
+      DOCUMENT_SKIP_ACTION,
+      { kind: 'FieldFalsy', path: readyPath },
+    );
+    appendModePrecondition(
+      mode,
+      DOCUMENT_SKIP_ACTION,
+      { kind: 'FieldFalsy', path: `${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId` },
+    );
+  }
+  for (const action of transitionActionsBySource.get(documents.stage) ?? []) {
+    appendModePrecondition(
+      mode,
+      action.name,
+      { kind: 'FieldTruthy', path: readyPath },
+    );
+  }
+}
+
+function applyDocumentsReactions(
+  reactions: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  reactions[documentsSaveReactionName()] = {
+    event: 'AfterIngestion',
+    watch: [
+      DOCUMENT_INTAKE_ROOT,
+      `${DOCUMENT_INTAKE_ROOT}.file_refs`,
+      `${DOCUMENT_INTAKE_ROOT}.file_refs.0`,
+      `${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId`,
+      `${DOCUMENT_INTAKE_ROOT}.status`,
+    ],
+    write_scope: [DOCUMENTS_RECEIVED_PATH],
+  };
+  reactions[documentsSettleReactionName()] = {
+    event: 'AfterRound',
+    watch: [],
+    write_scope: [
+      documentsSourceReadyPath(documents),
+      `${documents.result_path}.status`,
+      `${documents.result_path}.full_text`,
+      `${documents.result_path}.char_count`,
+      `${documents.result_path}.file_count`,
+      `${documents.result_path}.files_json`,
+    ],
+  };
+}
+
+function applyDocumentsModeWiring(
+  modes: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  const mode = recordField(modes, documents.stage);
+  const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
+  const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
+  mode.vocabulary = unique([
+    ...vocabulary,
+    DOCUMENT_REQUEST_ACTION,
+    DOCUMENT_INGEST_ACTION,
+    ...(!documents.required ? [DOCUMENT_SKIP_ACTION] : []),
+  ]);
+  mode.channels = unique([...channels, DOCUMENT_UPLOAD_CHANNEL, 'widget_output', 'stage_output']);
+}
+
+function applyDocumentsProceedTo(
+  proceedTo: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+  transitionActionsBySource: Map<string, TransitionAction[]>,
+): void {
+  if (!documents || documents.required) {
+    return;
+  }
+  const target = transitionActionsBySource.get(documents.stage)?.[0]?.target;
+  if (target) {
+    proceedTo[DOCUMENT_SKIP_ACTION] = target;
+  }
+}
+
+function applyDocumentsProjection(
+  projection: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+  modeNames: string[],
+): void {
+  if (!documents) {
+    return;
+  }
+  const hostIndex = modeNames.indexOf(documents.stage);
+  const hostProjection = recordField(projection, documents.stage);
+  const hostInclude = Array.isArray(hostProjection.include) ? hostProjection.include as string[] : [];
+  const hostPaths = [
+    DOCUMENT_INTAKE_ROOT,
+    `${DOCUMENT_INTAKE_ROOT}.status`,
+    `${DOCUMENT_INTAKE_ROOT}.documents_requested`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.0`,
+    `${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId`,
+    DOCUMENTS_RECEIVED_PATH,
+    documents.result_path,
+    `${documents.result_path}.status`,
+    `${documents.result_path}.full_text`,
+    `${documents.result_path}.char_count`,
+    `${documents.result_path}.file_count`,
+    `${documents.result_path}.files_json`,
+    documentsSourceReadyPath(documents),
+  ];
+  hostProjection.include = unique([...hostInclude, ...hostPaths]);
+  if (!Array.isArray(hostProjection.exclude)) {
+    hostProjection.exclude = [];
+  }
+
+  const downstreamPaths = [
+    documents.result_path,
+    `${documents.result_path}.status`,
+    `${documents.result_path}.full_text`,
+    `${documents.result_path}.char_count`,
+    `${documents.result_path}.file_count`,
+    `${documents.result_path}.files_json`,
+    documentsSourceReadyPath(documents),
+  ];
+  for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
+    const downstreamProjection = recordField(projection, modeName);
+    const include = Array.isArray(downstreamProjection.include) ? downstreamProjection.include as string[] : [];
+    downstreamProjection.include = unique([...include, ...downstreamPaths]);
+    if (!Array.isArray(downstreamProjection.exclude)) {
+      downstreamProjection.exclude = [];
+    }
+  }
+}
+
+function applyDocumentsPromptsGuidance(
+  target: MutableRecord,
+  documents: DocumentsDescriptor | undefined,
+): void {
+  if (!documents) {
+    return;
+  }
+  const existing = Array.isArray(target[documents.stage])
+    ? target[documents.stage] as string[]
+    : typeof target[documents.stage] === 'string'
+      ? [target[documents.stage] as string]
+      : [];
+  const lines = [
+    `Call ${DOCUMENT_REQUEST_ACTION} once to request the upload and wait for ${DOCUMENT_UPLOAD_CHANNEL}.`,
+    `After uploaded file references arrive, call ${DOCUMENT_INGEST_ACTION} with no document-content arguments; the handler reads engine-injected request.documents content_text.`,
+    `When ${documentsSourceReadyPath(documents)} is true, proceed through the normal transition action. If the user skipped optional documents, note the skipped source record and proceed.`,
+  ];
+  target[documents.stage] = Array.isArray(target[documents.stage])
+    ? [...existing, ...lines]
+    : `${existing.join('\n')}${existing.length > 0 ? '\n' : ''}${lines.join('\n')}`;
+}
+
+function documentsSourceReadyPath(documents: DocumentsDescriptor): string {
+  const parts = documents.result_path.split('.');
+  const leaf = parts.pop() ?? 'source';
+  return [...parts, `${leaf}_ready`].join('.');
+}
+
+function documentsSaveReactionName(): string {
+  return 'save_document_intake';
+}
+
+function documentsSettleReactionName(): string {
+  return 'settle_document_source';
+}
+
+function completionWithDocumentsReadyGuard(
+  completion: Completion,
+  documents: DocumentsDescriptor,
+): Completion {
+  return {
+    ...completion,
+    guard_field: documentsSourceReadyPath(documents),
+  };
+}
+
+function transitionsWithDocumentsReadyGuard(
+  transitions: IntakeTransition[],
+  documents: DocumentsDescriptor,
+): IntakeTransition[] {
+  const readyPath = documentsSourceReadyPath(documents);
+  return transitions.map((transition) =>
+    transition.from === documents.stage
+      ? {
+          ...transition,
+          guard_field: readyPath,
+        }
+      : transition);
 }
 
 function appendModePrecondition(
@@ -1853,6 +2207,7 @@ function renderHandlersSource(
     collectionLifecycle?: CollectionLifecycleDescriptor;
     confirmationLoops: ConfirmationLoopDescriptor[];
     delegationChildren: DelegationChildDescriptor[];
+    documents?: DocumentsDescriptor;
   },
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
@@ -1873,6 +2228,8 @@ function renderHandlersSource(
     options.collectionLifecycle?.storage.representation === 'indexed_array';
   const usesConfirmationLoopHandlers = options.includeReactionHandlers && confirmationLoops.length > 0;
   const usesDelegationHandlers = options.includeReactionHandlers && options.delegationChildren.length > 0;
+  const usesDocumentHandlers = options.documents !== undefined;
+  const usesDocumentReactionHandlers = options.includeReactionHandlers && options.documents !== undefined;
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
@@ -1945,14 +2302,17 @@ ${fieldResolvers}
   const lifecycleActionHandlers = lifecycleTransitions.map((transition) => `  async ${transition.action}(payload) {
     return collectionLifecycleIntentEvent(payload as HandlerPayload, ${tsString(transition.action)}, ${tsString(transition.to)}, ${tsString(transition.from)});
   },`).join('\n\n');
+  const documentActionHandlers = options.documents
+    ? renderDocumentActionHandlers(options.documents)
+    : '';
   const stageOutputMirrorReactionEntries = options.includeReactionHandlers
     ? bodyActions.filter((stage) => options.flatMirrorStages.has(stage)).map((stage) => `,
   [${tsString(stageOutputMirrorReactionName(stage))}, (snapshot) => mirrorStageOutput(snapshot, ${tsString(`${stage}.output`)}, ${tsString(`${stage}.result_json`)}, ${tsString(`${stage}.items_json`)})]`).join('')
     : '';
   const reactionImport = options.includeReactionHandlers
-    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers ? 'ReactionResult, ' : ''}`
+    ? `ReactionHandler, ${stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers ? 'ReactionResult, ' : ''}`
     : '';
-  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
+  const reactionMapConstructor = stageOutputMirrorReactionEntries || usesConfirmationLoopHandlers || usesDelegationHandlers || usesDocumentReactionHandlers ? 'new Map<string, ReactionHandler>' : 'new Map';
   const lifecycleReactionEntries = options.includeReactionHandlers && options.collectionLifecycle
     ? renderCollectionLifecycleReactionEntry(options.collectionLifecycle)
     : '';
@@ -1961,6 +2321,9 @@ ${fieldResolvers}
     : '';
   const delegationReactionEntries = usesDelegationHandlers
     ? renderDelegationReactionEntries(options.delegationChildren)
+    : '';
+  const documentReactionEntries = usesDocumentReactionHandlers && options.documents
+    ? renderDocumentReactionEntries(options.documents)
     : '';
   const lifecycleIntentHelper = lifecycleTransitions.length > 0
     ? `
@@ -1982,8 +2345,11 @@ function collectionLifecycleIntentEvent(payload: HandlerPayload, action: string,
   const delegationReactionHelper = usesDelegationHandlers
     ? renderDelegationReactionHelper()
     : '';
+  const documentHelper = usesDocumentHandlers && options.documents
+    ? renderDocumentHelper(options.documents, usesDocumentReactionHandlers)
+    : '';
   const reactionExport = options.includeReactionHandlers
-    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
+    ? `\n\nexport const reactionHandlers: Map<string, ReactionHandler> = ${reactionMapConstructor}([\n  ['capture_initial_entry_input', (snapshot) => {\n    if (typeof snapshot.get(${tsString(options.initialEntryPath)}) === 'string') {\n      return undefined;\n    }\n    const current = snapshot.get(${tsString(options.entryPath)});\n    return typeof current === 'string'\n      ? { mutations: [{ op: 'MSet' as const, path: ${tsString(options.initialEntryPath)}, value: current }] }\n      : undefined;\n  }]${stageOutputMirrorReactionEntries}${lifecycleReactionEntries}${confirmationReactionEntries}${delegationReactionEntries}${documentReactionEntries},\n]);${stageOutputMirrorReactionEntries ? stageOutputMirrorReactionHelper() : ''}${lifecycleReactionHelper}${confirmationReactionHelper}${delegationReactionHelper}`
     : '';
   const conformanceHelper = contractActionSources.size > 0
     ? `
@@ -2045,9 +2411,247 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
     };
   },
 
-${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}
-};${lifecycleIntentHelper}${reactionExport}${conformanceHelper}
+${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}${documentActionHandlers ? `\n\n${documentActionHandlers}` : ''}
+};${lifecycleIntentHelper}${reactionExport}${documentHelper}${conformanceHelper}
 `;
+}
+
+function renderDocumentActionHandlers(documents: DocumentsDescriptor): string {
+  const skipHandler = documents.required
+    ? ''
+    : `
+
+  async ${DOCUMENT_SKIP_ACTION}(payload) {
+    return {
+      kind: 'document_upload_skipped',
+      payload,
+    };
+  },`;
+  return `  async ${DOCUMENT_REQUEST_ACTION}(payload) {
+    return {
+      kind: 'document_upload_requested',
+      payload,
+    };
+  },
+
+  async ${DOCUMENT_INGEST_ACTION}(payload) {
+    return ingestUploadedDocuments(payload as HandlerPayload);
+  },${skipHandler}`;
+}
+
+function renderDocumentReactionEntries(documents: DocumentsDescriptor): string {
+  return `,
+  [${tsString(documentsSaveReactionName())}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return saveDocumentIntake(snapshot, ${documents.required ? 'true' : 'false'});
+  }],
+  [${tsString(documentsSettleReactionName())}, (snapshot, trigger, mode) => {
+    void trigger;
+    void mode;
+    return settleDocumentSource(snapshot, ${tsString(documents.result_path)}, ${tsString(documentsSourceReadyPath(documents))}, ${documents.required ? 'true' : 'false'});
+  }]`;
+}
+
+function renderDocumentHelper(documents: DocumentsDescriptor, includeReactionHelpers: boolean): string {
+  const allowedTypes = JSON.stringify(documents.upload_types);
+  const minChars = documentMinChars(documents);
+  const reactionHelpers = includeReactionHelpers
+    ? `
+
+function saveDocumentIntake(snapshot: ReadonlyMap<string, unknown>, required: boolean): ReactionResult | undefined {
+  if (snapshot.get(${tsString(DOCUMENTS_RECEIVED_PATH)}) === true) {
+    return undefined;
+  }
+  if (!documentFileRefsPresent(snapshot) && (required || !documentSkipRequestedSnapshot(snapshot))) {
+    return undefined;
+  }
+  return {
+    mutations: [
+      { op: 'MSet' as const, path: ${tsString(DOCUMENTS_RECEIVED_PATH)}, value: true },
+    ],
+  };
+}
+
+function settleDocumentSource(
+  snapshot: ReadonlyMap<string, unknown>,
+  resultPath: string,
+  readyPath: string,
+  required: boolean,
+): ReactionResult | undefined {
+  if (snapshot.get(readyPath) === true) {
+    return undefined;
+  }
+  const status = documentSourceStatus(snapshot, resultPath);
+  if (status === 'extracted' || (!required && status === 'skipped_no_documents')) {
+    return {
+      mutations: [
+        { op: 'MSet' as const, path: readyPath, value: true },
+      ],
+    };
+  }
+  if (!required && documentSkipRequestedSnapshot(snapshot)) {
+    return {
+      mutations: [
+        { op: 'MSet' as const, path: \`\${resultPath}.status\`, value: 'skipped_no_documents' },
+        { op: 'MSet' as const, path: \`\${resultPath}.full_text\`, value: '' },
+        { op: 'MSet' as const, path: \`\${resultPath}.char_count\`, value: 0 },
+        { op: 'MSet' as const, path: \`\${resultPath}.file_count\`, value: 0 },
+        { op: 'MSet' as const, path: \`\${resultPath}.files_json\`, value: '[]' },
+        { op: 'MSet' as const, path: readyPath, value: true },
+      ],
+    };
+  }
+  return undefined;
+}
+
+function documentFileRefsPresent(snapshot: ReadonlyMap<string, unknown>): boolean {
+  const direct = snapshot.get('${DOCUMENT_INTAKE_ROOT}.file_refs');
+  if (Array.isArray(direct) && direct.length > 0) {
+    return true;
+  }
+  const root = snapshot.get('${DOCUMENT_INTAKE_ROOT}');
+  if (isDocumentRecord(root) && Array.isArray(root.file_refs) && root.file_refs.length > 0) {
+    return true;
+  }
+  const first = snapshot.get('${DOCUMENT_INTAKE_ROOT}.file_refs.0');
+  if (isDocumentRecord(first)) {
+    return true;
+  }
+  return typeof snapshot.get('${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId') === 'string';
+}
+
+function documentSkipRequestedSnapshot(snapshot: ReadonlyMap<string, unknown>): boolean {
+  const status = snapshot.get('${DOCUMENT_INTAKE_ROOT}.status');
+  if (status === '${DOCUMENT_SKIP_STATUS}') {
+    return true;
+  }
+  const root = snapshot.get('${DOCUMENT_INTAKE_ROOT}');
+  return isDocumentRecord(root) && root.status === '${DOCUMENT_SKIP_STATUS}';
+}
+
+function documentSourceStatus(snapshot: ReadonlyMap<string, unknown>, resultPath: string): string {
+  const direct = snapshot.get(\`\${resultPath}.status\`);
+  if (typeof direct === 'string') {
+    return direct;
+  }
+  const source = snapshot.get(resultPath);
+  return isDocumentRecord(source) && typeof source.status === 'string' ? source.status : '';
+}`
+    : '';
+
+  return `
+
+function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknown> {
+  if (documentSkipRequestedPayload(payload)) {
+    return skippedDocumentSource();
+  }
+  const request = payload.request as { documents?: unknown } | undefined;
+  const rawDocuments = Array.isArray(request?.documents) ? request.documents : [];
+  const documentRecords = rawDocuments.filter(isDocumentRecord);
+  const preferredRecords = documentRecords.filter((document) =>
+    typeof document.content_text === 'string' && typeof document.size === 'number');
+  const textRecords = (preferredRecords.length > 0 ? preferredRecords : documentRecords)
+    .filter((document) => typeof document.content_text === 'string');
+  const allowedMimeTypes = new Set<string>(${allowedTypes});
+  const eligible = textRecords.filter((document) => documentMimeAllowed(document, allowedMimeTypes));
+
+  if (eligible.length === 0) {
+    const sawUnsupported = documentRecords.some((document) =>
+      typeof document.content_base64 === 'string' || !documentMimeAllowed(document, allowedMimeTypes));
+    return {
+      status: sawUnsupported ? 'blocked_unsupported_type' : 'blocked_no_content',
+      full_text: '',
+      char_count: 0,
+      file_count: 0,
+      files_json: JSON.stringify(documentRecords.map(documentSummary)),
+      reason: sawUnsupported ? 'uploaded documents were not text/markdown content_text documents' : 'no engine-injected document content_text was available',
+    };
+  }
+
+  const fullText = eligible.length === 1
+    ? String(eligible[0]?.content_text ?? '')
+    : eligible.map((document, index) => \`--- file: \${documentName(document, index)} ---\\n\\n\${String(document.content_text ?? '')}\`).join('\\n\\n');
+  const charCount = fullText.length;
+  if (charCount < ${String(minChars)}) {
+    return {
+      status: 'blocked_low_fidelity',
+      full_text: fullText,
+      char_count: charCount,
+      file_count: eligible.length,
+      files_json: JSON.stringify(eligible.map(documentSummary)),
+      reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
+    };
+  }
+  return {
+    status: 'extracted',
+    full_text: fullText,
+    char_count: charCount,
+    file_count: eligible.length,
+    files_json: JSON.stringify(eligible.map(documentSummary)),
+  };
+}
+
+function skippedDocumentSource(): Record<string, unknown> {
+  return {
+    status: 'skipped_no_documents',
+    full_text: '',
+    char_count: 0,
+    file_count: 0,
+    files_json: '[]',
+  };
+}
+
+function documentSkipRequestedPayload(payload: HandlerPayload): boolean {
+  const domain = payload.domain;
+  if (!domain) {
+    return false;
+  }
+  const status = domain['${DOCUMENT_INTAKE_ROOT}.status'];
+  if (status === '${DOCUMENT_SKIP_STATUS}') {
+    return true;
+  }
+  const root = domain['${DOCUMENT_INTAKE_ROOT}'];
+  return isDocumentRecord(root) && root.status === '${DOCUMENT_SKIP_STATUS}';
+}
+
+function documentMimeAllowed(document: Record<string, unknown>, allowedMimeTypes: ReadonlySet<string>): boolean {
+  const raw = typeof document.mime_type === 'string'
+    ? document.mime_type
+    : typeof document.mimeType === 'string'
+      ? document.mimeType
+      : '';
+  return allowedMimeTypes.has(raw.toLowerCase());
+}
+
+function documentName(document: Record<string, unknown>, index: number): string {
+  return typeof document.name === 'string' && document.name.length > 0
+    ? document.name
+    : \`document-\${String(index + 1)}\`;
+}
+
+function documentSummary(document: Record<string, unknown>): Record<string, unknown> {
+  return {
+    name: typeof document.name === 'string' ? document.name : undefined,
+    mime_type: typeof document.mime_type === 'string'
+      ? document.mime_type
+      : typeof document.mimeType === 'string'
+        ? document.mimeType
+        : undefined,
+    size: typeof document.size === 'number' ? document.size : undefined,
+    has_content_text: typeof document.content_text === 'string',
+    has_content_base64: typeof document.content_base64 === 'string',
+  };
+}
+
+function isDocumentRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}${reactionHelpers}`;
+}
+
+function documentMinChars(documents: DocumentsDescriptor): number {
+  const value = documents.fidelity_floor?.min_chars;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function stageOutputMirrorReactionHelper(): string {
@@ -2821,7 +3425,9 @@ function renderToolsSource(
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
   collectionLifecycle?: CollectionLifecycleDescriptor,
   confirmationLoops: ConfirmationLoopDescriptor[] = [],
+  documents?: DocumentsDescriptor,
 ): string {
+  void documents;
   const stageActions = codegenStageActions(transitionActions, confirmationLoops);
   const lifecycleTransitions = collectionLifecycle
     ? collectionLifecycleLlmTransitions(collectionLifecycle)
@@ -3069,7 +3675,11 @@ function renderSmokeTestSource(
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
   confirmationLoops: ConfirmationLoopDescriptor[] = [],
   delegationChildren: DelegationChildDescriptor[] = [],
+  documents?: DocumentsDescriptor,
 ): string {
+  if (documents) {
+    return renderDocumentUploadSmokeTestSource(slug, name, entryChannel, documents, transitionActions);
+  }
   const delegationSmokeChild = delegationChildren.find((child) =>
     child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent');
   if (delegationSmokeChild) {
@@ -3155,6 +3765,284 @@ ${hasContractResponses
     : `function effect(name: string, payload: Record<string, unknown>): TestHarnessAuthorResponse {
   return { actions: [{ kind: 'EffectAction', name, channel: name === 'begin_work' ? 'widget_output' : 'stage_output', payload }] };
 }`}
+`;
+}
+
+function renderDocumentUploadSmokeTestSource(
+  slug: string,
+  name: string,
+  entryChannel: string,
+  documents: DocumentsDescriptor,
+  transitionActions: TransitionAction[],
+): string {
+  const transitionAction = transitionActions.find((action) => action.source === documents.stage);
+  const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(documents.stage)}`;
+  const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const transitionPayload = transitionAction?.archetype === 'llm-reasoning'
+    ? `{
+          result_json: JSON.stringify({ document_source_ready: true }),
+          items_json: JSON.stringify(['document-source-ready']),
+        }`
+    : `{ __stage_runtime: { now_iso: '2026-07-16T00:00:00.000Z', random: 0.25 } }`;
+  const resultPath = documents.result_path;
+  const readyPath = documentsSourceReadyPath(documents);
+  const skipTest = documents.required
+    ? ''
+    : `
+
+  it('runs synthesized optional document skip through the route for ${name}', async () => {
+    const result = await runSkipScenario([
+      scripted(effect('begin_work', {})),
+      scripted(effect('${DOCUMENT_SKIP_ACTION}', {})),
+    ]);
+    const source = resultAt(result.final.domain, ${tsString(resultPath)});
+    expect(source.status).toBe('skipped_no_documents');
+    expect(source.full_text).toBe('');
+    expect(source.char_count).toBe(0);
+    expect(source.file_count).toBe(0);
+    expect(result.final.domain[${tsString(readyPath)}]).toBe(true);
+    expect(result.final.mode).toBe('complete');
+  });`;
+  return `import { File } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
+
+describe('generated document upload smoke', () => {
+  it('runs synthesized document upload hermetically through the route for ${name}', async () => {
+    const sentinel = \`PGAS-UPLOAD-SENTINEL-\${randomUUID()}\`;
+    const content = [
+      'Generated route-level upload smoke fixture.',
+      sentinel,
+      'ASCII payload keeps byte length equal to character count for exact assertions.',
+    ].join('\\n');
+    const result = await runUploadScenario([
+      scripted(effect('begin_work', {})),
+      scripted(effect('${DOCUMENT_REQUEST_ACTION}', {})),
+      scripted(effect('${DOCUMENT_INGEST_ACTION}', {}, 'stage_output')),
+      scripted(effect(${tsString(transitionActionName)}, ${transitionPayload}, ${tsString(transitionChannel)})),
+    ], async ({ client, sessionId }) => {
+      const upload = await uploadText(client, sessionId, 'source.txt', content);
+      const [fileRef] = refsFromUpload(upload);
+      expect(fileRef).toBeDefined();
+      await client.sessions.trigger(sessionId, {
+        channel: '${DOCUMENT_UPLOAD_CHANNEL}',
+        payload: { ['${DOCUMENT_INTAKE_ROOT}.file_refs']: [{ fileId: fileRef.fileId, name: fileRef.name }] },
+      });
+      return { fileRef, content, sentinel };
+    });
+
+    expect(result.upload?.fileRef.fileId).toEqual(expect.any(String));
+    expect(documentRefLanded(result.afterUpload.domain, String(result.upload?.fileRef.fileId))).toBe(true);
+    const source = resultAt(result.final.domain, ${tsString(resultPath)});
+    expect(source.status).toBe('extracted');
+    expect(source.full_text).toBe(result.upload?.content);
+    expect(String(source.full_text)).toContain(result.upload?.sentinel);
+    expect(source.char_count).toBe(result.upload?.content.length);
+    expect(source.file_count).toBe(1);
+    expect(result.final.domain[${tsString(readyPath)}]).toBe(true);
+    expect(result.final.mode).toBe('complete');
+  });${skipTest}
+});
+
+interface Snapshot {
+  mode: string | null;
+  domain: Record<string, unknown>;
+  awaiting?: Record<string, unknown>;
+}
+
+interface ScriptedAuthorResponse {
+  response: ReturnType<typeof effect>;
+}
+
+interface UploadEvidence {
+  fileRef: Record<string, unknown>;
+  content: string;
+  sentinel: string;
+}
+
+async function runUploadScenario(
+  script: ScriptedAuthorResponse[],
+  act: (ctx: { client: PgasClient; sessionId: string }) => Promise<UploadEvidence | void>,
+): Promise<{ afterRequest: Snapshot; afterUpload: Snapshot; final: Snapshot; upload?: UploadEvidence }> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-upload-smoke-'));
+  const server = await createPgasServer({
+    programs: [{ name: ${tsString(slug)}, entry: create${toPascalCase(slug)}ProgramEntry() }],
+    drivers: {
+      authorHandle: scriptedAuthor(script),
+      observerHandle: {
+        modelId: 'generated-upload-smoke-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    storage: { uploadsDir: join(tempDir, 'uploads') },
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'start generated upload smoke' });
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'request generated document upload' });
+    const afterRequest = await readSnapshot(client, sessionId);
+    expect(afterRequest.mode).toBe(${tsString(documents.stage)});
+    expect(afterRequest.awaiting?.channelId).toBe('${DOCUMENT_UPLOAD_CHANNEL}');
+    const upload = await act({ client, sessionId }) ?? undefined;
+    let afterUpload = await readSnapshot(client, sessionId);
+    let final = afterUpload;
+    for (let attempt = 0; attempt < 4 && final.mode !== 'complete'; attempt += 1) {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`continue generated upload smoke \${String(attempt + 1)}\` });
+      final = await readSnapshot(client, sessionId);
+    }
+    if (afterUpload.mode === 'complete') {
+      final = afterUpload;
+    } else {
+      afterUpload = await readSnapshot(client, sessionId);
+    }
+    return { afterRequest, afterUpload, final, ...(upload ? { upload } : {}) };
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function runSkipScenario(
+  script: ScriptedAuthorResponse[],
+): Promise<{ afterSkip: Snapshot; final: Snapshot }> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-upload-skip-smoke-'));
+  const server = await createPgasServer({
+    programs: [{ name: ${tsString(slug)}, entry: create${toPascalCase(slug)}ProgramEntry() }],
+    drivers: {
+      authorHandle: scriptedAuthor(script),
+      observerHandle: {
+        modelId: 'generated-upload-skip-smoke-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    storage: { uploadsDir: join(tempDir, 'uploads') },
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'start generated optional skip smoke' });
+    await client.sessions.trigger(sessionId, {
+      channel: '${DOCUMENT_UPLOAD_CHANNEL}',
+      payload: { ['${DOCUMENT_INTAKE_ROOT}.status']: '${DOCUMENT_SKIP_STATUS}' },
+    });
+    const afterSkip = await readSnapshot(client, sessionId);
+    let final = afterSkip;
+    for (let attempt = 0; attempt < 4 && final.mode !== 'complete'; attempt += 1) {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`continue generated optional skip smoke \${String(attempt + 1)}\` });
+      final = await readSnapshot(client, sessionId);
+    }
+    return { afterSkip, final };
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function uploadText(client: PgasClient, sessionId: string, name: string, content: string): Promise<unknown> {
+  const form = new FormData();
+  const file = new File([content], name, { type: 'text/plain' });
+  form.append('files', file as unknown as Blob, file.name);
+  return client.files.upload(sessionId, form);
+}
+
+function refsFromUpload(response: unknown): Array<Record<string, unknown>> {
+  if (isRecord(response) && Array.isArray(response.files)) {
+    return response.files.filter(isRecord);
+  }
+  return [];
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    domain: world.domain as Record<string, unknown>,
+    awaiting: isRecord(state?.awaitingUserDecision) ? state.awaitingUserDecision : undefined,
+  };
+}
+
+function resultAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
+  const direct = domain[pathKey];
+  if (isRecord(direct)) {
+    return direct;
+  }
+  const prefix = \`\${pathKey}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(domain)) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return result;
+}
+
+function documentRefLanded(domain: Record<string, unknown>, fileId: string): boolean {
+  const refs = domain['${DOCUMENT_INTAKE_ROOT}.file_refs'];
+  if (Array.isArray(refs) && refs.some((ref) => isRecord(ref) && ref.fileId === fileId)) {
+    return true;
+  }
+  if (domain['${DOCUMENT_INTAKE_ROOT}.file_refs.0.fileId'] === fileId) {
+    return true;
+  }
+  const first = domain['${DOCUMENT_INTAKE_ROOT}.file_refs.0'];
+  return isRecord(first) && first.fileId === fileId;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-upload-smoke-author',
+    async complete() {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated upload smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      return JSON.stringify(response.response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function scripted(response: ReturnType<typeof effect>): ScriptedAuthorResponse {
+  return { response };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 `;
 }
 
@@ -5608,8 +6496,11 @@ export function assertDocumentsDescriptor(
     }]);
   }
 
-  if (!descriptor.result_path.startsWith(`${descriptor.stage}.`)) {
-    throw new Error(`documents.result_path must be under ${descriptor.stage}.`);
+  if (
+    descriptor.result_path === DOCUMENT_INTAKE_ROOT ||
+    descriptor.result_path.startsWith(`${DOCUMENT_INTAKE_ROOT}.`)
+  ) {
+    throw new Error(`documents.result_path must not be under ${DOCUMENT_INTAKE_ROOT}`);
   }
 
   const delegationChildren = Array.isArray(context.delegation?.children)
