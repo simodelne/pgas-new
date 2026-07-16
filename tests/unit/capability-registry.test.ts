@@ -36,7 +36,9 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // provider (qwen36-27b: seed→propose→approve/request_revision/reject applied
     // per item, program reached complete, fail-closed gate green) — so synthesizes.
     expect(capabilityStatus('per_item_confirmation')).toBe('synthesizes');
-    expect(capabilityStatus('delegation_child_session')).toBe('scaffolds_with_gap');
+    // Delegation live-drive green on qwen (real child session ran + returned, parent complete,
+    // fail-closed delegation_engaged verdict all-green) — so synthesizes.
+    expect(capabilityStatus('delegation_child_session')).toBe('synthesizes');
     for (const cap of [
       'delegation_research_agent',
       'document_upload_intake',
