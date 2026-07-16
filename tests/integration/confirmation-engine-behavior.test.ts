@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { appTransport, createPgasClient, PgasApiError, type PgasClient } from '@simodelne/pgas-server/client.js';
 import { createTestHarness } from '@simodelne/pgas-server/testing.js';
 import {
+  createPgasServer,
   reconstructArray,
   type ProgramEntry,
   type ReactionHandler,
@@ -8,6 +10,73 @@ import {
 } from '@simodelne/pgas-server/plugin.js';
 
 describe('confirmation-loop engine behavior falsifier', () => {
+  it('documents the real user_confirmation route contract and in-domain canonical decisions', async () => {
+    // Route-contract finding, kept load-bearing: the HTTP/API route accepts the
+    // simple engine payload shape and then enriches target_item_* via
+    // decision_targeting. The AfterIngestion reaction receives the canonical
+    // decision string (proved by decision.status below), while the final
+    // persisted input leaf is cleared back to ''. Pre-expanded domain-path
+    // payloads are rejected before ingestion, so generated clients must not
+    // send them.
+    const rejected = await withRouteSession(async ({ client, sessionId }) => {
+      const complexDomainPathPayload = {
+        'inputs.user_decision': {
+          decision: 'approve',
+          instruction: '',
+          timestamp: '2026-07-16T00:00:00.000Z',
+          target_item_index: 0,
+          target_item_id: 'item-1',
+          target_item_title: 'First item',
+          target_item_status: 'proposed',
+        },
+        'inputs.user_decision.decision': 'approve',
+        'inputs.user_decision.instruction': '',
+        'inputs.user_decision.timestamp': '2026-07-16T00:00:00.000Z',
+        'inputs.user_decision.target_item_index': 0,
+        'inputs.user_decision.target_item_id': 'item-1',
+        'inputs.user_decision.target_item_title': 'First item',
+        'inputs.user_decision.target_item_status': 'proposed',
+      };
+      return capturePgasApiError(() =>
+        client.sessions.trigger(sessionId, {
+          channel: 'user_confirmation',
+          payload: complexDomainPathPayload,
+        }));
+    });
+    expect(rejected.message).toContain('Invalid confirmation payload');
+    process.stdout.write(
+      `[confirmation-route-contract] rejected complex domain-path payload: status=${String(rejected.status)} reason=${String(rejected.reason ?? '')}\n`,
+    );
+
+    const cases = [
+      { decision: 'approve', payload: { decision: 'approve' }, expectedStatus: 'accepted' },
+      {
+        decision: 'request_revision',
+        payload: { decision: 'request_revision', instruction: 'Tighten the proposed wording.' },
+        expectedStatus: 'proposed',
+      },
+      { decision: 'reject', payload: { decision: 'reject' }, expectedStatus: 'skipped' },
+    ] as const;
+
+    for (const item of cases) {
+      const world = await withRouteSession(async ({ client, sessionId }) => {
+        await client.sessions.trigger(sessionId, {
+          channel: 'user_confirmation',
+          payload: item.payload,
+        });
+        return client.sessions.world(sessionId);
+      });
+      const appliedDecision = String(world.domain['decision.status']).split(':')[1] ?? '';
+      process.stdout.write(
+        `[confirmation-route-contract] accepted simple decision=${item.decision}; reaction_received=${appliedDecision}; persisted_leaf=${JSON.stringify(world.domain['inputs.user_decision.decision'] ?? null)}; item_status=${String(world.domain['items.0.status'])}\n`,
+      );
+      expect(world.domain['inputs.user_decision.decision']).toBe('');
+      expect(world.domain['items.0.status']).toBe(item.expectedStatus);
+      expect(world.domain['decision.status']).toBe(`applied:${item.decision}:0`);
+      expect(world.domain['inputs.user_decision.target_item_index']).toBe(0);
+    }
+  });
+
   it('accepts a parked user_confirmation and runs ingestion reactions before the approval gate and author round', async () => {
     const prompts: string[] = [];
     const entry = createConfirmationEngineFalsifierEntry(prompts);
@@ -284,7 +353,11 @@ const applyUserDecision: ReactionHandler = (snapshot) => {
       ],
     };
   }
-  const nextStatus = decision === 'skip' ? 'skipped' : 'accepted';
+  const nextStatus = decision === 'request_revision'
+    ? 'proposed'
+    : decision === 'reject'
+      ? 'skipped'
+      : 'accepted';
   return {
     mutations: [
       { op: 'MSet', path: `items.${targetIndex}.status`, value: nextStatus },
@@ -329,4 +402,61 @@ function createAdapters(spec: Specification) {
 
 function effect(name: string, payload: Record<string, unknown>): Record<string, unknown> {
   return { actions: [{ kind: 'EffectAction', name, channel: 'widget_output', payload }] };
+}
+
+async function withRouteSession<T>(
+  run: (route: { client: PgasClient; sessionId: string }) => Promise<T>,
+): Promise<T> {
+  const server = await createPgasServer({
+    programs: [{ name: 'confirmation-engine-falsifier-route', entry: createConfirmationEngineFalsifierEntry([]) }],
+    drivers: {
+      authorHandle: scriptedAuthor([
+        effect('propose_item', { message: 'please approve' }),
+        effect('noop', { message: 'route contract round continued without status write' }),
+      ]),
+      observerHandle: {
+        modelId: 'confirmation-engine-falsifier-route-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: 'confirmation-engine-falsifier-route' });
+    await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: 'start' });
+    const parked = await client.sessions.get(created.sessionId);
+    expect((parked.state as { awaitingUserDecision?: { channelId?: string } }).awaitingUserDecision?.channelId).toBe('user_confirmation');
+    return await run({ client, sessionId: created.sessionId });
+  } finally {
+    await server.close();
+  }
+}
+
+function scriptedAuthor(responses: Record<string, unknown>[]): { modelId: string; complete(prompt: string): Promise<string> } {
+  let index = 0;
+  return {
+    modelId: 'confirmation-engine-falsifier-route-author',
+    async complete() {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(`no route-contract author response scripted for call ${String(index - 1)}`);
+      }
+      return JSON.stringify(response);
+    },
+  };
+}
+
+async function capturePgasApiError(run: () => Promise<unknown>): Promise<PgasApiError> {
+  try {
+    await run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(PgasApiError);
+    return error as PgasApiError;
+  }
+  throw new Error('expected PgasApiError');
 }

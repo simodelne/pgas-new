@@ -116,7 +116,11 @@ describe('generated confirmation-loop smoke test', () => {
       linkRootNodeModules(targetDir);
 
       expect(artifact.smoke_test_ts).toContain('runs the confirmation loop choreography hermetically');
-      expect(artifact.smoke_test_ts).toContain("await harness.trigger({ channel: 'user_confirmation'");
+      expect(artifact.smoke_test_ts).toContain('createPgasServer');
+      expect(artifact.smoke_test_ts).toContain('createPgasClient');
+      expect(artifact.smoke_test_ts).toContain("await client.sessions.trigger(sessionId, { channel: 'user_confirmation'");
+      expect(artifact.smoke_test_ts).toContain("decision: 'request_revision'");
+      expect(artifact.smoke_test_ts).not.toContain('createTestHarness');
       expect(artifact.smoke_test_ts).toContain("expect(snapshot.mode).toBe('complete')");
 
       const output = runGeneratedSmokeTest(targetDir);

@@ -1128,13 +1128,31 @@ function confirmationLoopDecisionActionNames(
   total: number,
 ): string[] {
   void index;
-  return Object.keys(loop.decisions).map((decision) =>
-    total === 1 ? `${safeIdentifier(decision)}_item` : `${safeIdentifier(decision)}_${safeIdentifier(loop.stage)}_item`,
+  return Object.keys(loop.decisions).map((decision) => {
+    const runtimeDecision = confirmationLoopRuntimeDecisionName(decision);
+    return total === 1
+      ? `${safeIdentifier(runtimeDecision)}_item`
+      : `${safeIdentifier(runtimeDecision)}_${safeIdentifier(loop.stage)}_item`;
+  },
   );
 }
 
 function confirmationLoopPendingPath(loop: ConfirmationLoopDescriptor): string {
   return loop.pending_action_path ?? `decisions.pending_${safeIdentifier(loop.stage)}_action`;
+}
+
+function confirmationLoopRuntimeDecisionName(decision: string): string {
+  if (decision === 'revise') return 'request_revision';
+  if (decision === 'skip') return 'reject';
+  return decision;
+}
+
+function confirmationLoopRuntimeDecisions(
+  decisions: Record<string, ConfirmationLoopDecisionDescriptor>,
+): Record<string, ConfirmationLoopDecisionDescriptor> {
+  return Object.fromEntries(
+    Object.entries(decisions).map(([decision, config]) => [confirmationLoopRuntimeDecisionName(decision), config]),
+  );
 }
 
 function confirmationLoopSummaryPath(loop: ConfirmationLoopDescriptor): string {
@@ -1182,6 +1200,14 @@ function confirmationLoopInstructionPaths(loop: ConfirmationLoopDescriptor): str
     .filter((path): path is string => typeof path === 'string' && path.length > 0);
 }
 
+function confirmationLoopInstructionFields(loop: ConfirmationLoopDescriptor): Set<string> {
+  return new Set(
+    confirmationLoopInstructionPaths(loop)
+      .map((path) => path.split('.').filter(Boolean).at(-1))
+      .filter((field): field is string => typeof field === 'string' && field.length > 0),
+  );
+}
+
 function confirmationLoopProposalFields(
   loop: ConfirmationLoopDescriptor,
   lifecycle: CollectionLifecycleDescriptor,
@@ -1189,11 +1215,7 @@ function confirmationLoopProposalFields(
   const idField = loop.item_id_field ?? lifecycle.item.id_field;
   const titleField = loop.item_title_field ?? 'title';
   const statusField = lifecycle.item.status_field;
-  const instructionFields = new Set(
-    confirmationLoopInstructionPaths(loop)
-      .map((path) => path.split('.').filter(Boolean).at(-1))
-      .filter((field): field is string => typeof field === 'string' && field.length > 0),
-  );
+  const instructionFields = confirmationLoopInstructionFields(loop);
   return Object.keys(lifecycle.item.schema)
     .filter((field) =>
       field !== idField &&
@@ -1202,7 +1224,7 @@ function confirmationLoopProposalFields(
       !instructionFields.has(field));
 }
 
-function confirmationLoopSeedEmptyFields(
+function confirmationLoopSeedSchemaFields(
   loop: ConfirmationLoopDescriptor,
   lifecycle: CollectionLifecycleDescriptor,
 ): string[] {
@@ -1211,6 +1233,15 @@ function confirmationLoopSeedEmptyFields(
   const statusField = lifecycle.item.status_field;
   return Object.keys(lifecycle.item.schema)
     .filter((field) => field !== idField && field !== titleField && field !== statusField);
+}
+
+function confirmationLoopSeedForcedEmptyFields(
+  loop: ConfirmationLoopDescriptor,
+  lifecycle: CollectionLifecycleDescriptor,
+): string[] {
+  const instructionFields = confirmationLoopInstructionFields(loop);
+  return confirmationLoopSeedSchemaFields(loop, lifecycle)
+    .filter((field) => field === 'proposed_text' || field === 'user_instruction' || instructionFields.has(field));
 }
 
 function guardFieldsBySourceMode(transitionActions: TransitionAction[]): Map<string, string[]> {
@@ -1930,7 +1961,7 @@ function renderConfirmationLoopReactionEntries(
   lifecycle: CollectionLifecycleDescriptor,
 ): string {
   return loops.map((loop) => {
-    const decisions = Object.fromEntries(Object.entries(loop.decisions).map(([name, decision]) => [name, decision]));
+    const decisions = confirmationLoopRuntimeDecisions(loop.decisions);
     return `,
   [${tsString(confirmationLoopSaveReactionName(loop))}, (snapshot, trigger, mode) => {
     void trigger;
@@ -1962,7 +1993,7 @@ function renderConfirmationLoopReactionEntries(
       snapshot,
       mode,
       ${tsString(loop.collection)},
-      ${tsString(lifecycle.item.id_field)},
+      ${tsString(loop.item_id_field ?? lifecycle.item.id_field)},
       ${tsString(lifecycle.item.status_field)},
       ${tsString(confirmationLoopInitialStatus(lifecycle))},
       ${tsString(loop.proposed_status)},
@@ -1970,7 +2001,8 @@ function renderConfirmationLoopReactionEntries(
       ${tsString(`${loop.seed.source_stage}.items_json`)},
       ${tsString(loop.seed.id_prefix ?? 'item')},
       ${tsString(loop.item_title_field ?? 'title')},
-      [${confirmationLoopSeedEmptyFields(loop, lifecycle).map(tsString).join(', ')}],
+      [${confirmationLoopSeedSchemaFields(loop, lifecycle).map(tsString).join(', ')}],
+      [${confirmationLoopSeedForcedEmptyFields(loop, lifecycle).map(tsString).join(', ')}],
       [${confirmationLoopProposalFields(loop, lifecycle).map(tsString).join(', ')}],
       ${tsString(confirmationLoopProposalPath(loop))},
       ${tsString(confirmationLoopProposalLogPath(loop))},
@@ -2022,13 +2054,7 @@ function confirmationLoopNormalizeDecision(
   if (Object.prototype.hasOwnProperty.call(decisions, decision)) {
     return decision;
   }
-  if (decision === 'request_revision' && Object.prototype.hasOwnProperty.call(decisions, 'revise')) {
-    return 'revise';
-  }
-  if (decision === 'reject' && Object.prototype.hasOwnProperty.call(decisions, 'skip')) {
-    return 'skip';
-  }
-  return decision;
+  return '';
 }
 
 function confirmationLoopEnforceStatus(
@@ -2131,7 +2157,8 @@ function confirmationLoopChoreographCollection(
   sourceItemsJsonPath: string,
   idPrefix: string,
   titleField: string,
-  seedEmptyFields: readonly string[],
+  seedSchemaFields: readonly string[],
+  seedForcedEmptyFields: readonly string[],
   proposalFields: readonly string[],
   proposalPath: string,
   proposalLogPath: string,
@@ -2147,31 +2174,15 @@ function confirmationLoopChoreographCollection(
   }
 
   if (items.length === 0) {
-    const seed = confirmationLoopSeedItems(snapshot.get(sourceItemsJsonPath));
+    const seed = confirmationLoopSeedItems(snapshot.get(sourceItemsJsonPath), idField, titleField);
     if (seed.kind === 'valid') {
-      seed.items.forEach((title, index) => {
-        const item: Record<string, unknown> = {
-          [idField]: idPrefix + '-' + String(index + 1),
-          [titleField]: title,
-          [statusField]: initialStatus,
-        };
-        for (const field of seedEmptyFields) {
-          item[field] = '';
-        }
+      const seeded = seed.items.map((seedItem, index) =>
+        confirmationLoopSeedItem(seedItem, index, idField, statusField, initialStatus, idPrefix, titleField, seedSchemaFields, seedForcedEmptyFields));
+      seeded.forEach((item, index) => {
         mutations.push({ op: 'MSet' as const, path: itemsPath + '.' + index, value: item });
       });
       mutations.push({ op: 'MSet' as const, path: seedStatePath, value: 'seeded' });
-      items = seed.items.map((title, index) => {
-        const item: Record<string, unknown> = {
-          [idField]: idPrefix + '-' + String(index + 1),
-          [titleField]: title,
-          [statusField]: initialStatus,
-        };
-        for (const field of seedEmptyFields) {
-          item[field] = '';
-        }
-        return item;
-      });
+      items = seeded;
     } else if (seed.kind === 'invalid') {
       mutations.push({ op: 'MSet' as const, path: seedStatePath, value: 'invalid_items_json' });
     }
@@ -2207,7 +2218,17 @@ function confirmationLoopChoreographCollection(
   return { mutations };
 }
 
-function confirmationLoopSeedItems(value: unknown): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'valid'; items: string[] } {
+interface ConfirmationLoopSeedItem {
+  id?: string;
+  title: string;
+  fields: Record<string, unknown>;
+}
+
+function confirmationLoopSeedItems(
+  value: unknown,
+  idField: string,
+  titleField: string,
+): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'valid'; items: ConfirmationLoopSeedItem[] } {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return { kind: 'empty' };
   }
@@ -2220,10 +2241,84 @@ function confirmationLoopSeedItems(value: unknown): { kind: 'empty' } | { kind: 
   if (!Array.isArray(parsed)) {
     return { kind: 'invalid' };
   }
-  if (parsed.length === 0 || !parsed.every((item): item is string => typeof item === 'string' && item.trim().length > 0)) {
+  if (parsed.length === 0) {
     return { kind: 'invalid' };
   }
-  return { kind: 'valid', items: parsed };
+  const items: ConfirmationLoopSeedItem[] = [];
+  for (let index = 0; index < parsed.length; index += 1) {
+    const item = parsed[index];
+    if (typeof item === 'string') {
+      items.push({ title: item, fields: {} });
+      continue;
+    }
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      const id = confirmationLoopFirstPresentSeedValue(record, [idField, 'id']);
+      items.push({
+        ...(id === undefined ? {} : { id: String(id) }),
+        title: confirmationLoopSeedItemTitle(record, titleField, index),
+        fields: { ...record },
+      });
+      continue;
+    }
+    return { kind: 'invalid' };
+  }
+  return { kind: 'valid', items };
+}
+
+function confirmationLoopSeedItemTitle(
+  record: Record<string, unknown>,
+  titleField: string,
+  index: number,
+): string {
+  const value = confirmationLoopFirstPresentSeedValue(record, [titleField, 'title', 'name', 'label', 'summary']);
+  if (value !== undefined) {
+    return String(value);
+  }
+  const id = confirmationLoopFirstPresentSeedValue(record, ['id']);
+  return String(id ?? index);
+}
+
+function confirmationLoopFirstPresentSeedValue(record: Record<string, unknown>, fields: readonly string[]): unknown | undefined {
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(record, field) && record[field] !== undefined && record[field] !== null) {
+      return record[field];
+    }
+  }
+  return undefined;
+}
+
+function confirmationLoopSeedItem(
+  seed: ConfirmationLoopSeedItem,
+  index: number,
+  idField: string,
+  statusField: string,
+  initialStatus: string,
+  idPrefix: string,
+  titleField: string,
+  seedSchemaFields: readonly string[],
+  seedForcedEmptyFields: readonly string[],
+): Record<string, unknown> {
+  const item: Record<string, unknown> = {
+    [idField]: seed.id ?? idPrefix + '-' + String(index + 1),
+    [titleField]: seed.title,
+    [statusField]: initialStatus,
+  };
+  for (const field of seedSchemaFields) {
+    if (Object.prototype.hasOwnProperty.call(seed.fields, field)) {
+      item[field] = seed.fields[field];
+    }
+  }
+  for (const field of seedSchemaFields) {
+    if (!Object.prototype.hasOwnProperty.call(item, field)) {
+      item[field] = '';
+    }
+  }
+  for (const field of seedForcedEmptyFields) {
+    item[field] = '';
+  }
+  item[statusField] = initialStatus;
+  return item;
 }
 
 function confirmationLoopProposalTargetIndex(
@@ -2664,68 +2759,169 @@ function renderConfirmationLoopSmokeTestSource(
     confirmationLoopChoreographReactionName(loop),
   ]);
   return `import { describe, expect, it } from 'vitest';
-import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
 import { create${toPascalCase(slug)}ProgramEntry } from '../src/programs/${slug}/registration.js';
 import { reactionHandlers } from '../src/programs/${slug}/handlers.js';
 
 describe('generated confirmation-loop smoke', () => {
-  it('runs the confirmation loop choreography hermetically for ${name}', async () => {
+  it('runs the confirmation loop choreography hermetically through the route for ${name}', async () => {
     const entry = create${toPascalCase(slug)}ProgramEntry();
     expect(entry).toBeTruthy();
     for (const reaction of [${reactionNames.map(tsString).join(', ')}]) {
       expect(reactionHandlers.has(reaction)).toBe(true);
     }
 
-    const harness = await createTestHarness(entry, {
-      programName: ${tsString(slug)},
-      defaultChannel: ${tsString(entryChannel)},
-      authorResponses: [
-        effect('begin_work', {}),
-        effect(${tsString(`complete_${safeIdentifier(loop.seed.source_stage)}`)}, {
-          result_json: JSON.stringify({ planned: true }),
-          items_json: JSON.stringify(['Draft launch checklist', 'Confirm owner handoff']),
-        }, 'widget_output'),
-        effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
-          ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString(field === 'proposed_text' ? 'First proposal' : 'First proposal')},`).join('\n          ')}
-        }),
-        effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
-          ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString(field === 'proposed_text' ? 'Second proposal' : 'Second proposal')},`).join('\n          ')}
-        }),
-        effect('record_user_note', { note: 'All confirmation-loop items resolved.' }),
-      ],
+    const server = await createPgasServer({
+      programs: [{ name: ${tsString(slug)}, entry }],
+      drivers: {
+        authorHandle: scriptedAuthor([
+          effect('begin_work', {}),
+          effect(${tsString(`complete_${safeIdentifier(loop.seed.source_stage)}`)}, {
+            result_json: JSON.stringify({ planned: true }),
+            items_json: JSON.stringify([
+              {
+                id: 'wu-1',
+                title: 'Verify Pre-Launch System Health Checks',
+                description: 'Confirm critical services are healthy before launch.',
+                status: 'pending_review',
+              },
+              {
+                id: 'wu-2',
+                title: 'Validate Deployment Rollback Procedures',
+                description: 'Check rollback commands and ownership before release.',
+              },
+              {
+                id: 'wu-3',
+                title: 'Confirm Launch Communications Owner',
+                description: 'Confirm the launch communication owner before release.',
+              },
+            ]),
+          }, 'widget_output'),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('First proposal')},`).join('\n            ')}
+          }),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Second proposal')},`).join('\n            ')}
+          }),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Second proposal revised')},`).join('\n            ')}
+          }),
+          effect(${tsString(confirmationLoopProposeActionName(loop, 0, loops.length))}, {
+            ${confirmationLoopProposalFields(loop, lifecycle).map((field) => `${field}: ${tsString('Third proposal')},`).join('\n            ')}
+          }),
+          effect('record_user_note', { note: 'All confirmation-loop items resolved.' }),
+        ]),
+        observerHandle: {
+          modelId: 'generated-confirmation-loop-smoke-observer',
+          async complete() {
+            return 'noop';
+          },
+        },
+      },
+      devMode: true,
+      telemetry: { enabled: false },
+      port: 0,
     });
+    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
 
     try {
-      await harness.trigger('start generated confirmation-loop smoke');
-      await harness.trigger('plan generated confirmation-loop items');
-      let snapshot = await harness.snapshot();
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'start generated confirmation-loop smoke' });
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'plan generated confirmation-loop items' });
+      let snapshot = await readSnapshot(client, sessionId);
       expect(snapshot.mode).toBe(${tsString(loop.stage)});
+      expect(snapshot.domain[${tsString(`${loop.collection}.0.${loop.item_id_field ?? lifecycle.item.id_field}`)}]).toBe('wu-1');
+      expect(snapshot.domain[${tsString(`${loop.collection}.0.${loop.item_title_field ?? 'title'}`)}]).toBe('Verify Pre-Launch System Health Checks');
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${lifecycle.item.status_field}`)}]).toBe(${tsString(confirmationLoopInitialStatus(lifecycle))});
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.${loop.item_id_field ?? lifecycle.item.id_field}`)}]).toBe('wu-2');
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.${loop.item_title_field ?? 'title'}`)}]).toBe('Validate Deployment Rollback Procedures');
       expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe(${tsString(confirmationLoopInitialStatus(lifecycle))});
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${loop.item_id_field ?? lifecycle.item.id_field}`)}]).toBe('wu-3');
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${loop.item_title_field ?? 'title'}`)}]).toBe('Confirm Launch Communications Owner');
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${lifecycle.item.status_field}`)}]).toBe(${tsString(confirmationLoopInitialStatus(lifecycle))});
 
-      await harness.trigger('propose first generated item');
-      snapshot = await harness.snapshot();
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'propose first generated item' });
+      snapshot = await readSnapshot(client, sessionId);
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
       expect(snapshot.domain[${tsString(`${loop.collection}.0.proposed_text`)}]).toBe('First proposal');
 
-      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'approve', instruction: '', timestamp: '2026-07-16T00:00:00.000Z' } });
-      snapshot = await harness.snapshot();
+      await client.sessions.trigger(sessionId, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      snapshot = await readSnapshot(client, sessionId);
       expect(snapshot.domain[${tsString(`${loop.collection}.0.${lifecycle.item.status_field}`)}]).toBe('accepted');
       expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
       expect(snapshot.domain[${tsString(`${loop.collection}.1.proposed_text`)}]).toBe('Second proposal');
 
-      await harness.trigger({ channel: 'user_confirmation', payload: { decision: 'reject', instruction: '', timestamp: '2026-07-16T00:00:01.000Z' } });
-      snapshot = await harness.snapshot();
-      expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe('skipped');
+      await client.sessions.trigger(sessionId, {
+        channel: 'user_confirmation',
+        payload: { decision: 'request_revision', instruction: 'Tighten the proposed wording before asking again.' },
+      });
+      snapshot = await readSnapshot(client, sessionId);
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.user_instruction`)}]).toBe('Tighten the proposed wording before asking again.');
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.proposed_text`)}]).toBe('Second proposal revised');
+
+      await client.sessions.trigger(sessionId, { channel: 'user_confirmation', payload: { decision: 'approve' } });
+      snapshot = await readSnapshot(client, sessionId);
+      expect(snapshot.domain[${tsString(`${loop.collection}.1.${lifecycle.item.status_field}`)}]).toBe('accepted');
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${lifecycle.item.status_field}`)}]).toBe(${tsString(loop.proposed_status)});
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.proposed_text`)}]).toBe('Third proposal');
+
+      await client.sessions.trigger(sessionId, { channel: 'user_confirmation', payload: { decision: 'reject' } });
+      snapshot = await readSnapshot(client, sessionId);
+      expect(snapshot.domain[${tsString(`${loop.collection}.2.${lifecycle.item.status_field}`)}]).toBe('skipped');
       expect(snapshot.domain[${tsString(loop.aggregate.guard_field)}]).toBe(true);
       expect(snapshot.mode).toBe('complete');
     } finally {
-      await harness.close();
+      await server.close();
     }
   });
 });
 
-function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output'): TestHarnessAuthorResponse {
+interface SmokeSnapshot {
+  mode: string | null;
+  terminal: boolean;
+  domain: Record<string, unknown>;
+}
+
+type ScriptedAuthorResponse = ReturnType<typeof effect>;
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<SmokeSnapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    terminal: Boolean(state?.terminal ?? envelope.terminal),
+    domain: world.domain as Record<string, unknown>,
+  };
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-confirmation-loop-smoke-author',
+    async complete() {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated confirmation-loop smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      return JSON.stringify(response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
   return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
 }
 `;
@@ -3174,7 +3370,7 @@ function confirmationLoopSaveDecision(
 ): ReactionResult | undefined {
   const rawDecision = snapshot.get('inputs.user_decision.decision');
   const normalizedDecision = typeof rawDecision === 'string' ? rawDecision.trim() : '';
-  const decision = confirmationLoopNormalizeDecision(normalizedDecision, loop.decisions);
+  const decision = confirmationLoopNormalizeDecision(normalizedDecision, confirmationLoopRuntimeDecisions(loop.decisions));
   if (decision.length === 0) {
     return undefined;
   }
@@ -3205,13 +3401,7 @@ function confirmationLoopNormalizeDecision(
   if (Object.prototype.hasOwnProperty.call(decisions, decision)) {
     return decision;
   }
-  if (decision === 'request_revision' && Object.prototype.hasOwnProperty.call(decisions, 'revise')) {
-    return 'revise';
-  }
-  if (decision === 'reject' && Object.prototype.hasOwnProperty.call(decisions, 'skip')) {
-    return 'skip';
-  }
-  return decision;
+  return '';
 }
 
 function confirmationLoopEnforceStatus(
@@ -3281,10 +3471,14 @@ function confirmationLoopChoreographCollection(
   }
 
   if (items.length === 0) {
-    const seed = confirmationLoopSeedItems(snapshot.get(`${loop.seed.source_stage}.items_json`));
+    const seed = confirmationLoopSeedItems(
+      snapshot.get(`${loop.seed.source_stage}.items_json`),
+      loop.item_id_field ?? lifecycle.item.id_field,
+      loop.item_title_field ?? 'title',
+    );
     if (seed.kind === 'valid') {
-      const seeded = seed.items.map((title, index) =>
-        confirmationLoopSeedItem(loop, lifecycle, title, index));
+      const seeded = seed.items.map((seedItem, index) =>
+        confirmationLoopSeedItem(loop, lifecycle, seedItem, index));
       seeded.forEach((item, index) => {
         mutations.push({ op: 'MSet' as const, path: `${loop.collection}.${index}`, value: item });
       });
@@ -3335,7 +3529,17 @@ function confirmationLoopChoreographCollection(
   return { mutations };
 }
 
-function confirmationLoopSeedItems(value: unknown): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'valid'; items: string[] } {
+interface ConfirmationLoopSeedItem {
+  id?: string;
+  title: string;
+  fields: Record<string, unknown>;
+}
+
+function confirmationLoopSeedItems(
+  value: unknown,
+  idField: string,
+  titleField: string,
+): { kind: 'empty' } | { kind: 'invalid' } | { kind: 'valid'; items: ConfirmationLoopSeedItem[] } {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return { kind: 'empty' };
   }
@@ -3348,28 +3552,80 @@ function confirmationLoopSeedItems(value: unknown): { kind: 'empty' } | { kind: 
   if (!Array.isArray(parsed)) {
     return { kind: 'invalid' };
   }
-  if (parsed.length === 0 || !parsed.every((item): item is string => typeof item === 'string' && item.trim().length > 0)) {
+  if (parsed.length === 0) {
     return { kind: 'invalid' };
   }
-  return { kind: 'valid', items: parsed };
+  const items: ConfirmationLoopSeedItem[] = [];
+  for (let index = 0; index < parsed.length; index += 1) {
+    const item = parsed[index];
+    if (typeof item === 'string') {
+      items.push({ title: item, fields: {} });
+      continue;
+    }
+    if (item && typeof item === 'object' && !Array.isArray(item)) {
+      const record = item as Record<string, unknown>;
+      const id = confirmationLoopFirstPresentSeedValue(record, [idField, 'id']);
+      items.push({
+        ...(id === undefined ? {} : { id: String(id) }),
+        title: confirmationLoopSeedItemTitle(record, titleField, index),
+        fields: { ...record },
+      });
+      continue;
+    }
+    return { kind: 'invalid' };
+  }
+  return { kind: 'valid', items };
+}
+
+function confirmationLoopSeedItemTitle(
+  record: Record<string, unknown>,
+  titleField: string,
+  index: number,
+): string {
+  const value = confirmationLoopFirstPresentSeedValue(record, [titleField, 'title', 'name', 'label', 'summary']);
+  if (value !== undefined) {
+    return String(value);
+  }
+  const id = confirmationLoopFirstPresentSeedValue(record, ['id']);
+  return String(id ?? index);
+}
+
+function confirmationLoopFirstPresentSeedValue(record: Record<string, unknown>, fields: readonly string[]): unknown | undefined {
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(record, field) && record[field] !== undefined && record[field] !== null) {
+      return record[field];
+    }
+  }
+  return undefined;
 }
 
 function confirmationLoopSeedItem(
   loop: ConfirmationLoopDescriptor,
   lifecycle: CollectionLifecycleDescriptor,
-  title: string,
+  seed: ConfirmationLoopSeedItem,
   index: number,
 ): Record<string, unknown> {
   const idField = loop.item_id_field ?? lifecycle.item.id_field;
   const titleField = loop.item_title_field ?? 'title';
   const item: Record<string, unknown> = {
-    [idField]: `${loop.seed.id_prefix ?? 'item'}-${index + 1}`,
-    [titleField]: title,
+    [idField]: seed.id ?? `${loop.seed.id_prefix ?? 'item'}-${index + 1}`,
+    [titleField]: seed.title,
     [lifecycle.item.status_field]: confirmationLoopInitialStatus(lifecycle),
   };
-  for (const field of confirmationLoopSeedEmptyFields(loop, lifecycle)) {
+  for (const field of confirmationLoopSeedSchemaFields(loop, lifecycle)) {
+    if (Object.prototype.hasOwnProperty.call(seed.fields, field)) {
+      item[field] = seed.fields[field];
+    }
+  }
+  for (const field of confirmationLoopSeedSchemaFields(loop, lifecycle)) {
+    if (!Object.prototype.hasOwnProperty.call(item, field)) {
+      item[field] = '';
+    }
+  }
+  for (const field of confirmationLoopSeedForcedEmptyFields(loop, lifecycle)) {
     item[field] = '';
   }
+  item[lifecycle.item.status_field] = confirmationLoopInitialStatus(lifecycle);
   return item;
 }
 
@@ -3398,7 +3654,7 @@ function applyConfirmationPendingDecision(
   lifecycle: CollectionLifecycleDescriptor,
   pending: PendingConfirmationDecision,
 ): void {
-  const decision = loop.decisions[pending.decision];
+  const decision = confirmationLoopRuntimeDecisions(loop.decisions)[pending.decision];
   const fingerprint = confirmationLoopPendingFingerprint(pending);
   if (!decision) {
     mutations.push(
