@@ -32,9 +32,10 @@ describe('foundry capability registry (#166 PR-1)', () => {
   it('classifies the load-bearing Contract-Revision capabilities by current synthesis status', () => {
     expect(capabilityStatus('linear_stage_chain')).toBe('synthesizes');
     expect(capabilityStatus('collection_lifecycle_aggregate')).toBe('synthesizes');
-    // Emission is unit-proven + engine-spec-valid, but the live-drive hard gate (PR-4)
-    // hasn't proven it end-to-end — so it is scaffolds_with_gap, not synthesizes yet.
-    expect(capabilityStatus('per_item_confirmation')).toBe('scaffolds_with_gap');
+    // PROVEN end-to-end by the choreography live-drive hard gate against a real
+    // provider (qwen36-27b: seed→propose→approve/request_revision/reject applied
+    // per item, program reached complete, fail-closed gate green) — so synthesizes.
+    expect(capabilityStatus('per_item_confirmation')).toBe('synthesizes');
     for (const cap of [
       'delegation_child_session',
       'delegation_research_agent',
