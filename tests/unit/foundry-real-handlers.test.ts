@@ -553,6 +553,106 @@ describe('verification handlers', () => {
       restoreEnv('PGAS_OPENAI_MODEL', previousModel);
     }
   });
+
+  it('fails upload live drive verification when uploaded content never engages', async () => {
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    driveGeneratedProgramLiveMock.mockResolvedValueOnce({
+      final_mode: 'complete',
+      terminal: true,
+      rounds: 4,
+      triggers: 3,
+      actions: ['request_documents', 'complete_ingest_source'],
+      terminal_actions: [],
+      world: {
+        'work.source.status': 'blocked_no_content',
+        'work.source_ready': false,
+      },
+      parent_session_id: 'parent-session-1',
+      provider_hits: 2,
+      provider_exchanges: [],
+      author_driver: 'default',
+      status_history: [],
+      choreography: {
+        decision_table_respected: true,
+        one_proposed_invariant_held: true,
+        proposed_overlap_max: 0,
+        items_seen_max: 0,
+        decisions_applied: 0,
+        terminal_items_final: 0,
+        loop_engaged: true,
+        provider_hits_ok: true,
+        notes: ['confirmation_script_absent'],
+      },
+      delegation: null,
+      delegation_verdict: {
+        delegation_engaged: false,
+        result_complete: false,
+        child_session_distinct: false,
+        child_rounds_ok: false,
+        settled: false,
+        parent_complete: false,
+        provider_hits_ok: true,
+        no_stub_markers: true,
+        notes: ['delegation_script_absent'],
+      },
+      delegation_engaged: false,
+      upload: {
+        source_status: 'blocked_no_content',
+        char_count: 0,
+        expected_char_count: 88,
+        source_ready: false,
+        full_text_excerpt: '',
+        sentinel_present: false,
+        uploaded_file_id: 'file-1',
+        refs_landed: true,
+        upload_accepted: true,
+      },
+      upload_verdict: {
+        upload_engaged: false,
+        upload_accepted: true,
+        refs_landed: true,
+        content_extracted: false,
+        sentinel_present: false,
+        extraction_exact: false,
+        source_ready: false,
+        parent_complete: true,
+        provider_hits_ok: true,
+        no_stub_markers: true,
+        notes: ['source_status_not_extracted:blocked_no_content', 'sentinel_absent'],
+      },
+      upload_engaged: false,
+      runner_exit_code: 0,
+      runner_output_excerpt: '',
+    });
+
+    try {
+      await expect(
+        handlers.run_generated_live_drive_verification!(payload({
+          cwd: '/tmp/out',
+          domain: uploadDomain(),
+        })),
+      ).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'failed',
+        reason: expect.stringContaining('upload intake did not engage'),
+        upload_verdict: expect.stringContaining('sentinel_absent'),
+      });
+
+      expect(driveGeneratedProgramLiveMock).toHaveBeenCalledWith(expect.objectContaining({
+        uploadScript: expect.objectContaining({
+          resultPath: 'work.source',
+          sourceReadyPath: 'work.source_ready',
+          stage: 'ingest_source',
+          sentinel: expect.stringMatching(/^PGAS-UPLOAD-SENTINEL-/u),
+          expectedCharCount: expect.any(Number),
+        }),
+      }));
+    } finally {
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
 });
 
 describe('web_research', () => {
@@ -683,6 +783,27 @@ function delegationDomain(): Record<string, unknown> {
         round_timeout_ms: 5000,
         optional: true,
       }],
+    }),
+  };
+}
+
+function uploadDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'document-upload-live',
+    'intake.purpose': 'Request an uploaded text document, ingest its text deterministically, and complete.',
+    'intake.entry_channel': 'user_text',
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'work.source_ready',
+    }),
+    'intake.documents_json': JSON.stringify({
+      version: 1,
+      stage: 'ingest_source',
+      upload_types: ['text/plain', 'text/markdown'],
+      extraction: 'self_contained',
+      target: { root: 'work.source' },
+      required: true,
+      fidelity_floor: { min_chars: 40 },
     }),
   };
 }

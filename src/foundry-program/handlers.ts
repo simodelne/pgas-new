@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { ReactionHandler, ToolHandler } from '@simodelne/pgas-server/plugin.js';
@@ -8,10 +9,12 @@ import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-
 import { graduationEvidenceRows, renderFinalizedGraduationAudit } from '../pgas-new/graduation-audit.js';
 import { sanitizedVerificationEnv } from '../pgas-new/verification-env.js';
 import {
+  buildUploadLiveDriveFixtureText,
   deriveConfirmationScript,
   driveGeneratedProgramLive,
   type GeneratedLiveDriveDelegationScript,
   type GeneratedLiveDriveScriptDecision,
+  type GeneratedLiveDriveUploadScript,
 } from '../pgas-new/generated-live-drive.js';
 import { findExecutedPathStubMarkers } from '../pgas-new/verify.js';
 import {
@@ -1020,6 +1023,7 @@ export const handlers: Record<string, ToolHandler> = {
 
     const confirmationScript = generatedConfirmationScript(domain);
     const delegationScript = generatedDelegationScript(domain);
+    const uploadScript = generatedUploadScript(domain);
     const drive = await driveGeneratedProgramLive({
       targetDir: cwd,
       slug,
@@ -1028,12 +1032,17 @@ export const handlers: Record<string, ToolHandler> = {
       entryChannel,
       initialText: `Live graduation drive request. ${purpose}`,
       finalStage: completion,
-      driveTimeoutMs: delegationScript ? generatedDelegationDriveTimeoutMs() : 540_000,
+      driveTimeoutMs: delegationScript ? generatedDelegationDriveTimeoutMs() : uploadScript ? 900_000 : 540_000,
       ...(confirmationScript ? { confirmationScript } : {}),
       ...(delegationScript ? { delegationScript } : {}),
+      ...(uploadScript ? { uploadScript } : {}),
     });
 
     const stubFindings = generatedStageOutputStubFindings(drive.world);
+    const gateStubFindings = liveDriveGateStubFindings(
+      stubFindings,
+      delegationScript?.stage ?? uploadScript?.stage,
+    );
     const failureReasons: string[] = [];
     if (drive.final_mode !== completion) {
       failureReasons.push(`final mode ${String(drive.final_mode)} did not reach completion stage ${completion}`);
@@ -1055,8 +1064,11 @@ export const handlers: Record<string, ToolHandler> = {
     if (delegationScript && !drive.delegation_engaged) {
       failureReasons.push(`delegation choreography did not engage: ${drive.delegation_verdict.notes.join('; ')}`);
     }
-    if (stubFindings.length > 0) {
-      failureReasons.push(`stage outputs contain stub markers: ${stubFindings.slice(0, 3).join('; ')}`);
+    if (uploadScript && !drive.upload_engaged) {
+      failureReasons.push(`upload intake did not engage: ${drive.upload_verdict.notes.join('; ')}`);
+    }
+    if (gateStubFindings.length > 0) {
+      failureReasons.push(`stage outputs contain stub markers: ${gateStubFindings.slice(0, 3).join('; ')}`);
     }
     if (drive.runner_error) {
       failureReasons.push(`drive runner error: ${tail(drive.runner_error)}`);
@@ -1079,6 +1091,12 @@ export const handlers: Record<string, ToolHandler> = {
         ? {
             delegation: JSON.stringify(drive.delegation),
             delegation_verdict: JSON.stringify(drive.delegation_verdict),
+          }
+        : {}),
+      ...(uploadScript
+        ? {
+            upload: JSON.stringify(drive.upload),
+            upload_verdict: JSON.stringify(drive.upload_verdict),
           }
         : {}),
       ...(failureReasons.length > 0 ? { reason: failureReasons.join(' | ') } : {}),
@@ -1814,6 +1832,36 @@ function generatedDelegationScript(domain: Record<string, unknown> | undefined):
   };
 }
 
+function generatedUploadScript(domain: Record<string, unknown> | undefined): GeneratedLiveDriveUploadScript | undefined {
+  if (!domain) return undefined;
+  const documents = parseJsonRecord(optionalStringDomainField(domain, 'intake.documents_json'));
+  if (!documents) return undefined;
+
+  const stage = stringRecordField(documents, 'stage');
+  const resultPath = stringRecordField(documents, 'result_path') ?? documentTargetRoot(documents);
+  if (!stage || !resultPath) return undefined;
+
+  const sentinel = `PGAS-UPLOAD-SENTINEL-${randomUUID()}`;
+  return {
+    resultPath,
+    sourceReadyPath: generatedUploadSourceReadyPath(resultPath),
+    stage,
+    sentinel,
+    expectedCharCount: Buffer.byteLength(buildUploadLiveDriveFixtureText(sentinel), 'utf8'),
+  };
+}
+
+function documentTargetRoot(documents: Record<string, unknown>): string | undefined {
+  const target = documents.target;
+  return isRecord(target) ? stringRecordField(target, 'root') : undefined;
+}
+
+function generatedUploadSourceReadyPath(resultPath: string): string {
+  const parts = resultPath.split('.');
+  const leaf = parts.pop() ?? 'source';
+  return [...parts, `${leaf}_ready`].join('.');
+}
+
 function generatedDelegationDriveTimeoutMs(): number {
   const configured = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
   return Number.isFinite(configured) && configured > 0
@@ -1887,6 +1935,11 @@ function generatedStageOutputStubFindings(world: Record<string, unknown>): strin
     }
   }
   return findings;
+}
+
+function liveDriveGateStubFindings(stubFindings: readonly string[], hostStage: string | undefined): string[] {
+  const hostItemsPrefix = hostStage ? `${hostStage}.items_json` : null;
+  return stubFindings.filter((finding) => hostItemsPrefix === null || !finding.startsWith(hostItemsPrefix));
 }
 
 function tail(value: string): string {

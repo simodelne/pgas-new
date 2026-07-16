@@ -100,8 +100,11 @@ export {
 
 export {
   assessDelegationEngagement,
+  assessUploadEngagement,
+  buildUploadLiveDriveFixtureText,
   driveGeneratedProgramLive,
   renderDelegationLiveDriveRunnerSource,
+  renderUploadLiveDriveRunnerSource,
   startCountingProviderProxy,
   type CountingProviderProxy,
   type GeneratedLiveDriveDelegationReport,
@@ -109,6 +112,9 @@ export {
   type GeneratedLiveDriveDelegationVerdict,
   type GeneratedLiveDriveOptions,
   type GeneratedLiveDriveResult,
+  type GeneratedLiveDriveUploadReport,
+  type GeneratedLiveDriveUploadScript,
+  type GeneratedLiveDriveUploadVerdict,
   type ProviderExchange,
 } from "./pgas-new/generated-live-drive.js";
 

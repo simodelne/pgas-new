@@ -12,6 +12,7 @@
  * so a canned-fallback pass cannot masquerade as live.
  */
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,10 +21,12 @@ import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synth
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import type { ReasoningField } from '../../src/foundry-program/reasoning-contract.js';
 import {
+  buildUploadLiveDriveFixtureText,
   deriveConfirmationScript,
   driveGeneratedProgramLive,
   type GeneratedLiveDriveConfirmationScript,
   type GeneratedLiveDriveDelegationScript,
+  type GeneratedLiveDriveUploadScript,
 } from '../../src/pgas-new/generated-live-drive.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
 import { assertNoExecutedPathStubs } from '../../src/pgas-new/verify.js';
@@ -38,6 +41,7 @@ const REASONING_ACTION = 'complete_brief_summary';
 const CONFIRMATION_SLUG = 'work-unit-flow-live';
 const DELEGATION_SLUG = 'delegation-parent-live';
 const RESEARCH_AGENT_DELEGATION_SLUG = 'delegation-research-agent-live';
+const UPLOAD_SLUG = 'document-upload-live';
 const DELEGATION_LIVE_DRIVE_TIMEOUT_MS = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
 const DELEGATION_LIVE_TEST_TIMEOUT_MS = Math.max(LIVE_TIMEOUT_MS, DELEGATION_LIVE_DRIVE_TIMEOUT_MS + 60_000);
 
@@ -245,6 +249,38 @@ function researchAgentDelegationDomain(maxDelegatedRounds: number): Record<strin
     'intake.delegation_json': JSON.stringify(researchAgentDelegationDescriptor(maxDelegatedRounds)),
   };
 }
+
+const uploadDomain = {
+  'program.slug': UPLOAD_SLUG,
+  'program.name': 'Document Upload Live',
+  'program.target_dir': '/tmp/document-upload-live',
+  'program.design_path': 'design',
+  'intake.purpose': 'Request an uploaded text document, ingest its text deterministically, and complete.',
+  'intake.entry_channel': 'user_text',
+  'intake.stages_json': JSON.stringify([
+    { slug: 'intake', is_bootstrap: true },
+    { slug: 'ingest_source' },
+    { slug: 'complete', is_terminal: true },
+  ]),
+  'intake.transitions_json': JSON.stringify([
+    { from: 'intake', to: 'ingest_source', trigger: 'started', guard_field: 'intake.started' },
+    { from: 'ingest_source', to: 'complete', trigger: 'source_ready', guard_field: 'work.source_ready' },
+  ]),
+  'intake.delegation_json': JSON.stringify({ enabled: false }),
+  'intake.documents_json': JSON.stringify({
+    version: 1,
+    stage: 'ingest_source',
+    upload_types: ['text/plain', 'text/markdown'],
+    extraction: 'self_contained',
+    target: { root: 'work.source' },
+    required: true,
+    fidelity_floor: { min_chars: 40 },
+  }),
+  'intake.completion_json': JSON.stringify({
+    final_stage: 'complete',
+    guard_field: 'work.source_ready',
+  }),
+};
 
 const tempRoots: string[] = [];
 
@@ -512,6 +548,37 @@ describe('generated program live drive gate', () => {
     expect(drive.provider_hits).toBeGreaterThanOrEqual(1 + (drive.delegation?.child_rounds ?? 0));
   });
 
+  liveIt('drives a generated self-contained text upload intake through real file upload and provider stages', { timeout: LIVE_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, uploadScript } = liveSynthesizeAndRenderUpload();
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: UPLOAD_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: 'Please request the source text document, ingest it, and complete after source_ready is true.',
+      finalStage: 'complete',
+      maxTriggers: 12,
+      driveTimeoutMs: 900_000,
+      uploadScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] upload=${JSON.stringify(drive.upload)}\n`);
+    process.stdout.write(`[live-drive] upload_verdict=${JSON.stringify(drive.upload_verdict)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.upload_engaged).toBe(true);
+    expect(drive.upload_verdict.upload_engaged).toBe(true);
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.upload?.source_status).toBe('extracted');
+    expect(drive.upload?.source_ready).toBe(true);
+    expect(drive.upload?.sentinel_present).toBe(true);
+    expect(drive.upload?.char_count).toBe(uploadScript.expectedCharCount);
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
+  });
+
   liveIt('drives a generated delegation degrade path with a real provider', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
     const env = requireLiveDriveEnv();
     const { targetDir, delegationScript } = liveSynthesizeAndRenderDelegation(1);
@@ -595,6 +662,42 @@ async function liveSynthesizeAndRender(env: LiveDriveEnv): Promise<{ contractFie
   linkRootNodeModules(targetDir);
 
   return { contractFields, targetDir };
+}
+
+function liveSynthesizeAndRenderUpload(): {
+  targetDir: string;
+  uploadScript: GeneratedLiveDriveUploadScript;
+} {
+  const targetDir = trackedTempRoot('pgas-new-live-drive-upload-render-');
+  const artifact = artifactFromDomain(uploadDomain);
+  const documents = artifact.synthesis_context?.documents;
+  expect(documents, 'upload documents descriptor').toBeTruthy();
+
+  renderStandaloneScaffold({
+    slug: UPLOAD_SLUG,
+    name: 'Document Upload Live',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+  });
+  linkRootNodeModules(targetDir);
+
+  const sentinel = `PGAS-UPLOAD-SENTINEL-${randomUUID()}`;
+  return {
+    targetDir,
+    uploadScript: {
+      resultPath: documents!.result_path,
+      sourceReadyPath: sourceReadyPath(documents!.result_path),
+      stage: documents!.stage,
+      sentinel,
+      expectedCharCount: Buffer.byteLength(buildUploadLiveDriveFixtureText(sentinel), 'utf8'),
+    },
+  };
 }
 
 function liveSynthesizeAndRenderConfirmationLoop(): { targetDir: string; confirmationScript: GeneratedLiveDriveConfirmationScript } {
@@ -870,6 +973,12 @@ function trackedTempRoot(prefix: string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
   tempRoots.push(root);
   return root;
+}
+
+function sourceReadyPath(resultPath: string): string {
+  const parts = resultPath.split('.');
+  const leaf = parts.pop() ?? 'source';
+  return [...parts, `${leaf}_ready`].join('.');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

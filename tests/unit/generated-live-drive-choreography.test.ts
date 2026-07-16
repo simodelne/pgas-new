@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   assessDelegationEngagement,
   assessChoreography,
+  assessUploadEngagement,
   deriveConfirmationScript,
   renderLiveDriveRunnerSource,
   type GeneratedLiveDriveDelegationReport,
   type GeneratedLiveDriveStatusHistoryEntry,
+  type GeneratedLiveDriveUploadReport,
 } from '../../src/pgas-new/generated-live-drive.js';
 
 const loopDescriptor = {
@@ -145,6 +147,7 @@ describe('generated live-drive choreography helpers', () => {
     expect(hash(source)).toBe('ddededebbe54ba9710ca8609a4fe5e9591e4ba78e3879016fd4d75ca7b980404');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');
   });
 
   it('renders delegation evidence collection from the landed result, not child session routes', () => {
@@ -161,6 +164,22 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).toContain('recordFromWorldPath(world, script.resultPath)');
     expect(source).not.toContain('client.sessions.get(child');
     expect(source).not.toContain('client.sessions.rounds(child');
+  });
+
+  it('renders upload file orchestration only when an upload script is present', () => {
+    const source = renderLiveDriveRunnerSource('document-upload-live', undefined, undefined, {
+      resultPath: 'work.source',
+      sourceReadyPath: 'work.source_ready',
+      stage: 'ingest_source',
+      sentinel: 'PGAS-UPLOAD-SENTINEL-unit',
+      expectedCharCount: 72,
+    });
+
+    expect(source).toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');
+    expect(source).toContain('client.files.upload(sessionId, form)');
+    expect(source).toContain("channel: 'document_upload'");
+    expect(source).toContain('uploadReportFromWorld');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
   });
 });
 
@@ -280,6 +299,79 @@ describe('generated delegation live-drive verdict helpers', () => {
   });
 });
 
+describe('generated upload live-drive verdict helpers', () => {
+  it('passes only when the uploaded source was actually extracted by the generated program', () => {
+    const verdict = assessUploadEngagement({
+      report: uploadReport(),
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 2,
+      stubFindings: [],
+      hostStage: 'ingest_source',
+    });
+
+    expect(verdict.upload_engaged).toBe(true);
+    expect(verdict.content_extracted).toBe(true);
+    expect(verdict.sentinel_present).toBe(true);
+    expect(verdict.extraction_exact).toBe(true);
+    expect(verdict.source_ready).toBe(true);
+    expect(verdict.parent_complete).toBe(true);
+    expect(verdict.provider_hits_ok).toBe(true);
+    expect(verdict.no_stub_markers).toBe(true);
+    expect(verdict.notes).toEqual([]);
+  });
+
+  it('fails closed when no source was ever ingested', () => {
+    const verdict = assessUploadEngagement({
+      report: uploadReport({
+        source_status: null,
+        source_ready: false,
+        full_text_excerpt: '',
+        sentinel_present: false,
+        char_count: 0,
+      }),
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 2,
+      stubFindings: [],
+    });
+
+    expect(verdict.upload_engaged).toBe(false);
+    expect(verdict.content_extracted).toBe(false);
+    expect(verdict.source_ready).toBe(false);
+    expect(verdict.notes).toContain('source_status_not_extracted:null');
+    expect(verdict.notes).toContain('source_ready_false');
+  });
+
+  it('fails closed when the extracted text does not contain the per-run sentinel nonce', () => {
+    const verdict = assessUploadEngagement({
+      report: uploadReport({ sentinel_present: false }),
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 2,
+      stubFindings: [],
+    });
+
+    expect(verdict.upload_engaged).toBe(false);
+    expect(verdict.sentinel_present).toBe(false);
+    expect(verdict.notes).toContain('sentinel_absent');
+  });
+
+  it('fails closed when char_count does not exactly match the uploaded fixture byte length', () => {
+    const verdict = assessUploadEngagement({
+      report: uploadReport({ char_count: 71 }),
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 2,
+      stubFindings: [],
+    });
+
+    expect(verdict.upload_engaged).toBe(false);
+    expect(verdict.extraction_exact).toBe(false);
+    expect(verdict.notes).toContain('char_count_mismatch:expected=72:actual=71');
+  });
+});
+
 function history(
   round: number,
   statuses: string[],
@@ -314,6 +406,23 @@ function delegationReport(
     degraded: false,
     degrade_reason: '',
     exported_fields: { summary: 'delegated work complete' },
+    ...overrides,
+  };
+}
+
+function uploadReport(
+  overrides: Partial<GeneratedLiveDriveUploadReport> = {},
+): GeneratedLiveDriveUploadReport {
+  return {
+    source_status: 'extracted',
+    char_count: 72,
+    expected_char_count: 72,
+    source_ready: true,
+    full_text_excerpt: 'Uploaded source body with PGAS-UPLOAD-SENTINEL-unit and exact fixture bytes.',
+    sentinel_present: true,
+    uploaded_file_id: 'file-1',
+    refs_landed: true,
+    upload_accepted: true,
     ...overrides,
   };
 }
