@@ -7,10 +7,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WiringManifest } from '../../src/pgas-new/wiring-manifest.js';
 
 const spawnMock = vi.fn();
+const driveGeneratedProgramLiveMock = vi.hoisted(() => vi.fn());
 
 vi.mock('node:child_process', () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
+
+vi.mock('../../src/pgas-new/generated-live-drive.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/pgas-new/generated-live-drive.js')>();
+  return {
+    ...actual,
+    driveGeneratedProgramLive: (...args: unknown[]) => driveGeneratedProgramLiveMock(...args),
+  };
+});
 
 const { handlers } = await import('../../src/foundry-program/handlers.js');
 
@@ -35,6 +44,7 @@ const MANIFEST: WiringManifest = {
 
 beforeEach(() => {
   spawnMock.mockReset();
+  driveGeneratedProgramLiveMock.mockReset();
   vi.unstubAllGlobals();
 });
 
@@ -418,6 +428,60 @@ describe('verification handlers', () => {
       restoreEnv('PGAS_OPENAI_MODEL', previousModel);
     }
   });
+
+  it('fails confirmation-loop live drive verification when choreography never engages', async () => {
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    driveGeneratedProgramLiveMock.mockResolvedValueOnce({
+      final_mode: 'complete',
+      terminal: true,
+      rounds: 4,
+      triggers: 4,
+      actions: ['complete_plan_work'],
+      terminal_actions: [],
+      world: {},
+      provider_hits: 2,
+      provider_exchanges: [],
+      author_driver: 'default',
+      status_history: [],
+      choreography: {
+        decision_table_respected: false,
+        one_proposed_invariant_held: true,
+        proposed_overlap_max: 0,
+        items_seen_max: 0,
+        decisions_applied: 0,
+        terminal_items_final: 0,
+        loop_engaged: false,
+        provider_hits_ok: true,
+        notes: ['decision_table_vacuous:no_decision_applied'],
+      },
+      runner_exit_code: 0,
+      runner_output_excerpt: '',
+    });
+
+    try {
+      await expect(
+        handlers.run_generated_live_drive_verification!(payload({
+          cwd: '/tmp/out',
+          domain: confirmationLoopDomain(),
+        })),
+      ).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'failed',
+        reason: expect.stringContaining('confirmation loop choreography did not engage'),
+      });
+
+      expect(driveGeneratedProgramLiveMock).toHaveBeenCalledWith(expect.objectContaining({
+        confirmationScript: expect.objectContaining({
+          fallbackDecision: 'approve',
+          itemsPath: 'work_units.items',
+        }),
+      }));
+    } finally {
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
 });
 
 describe('web_research', () => {
@@ -442,6 +506,79 @@ function payload(args: Record<string, unknown>) {
       'program.target_dir': '/tmp/out',
       ...domain,
     },
+  };
+}
+
+function confirmationLoopDomain(): Record<string, unknown> {
+  const completion = {
+    final_stage: 'complete',
+    guard_field: 'work_units.all_terminal',
+    collection_lifecycle: {
+      version: 1,
+      name: 'work_units',
+      item_label: 'work unit',
+      storage: {
+        items_path: 'work_units.items',
+        event_path: 'work_units.pending_event_json',
+        violation_path: 'work_units.lifecycle_violation_json',
+        representation: 'indexed_array',
+      },
+      item: {
+        id_field: 'id',
+        status_field: 'status',
+        schema: {
+          id: 'string',
+          title: 'string',
+          proposed_text: 'string',
+          user_instruction: 'string',
+        },
+      },
+      statuses: [
+        { name: 'pending', initial: true },
+        { name: 'proposed' },
+        { name: 'accepted', terminal: true },
+        { name: 'skipped', terminal: true },
+      ],
+      transitions: [],
+      aggregate: {
+        guard_field: 'work_units.all_terminal',
+        terminal_statuses: ['accepted', 'skipped'],
+        require_non_empty: true,
+      },
+    },
+  };
+  const interaction = {
+    confirmation_loops: [{
+      collection: 'work_units.items',
+      proposed_status: 'proposed',
+      seed: { source_stage: 'plan_work', id_prefix: 'unit' },
+      decisions: {
+        approve: { to: 'accepted' },
+        revise: {
+          to: 'proposed',
+          requires_instruction: true,
+          instruction_path: 'work_units.items.*.user_instruction',
+          re_propose: true,
+        },
+        skip: { to: 'skipped' },
+      },
+      one_proposed_at_a_time: true,
+      aggregate: {
+        guard_field: 'work_units.all_terminal',
+        terminal_statuses: ['accepted', 'skipped'],
+      },
+      stage: 'review_work',
+      summary_path: 'summary.confirmation_loop',
+      violation_path: 'work_units.confirmation_violation_json',
+      pending_action_path: 'decisions.pending_review_work_action',
+    }],
+  };
+  return {
+    'program.slug': 'work-unit-flow-live',
+    'intake.purpose': 'Plan exactly two work units and review them with confirmation.',
+    'intake.entry_channel': 'user_text',
+    'intake.completion_json': JSON.stringify(completion),
+    'intake.interaction_json': JSON.stringify(interaction),
   };
 }
 

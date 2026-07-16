@@ -170,6 +170,7 @@ export interface GeneratedLiveDriveConfirmationScript {
   proposedStatus: string;
   decisionField?: string;
   instructionField?: string;
+  fallbackDecision: string;
   decisions: GeneratedLiveDriveScriptDecision[];
   decisionTable: Record<string, string>;
   terminalStatuses: string[];
@@ -196,6 +197,10 @@ export interface GeneratedLiveDriveChoreographyVerdict {
   decision_table_respected: boolean;
   one_proposed_invariant_held: boolean;
   proposed_overlap_max: number;
+  items_seen_max: number;
+  decisions_applied: number;
+  terminal_items_final: number;
+  loop_engaged: boolean;
   provider_hits_ok: boolean;
   notes: string[];
 }
@@ -222,6 +227,7 @@ export function deriveConfirmationScript(
     proposedStatus: descriptor.proposed_status,
     decisionField: 'inputs.user_decision.decision',
     instructionField: 'inputs.user_decision.instruction',
+    fallbackDecision: 'approve',
     decisions,
     decisionTable,
     terminalStatuses: [...descriptor.aggregate.terminal_statuses],
@@ -235,9 +241,12 @@ export function assessChoreography(
 ): GeneratedLiveDriveChoreographyVerdict {
   const notes: string[] = [];
   let proposedOverlapMax = 0;
+  let itemsSeenMax = 0;
+  let decisionsApplied = 0;
   let decisionTableRespected = true;
 
   for (const snapshot of history) {
+    itemsSeenMax = Math.max(itemsSeenMax, snapshot.items.length);
     const proposedCount = snapshot.items.filter((item) => item.status === script.proposedStatus).length;
     proposedOverlapMax = Math.max(proposedOverlapMax, proposedCount);
   }
@@ -254,7 +263,9 @@ export function assessChoreography(
       notes.push(`decision_table_unknown:round=${String(snapshot.round)}:index=${String(snapshot.decision.index)}:decision=${snapshot.decision.decision}`);
       continue;
     }
-    if (actualStatus !== expectedStatus) {
+    if (actualStatus === expectedStatus) {
+      decisionsApplied += 1;
+    } else {
       decisionTableRespected = false;
       notes.push(
         `decision_table_mismatch:round=${String(snapshot.round)}:index=${String(snapshot.decision.index)}:decision=${snapshot.decision.decision}:expected=${expectedStatus}:actual=${String(actualStatus)}`,
@@ -262,10 +273,20 @@ export function assessChoreography(
     }
   }
 
+  if (script.decisions.length > 0 && decisionsApplied === 0) {
+    decisionTableRespected = false;
+    notes.push('decision_table_vacuous:no_decision_applied');
+  }
   const oneProposedInvariantHeld = proposedOverlapMax <= 1;
   if (!oneProposedInvariantHeld) {
     notes.push(`one_proposed_invariant_violated:max=${String(proposedOverlapMax)}`);
   }
+  const lastSnapshot = history[history.length - 1];
+  const terminalStatuses = new Set(script.terminalStatuses);
+  const terminalItemsFinal = lastSnapshot
+    ? lastSnapshot.items.filter((item) => item.status !== null && terminalStatuses.has(item.status)).length
+    : 0;
+  const loopEngaged = itemsSeenMax >= 1 && proposedOverlapMax >= 1 && decisionsApplied >= 1;
   const providerHitsOk = providerHits >= 1;
   if (!providerHitsOk) {
     notes.push('provider_hits_below_minimum');
@@ -275,6 +296,10 @@ export function assessChoreography(
     decision_table_respected: decisionTableRespected,
     one_proposed_invariant_held: oneProposedInvariantHeld,
     proposed_overlap_max: proposedOverlapMax,
+    items_seen_max: itemsSeenMax,
+    decisions_applied: decisionsApplied,
+    terminal_items_final: terminalItemsFinal,
+    loop_engaged: loopEngaged,
     provider_hits_ok: providerHitsOk,
     notes,
   };
@@ -539,6 +564,7 @@ interface ConfirmationScript {
   itemsPath: string;
   statusField: string;
   proposedStatus: string;
+  fallbackDecision: string;
   decisions: Array<{ decision: string; instruction?: string }>;
   decisionTable: Record<string, string>;
   terminalStatuses: string[];
@@ -588,11 +614,11 @@ async function main(): Promise<void> {
   while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
     const proposed = findProposedItem(state.world, confirmationScript);
     if (proposed) {
-      if (scriptIndex >= confirmationScript.decisions.length) {
-        break;
-      }
-      const decision = confirmationScript.decisions[scriptIndex] as { decision: string; instruction?: string };
-      scriptIndex += 1;
+      const fallbackDecision = { decision: confirmationScript.fallbackDecision };
+      const decision = scriptIndex < confirmationScript.decisions.length
+        ? confirmationScript.decisions[scriptIndex] as { decision: string; instruction?: string }
+        : fallbackDecision;
+      if (scriptIndex < confirmationScript.decisions.length) scriptIndex += 1;
       const before = state.roundCount;
       const payload = buildConfirmationPayload(confirmationScript, proposed, decision);
       try {
@@ -699,6 +725,9 @@ function parseConfirmationScript(raw: string): ConfirmationScript {
     itemsPath: stringField(parsed, 'itemsPath'),
     statusField: stringField(parsed, 'statusField'),
     proposedStatus: stringField(parsed, 'proposedStatus'),
+    fallbackDecision: typeof parsed.fallbackDecision === 'string' && parsed.fallbackDecision.length > 0
+      ? parsed.fallbackDecision
+      : 'approve',
     decisions,
     decisionTable,
     terminalStatuses,
@@ -949,6 +978,10 @@ function noConfirmationScriptChoreography(providerHits: number): GeneratedLiveDr
     decision_table_respected: true,
     one_proposed_invariant_held: true,
     proposed_overlap_max: 0,
+    items_seen_max: 0,
+    decisions_applied: 0,
+    terminal_items_final: 0,
+    loop_engaged: true,
     provider_hits_ok: providerHits >= 1,
     notes: providerHits >= 1 ? ['confirmation_script_absent'] : ['confirmation_script_absent', 'provider_hits_below_minimum'],
   };
