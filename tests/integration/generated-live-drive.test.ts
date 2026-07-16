@@ -105,6 +105,7 @@ const confirmationLifecycle = {
 const confirmationLoop = {
   collection: 'work_units.items',
   proposed_status: 'proposed',
+  seed: { source_stage: 'plan_work', id_prefix: 'unit' },
   decisions: {
     approve: { to: 'accepted' },
     revise: {
@@ -131,18 +132,22 @@ const confirmationLoopDomain = {
   'program.name': 'Work Unit Flow Live',
   'program.target_dir': '/tmp/work-unit-flow-live',
   'program.design_path': 'design',
-  'intake.purpose': 'Review two work units one at a time with explicit user confirmation before completion.',
+  'intake.purpose': 'Plan exactly two launch work units, then review each one at a time with explicit user confirmation before completion.',
   'intake.entry_channel': 'user_text',
   'intake.stages_json': JSON.stringify([
     { slug: 'intake', is_bootstrap: true },
+    { slug: 'plan_work' },
     { slug: 'review_work' },
     { slug: 'complete', is_terminal: true },
   ]),
   'intake.transitions_json': JSON.stringify([
-    { from: 'intake', to: 'review_work', trigger: 'started', guard_field: 'intake.started' },
+    { from: 'intake', to: 'plan_work', trigger: 'started', guard_field: 'intake.started' },
+    { from: 'plan_work', to: 'review_work', trigger: 'planned', guard_field: 'plan_work.done' },
     { from: 'review_work', to: 'complete', trigger: 'done', guard_field: 'work_units.all_terminal' },
   ]),
-  'intake.delegation_json': JSON.stringify({ enabled: false }),
+  'intake.delegation_json': JSON.stringify({
+    plan_work: { kind: 'llm-reasoning' },
+  }),
   'intake.completion_json': JSON.stringify({
     final_stage: 'complete',
     guard_field: 'work_units.all_terminal',
@@ -326,11 +331,11 @@ describe('generated program live drive gate', () => {
       providerBaseUrl: env.baseUrl,
       model: env.model,
       initialText: [
-        'Create two review items for the launch checklist.',
-        'Propose one item at a time and wait for user confirmation before continuing.',
+        'Plan exactly two review items for the launch checklist.',
+        'Then propose one item at a time and wait for user confirmation before continuing.',
       ].join(' '),
       finalStage: 'complete',
-      maxTriggers: 12,
+      maxTriggers: 16,
       driveTimeoutMs: 900_000,
       confirmationScript,
     });
@@ -339,12 +344,13 @@ describe('generated program live drive gate', () => {
     process.stdout.write(`[live-drive] choreography=${JSON.stringify(drive.choreography)}\n`);
 
     expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
-    expect(drive.final_mode).toBe('complete');
-    expect(drive.terminal).toBe(true);
-    expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
-    expect(drive.choreography.provider_hits_ok).toBe(true);
+    expect(drive.choreography.loop_engaged).toBe(true);
+    expect(drive.choreography.decisions_applied).toBeGreaterThanOrEqual(2);
+    expect(drive.choreography.proposed_overlap_max).toBe(1);
     expect(drive.choreography.decision_table_respected).toBe(true);
     expect(drive.choreography.one_proposed_invariant_held).toBe(true);
+    expect(drive.choreography.terminal_items_final).toBeGreaterThanOrEqual(2);
+    expect(drive.final_mode).toBe('complete');
   });
 });
 

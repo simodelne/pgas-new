@@ -48,6 +48,7 @@ describe('generated live-drive choreography helpers', () => {
       proposedStatus: 'proposed',
       decisionField: 'inputs.user_decision.decision',
       instructionField: 'inputs.user_decision.instruction',
+      fallbackDecision: 'approve',
       decisions: [
         { decision: 'approve' },
         { decision: 'revise', instruction: 'Tighten the item before proposing it again.' },
@@ -75,9 +76,27 @@ describe('generated live-drive choreography helpers', () => {
       decision_table_respected: true,
       one_proposed_invariant_held: true,
       proposed_overlap_max: 1,
+      items_seen_max: 2,
+      decisions_applied: 2,
+      terminal_items_final: 2,
+      loop_engaged: true,
       provider_hits_ok: true,
       notes: [],
     });
+  });
+
+  it('fails closed when no scripted decision was observed as applied', () => {
+    const verdict = assessChoreography([
+      history(0, []),
+      history(1, []),
+    ], script, 1);
+
+    expect(verdict.decision_table_respected).toBe(false);
+    expect(verdict.loop_engaged).toBe(false);
+    expect(verdict.decisions_applied).toBe(0);
+    expect(verdict.items_seen_max).toBe(0);
+    expect(verdict.terminal_items_final).toBe(0);
+    expect(verdict.notes).toContain('decision_table_vacuous:no_decision_applied');
   });
 
   it('flags histories where two items are proposed simultaneously', () => {
@@ -88,7 +107,9 @@ describe('generated live-drive choreography helpers', () => {
 
     expect(verdict.one_proposed_invariant_held).toBe(false);
     expect(verdict.proposed_overlap_max).toBe(2);
+    expect(verdict.loop_engaged).toBe(false);
     expect(verdict.notes).toContain('one_proposed_invariant_violated:max=2');
+    expect(verdict.notes).toContain('decision_table_vacuous:no_decision_applied');
   });
 
   it('flags targeted decisions whose resulting item status does not match the decision table', () => {
@@ -108,6 +129,8 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).toContain('buildConfirmationPayload');
     expect(source).toContain('await client.sessions.trigger(sessionId, { channel: confirmationScript.channel, payload });');
     expect(source).toContain('status_history');
+    expect(source).toContain('confirmationScript.fallbackDecision');
+    expect(source).toContain('const fallbackDecision = { decision: confirmationScript.fallbackDecision };');
   });
 
   it('keeps the no-script runner source byte-identical to the entry-channel-only baseline', () => {

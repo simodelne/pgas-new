@@ -7,7 +7,11 @@ import { renderMissingWiringRequest } from '../pgas-new/curator-request.js';
 import { renderExistingRepoAttachment, renderStandaloneScaffold } from '../pgas-new/template-renderer.js';
 import { graduationEvidenceRows, renderFinalizedGraduationAudit } from '../pgas-new/graduation-audit.js';
 import { sanitizedVerificationEnv } from '../pgas-new/verification-env.js';
-import { driveGeneratedProgramLive } from '../pgas-new/generated-live-drive.js';
+import {
+  deriveConfirmationScript,
+  driveGeneratedProgramLive,
+  type GeneratedLiveDriveScriptDecision,
+} from '../pgas-new/generated-live-drive.js';
 import { findExecutedPathStubMarkers } from '../pgas-new/verify.js';
 import {
   WIRING_MANIFEST_PATH,
@@ -27,7 +31,7 @@ import {
 import { synthesizeDomainLogic, type StageBodyGenerator } from './domain-synthesis.js';
 import type { ReasoningContractGenerator } from './reasoning-contract.js';
 import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain } from './synthesizer.js';
-import { putSynthesizedArtifact, requireSynthesizedArtifact, type SynthesizedArtifact } from './synthesizer-store.js';
+import { putSynthesizedArtifact, requireSynthesizedArtifact, type SynthesisContext, type SynthesizedArtifact } from './synthesizer-store.js';
 
 const defaultStages = [
   { slug: 'start', is_bootstrap: true },
@@ -975,6 +979,7 @@ export const handlers: Record<string, ToolHandler> = {
     const completion = parseGeneratedCompletion(domain);
     const entryChannel = generatedEntryChannel(domain);
 
+    const confirmationScript = generatedConfirmationScript(domain);
     const drive = await driveGeneratedProgramLive({
       targetDir: cwd,
       slug,
@@ -984,6 +989,7 @@ export const handlers: Record<string, ToolHandler> = {
       initialText: `Live graduation drive request. ${purpose}`,
       finalStage: completion,
       driveTimeoutMs: 540_000,
+      ...(confirmationScript ? { confirmationScript } : {}),
     });
 
     const stubFindings = generatedStageOutputStubFindings(drive.world);
@@ -993,6 +999,17 @@ export const handlers: Record<string, ToolHandler> = {
     }
     if (drive.provider_hits < 1) {
       failureReasons.push('no successful provider round trips were observed during the drive');
+    }
+    if (confirmationScript) {
+      if (!drive.choreography.loop_engaged) {
+        failureReasons.push('confirmation loop choreography did not engage');
+      }
+      if (!drive.choreography.decision_table_respected) {
+        failureReasons.push(`confirmation loop decision table was not respected: ${drive.choreography.notes.join('; ')}`);
+      }
+      if (!drive.choreography.one_proposed_invariant_held) {
+        failureReasons.push('confirmation loop one-proposed invariant was violated');
+      }
     }
     if (stubFindings.length > 0) {
       failureReasons.push(`stage outputs contain stub markers: ${stubFindings.slice(0, 3).join('; ')}`);
@@ -1010,6 +1027,7 @@ export const handlers: Record<string, ToolHandler> = {
       rounds: drive.rounds,
       provider_hits: drive.provider_hits,
       drive_actions: drive.actions.join(','),
+      choreography: JSON.stringify(drive.choreography),
       ...(failureReasons.length > 0 ? { reason: failureReasons.join(' | ') } : {}),
     };
   },
@@ -1394,6 +1412,10 @@ function domainValue(domain: Record<string, unknown>, path: string): unknown {
   return current;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function stringPayloadField(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   if (typeof value !== 'string' || value.length === 0) {
@@ -1692,6 +1714,58 @@ function parseGeneratedCompletion(domain: Record<string, unknown> | undefined): 
       : 'complete';
   } catch {
     return 'complete';
+  }
+}
+
+type ConfirmationLoopForDrive = NonNullable<NonNullable<SynthesisContext['interaction']>['confirmation_loops']>[number];
+type CollectionLifecycleForDrive = NonNullable<SynthesisContext['completion']['collection_lifecycle']>;
+
+function generatedConfirmationScript(domain: Record<string, unknown> | undefined) {
+  if (!domain) return undefined;
+  const interaction = parseJsonRecord(optionalStringDomainField(domain, 'intake.interaction_json'));
+  const loops = Array.isArray(interaction?.confirmation_loops)
+    ? interaction.confirmation_loops.filter(isRecord)
+    : [];
+  if (loops.length === 0) return undefined;
+  const completion = parseJsonRecord(optionalStringDomainField(domain, 'intake.completion_json'));
+  const lifecycle = isRecord(completion?.collection_lifecycle)
+    ? completion.collection_lifecycle as CollectionLifecycleForDrive
+    : undefined;
+  const loop = loops[0] as ConfirmationLoopForDrive;
+  return deriveConfirmationScript(loop, confirmationDriveDecisionOrder(loop), lifecycle);
+}
+
+function confirmationDriveDecisionOrder(
+  loop: ConfirmationLoopForDrive,
+): Array<string | GeneratedLiveDriveScriptDecision> {
+  const order: Array<string | GeneratedLiveDriveScriptDecision> = [];
+  const push = (decision: string): void => {
+    if (!Object.prototype.hasOwnProperty.call(loop.decisions, decision)) return;
+    const config = loop.decisions[decision];
+    order.push(config.requires_instruction
+      ? { decision, instruction: 'Please revise the item and propose it again.' }
+      : decision);
+  };
+
+  push('approve');
+  push('revise');
+  push('approve');
+  push('skip');
+
+  const alreadyIncluded = new Set(order.map((entry) => typeof entry === 'string' ? entry : entry.decision));
+  for (const decision of Object.keys(loop.decisions)) {
+    if (!alreadyIncluded.has(decision)) push(decision);
+  }
+  return order;
+}
+
+function parseJsonRecord(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }
 
