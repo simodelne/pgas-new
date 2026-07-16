@@ -1,6 +1,6 @@
 export const PGAS_SERVER_PACKAGE = "@simodelne/pgas-server";
 
-export const PGAS_SERVER_VERSION = "3.18.0";
+export const PGAS_SERVER_VERSION = "3.21.0";
 
 export const PGAS_SERVER_RUNTIME_IMPORTS = [
   "@simodelne/pgas-server/plugin.js",
