@@ -99,9 +99,14 @@ export {
 } from "./pgas-new/verify.js";
 
 export {
+  assessDelegationEngagement,
   driveGeneratedProgramLive,
+  renderDelegationLiveDriveRunnerSource,
   startCountingProviderProxy,
   type CountingProviderProxy,
+  type GeneratedLiveDriveDelegationReport,
+  type GeneratedLiveDriveDelegationScript,
+  type GeneratedLiveDriveDelegationVerdict,
   type GeneratedLiveDriveOptions,
   type GeneratedLiveDriveResult,
   type ProviderExchange,

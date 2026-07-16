@@ -10,6 +10,7 @@ import { sanitizedVerificationEnv } from '../pgas-new/verification-env.js';
 import {
   deriveConfirmationScript,
   driveGeneratedProgramLive,
+  type GeneratedLiveDriveDelegationScript,
   type GeneratedLiveDriveScriptDecision,
 } from '../pgas-new/generated-live-drive.js';
 import { findExecutedPathStubMarkers } from '../pgas-new/verify.js';
@@ -983,6 +984,7 @@ export const handlers: Record<string, ToolHandler> = {
     const entryChannel = generatedEntryChannel(domain);
 
     const confirmationScript = generatedConfirmationScript(domain);
+    const delegationScript = generatedDelegationScript(domain);
     const drive = await driveGeneratedProgramLive({
       targetDir: cwd,
       slug,
@@ -991,8 +993,9 @@ export const handlers: Record<string, ToolHandler> = {
       entryChannel,
       initialText: `Live graduation drive request. ${purpose}`,
       finalStage: completion,
-      driveTimeoutMs: 540_000,
+      driveTimeoutMs: delegationScript ? generatedDelegationDriveTimeoutMs() : 540_000,
       ...(confirmationScript ? { confirmationScript } : {}),
+      ...(delegationScript ? { delegationScript } : {}),
     });
 
     const stubFindings = generatedStageOutputStubFindings(drive.world);
@@ -1014,11 +1017,17 @@ export const handlers: Record<string, ToolHandler> = {
         failureReasons.push('confirmation loop one-proposed invariant was violated');
       }
     }
+    if (delegationScript && !drive.delegation_engaged) {
+      failureReasons.push(`delegation choreography did not engage: ${drive.delegation_verdict.notes.join('; ')}`);
+    }
     if (stubFindings.length > 0) {
       failureReasons.push(`stage outputs contain stub markers: ${stubFindings.slice(0, 3).join('; ')}`);
     }
     if (drive.runner_error) {
       failureReasons.push(`drive runner error: ${tail(drive.runner_error)}`);
+    }
+    if (drive.runner_timeout_kind === 'trigger_in_flight') {
+      failureReasons.push('drive timed out while parent trigger was still in flight');
     }
 
     return {
@@ -1031,6 +1040,12 @@ export const handlers: Record<string, ToolHandler> = {
       provider_hits: drive.provider_hits,
       drive_actions: drive.actions.join(','),
       choreography: JSON.stringify(drive.choreography),
+      ...(delegationScript
+        ? {
+            delegation: JSON.stringify(drive.delegation),
+            delegation_verdict: JSON.stringify(drive.delegation_verdict),
+          }
+        : {}),
       ...(failureReasons.length > 0 ? { reason: failureReasons.join(' | ') } : {}),
     };
   },
@@ -1738,6 +1753,39 @@ function generatedConfirmationScript(domain: Record<string, unknown> | undefined
   return deriveConfirmationScript(loop, confirmationDriveDecisionOrder(loop), lifecycle);
 }
 
+function generatedDelegationScript(domain: Record<string, unknown> | undefined): GeneratedLiveDriveDelegationScript | undefined {
+  if (!domain) return undefined;
+  const delegation = parseJsonRecord(optionalStringDomainField(domain, 'intake.delegation_json'));
+  const children = Array.isArray(delegation?.children)
+    ? delegation.children.filter(isRecord)
+    : [];
+  const child = children[0];
+  if (!child) return undefined;
+
+  const id = stringRecordField(child, 'id');
+  const stage = stringRecordField(child, 'stage');
+  const resultPath = stringRecordField(child, 'result_path');
+  if (!id || !stage || !resultPath) return undefined;
+  const synthesizeChild = isRecord(child.synthesize_child) ? child.synthesize_child : undefined;
+  const childProgram = stringRecordField(child, 'target_spec')
+    ?? (synthesizeChild ? stringRecordField(synthesizeChild, 'slug') : undefined)
+    ?? id;
+  return {
+    resultPath,
+    settledPath: `${stage}.delegation.${id}.settled`,
+    degradedPath: `${stage}.delegation.${id}.degraded`,
+    stage,
+    childProgram,
+  };
+}
+
+function generatedDelegationDriveTimeoutMs(): number {
+  const configured = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
+  return Number.isFinite(configured) && configured > 0
+    ? Math.max(configured, 900_000)
+    : 1_800_000;
+}
+
 function confirmationDriveDecisionOrder(
   loop: ConfirmationLoopForDrive,
 ): Array<string | GeneratedLiveDriveScriptDecision> {
@@ -1770,6 +1818,11 @@ function parseJsonRecord(raw: string | undefined): Record<string, unknown> | und
   } catch {
     return undefined;
   }
+}
+
+function stringRecordField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /** Mirrors the synthesizer's normalizePgasChannelId semantics for the drive trigger. */

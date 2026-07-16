@@ -23,8 +23,9 @@ import {
   deriveConfirmationScript,
   driveGeneratedProgramLive,
   type GeneratedLiveDriveConfirmationScript,
+  type GeneratedLiveDriveDelegationScript,
 } from '../../src/pgas-new/generated-live-drive.js';
-import { renderStandaloneScaffold } from '../../src/pgas-new/template-renderer.js';
+import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
 import { assertNoExecutedPathStubs } from '../../src/pgas-new/verify.js';
 
 const LIVE_DRIVE_ENABLED = process.env.PGAS_LIVE_GRADUATION === '1';
@@ -35,6 +36,9 @@ const SLUG = 'proposal-ops';
 const REASONING_STAGE = 'brief_summary';
 const REASONING_ACTION = 'complete_brief_summary';
 const CONFIRMATION_SLUG = 'work-unit-flow-live';
+const DELEGATION_SLUG = 'delegation-parent-live';
+const DELEGATION_LIVE_DRIVE_TIMEOUT_MS = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
+const DELEGATION_LIVE_TEST_TIMEOUT_MS = Math.max(LIVE_TIMEOUT_MS, DELEGATION_LIVE_DRIVE_TIMEOUT_MS + 60_000);
 
 // Same representative multi-archetype domain shape as the hermetic smoke test:
 // pure-compute (intake, fee_modeling) + external-adapter (crm_lookup) +
@@ -155,6 +159,61 @@ const confirmationLoopDomain = {
   }),
   'intake.interaction_json': JSON.stringify({ confirmation_loops: [confirmationLoop] }),
 };
+
+function delegationDescriptor(maxDelegatedRounds: number): Record<string, unknown> {
+  return {
+    stages: {
+      dispatch_research: { kind: 'llm-reasoning', reasoning_per_turn: true },
+    },
+    children: [
+      {
+        id: 'research',
+        stage: 'dispatch_research',
+        synthesize_child: {
+          kind: 'worker',
+          purpose: 'Handle delegated research work and echo the seeded topic.',
+          result_fields: {
+            summary: 'string',
+            seeded_topic: 'string',
+          },
+        },
+        payload_map: {
+          'request.topic': 'inputs.initial_user_text',
+          'domain_context.original_request': 'inputs.initial_user_text',
+        },
+        result_path: 'dispatch_research.delegation.research.result',
+        max_delegated_rounds: maxDelegatedRounds,
+        round_timeout_ms: 120_000,
+        optional: true,
+      },
+    ],
+  };
+}
+
+function delegationDomain(maxDelegatedRounds: number): Record<string, unknown> {
+  return {
+    'program.slug': DELEGATION_SLUG,
+    'program.name': 'Delegation Parent Live',
+    'program.target_dir': '/tmp/delegation-parent-live',
+    'program.design_path': 'design',
+    'intake.purpose': 'Dispatch one delegated child worker and complete after the result settles.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'dispatch_research' },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'dispatch_research', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'dispatch_research', to: 'complete', trigger: 'done', guard_field: 'dispatch_research.ready' },
+    ]),
+    'intake.delegation_json': JSON.stringify(delegationDescriptor(maxDelegatedRounds)),
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'dispatch_research.ready',
+    }),
+  };
+}
 
 const tempRoots: string[] = [];
 
@@ -355,6 +414,70 @@ describe('generated program live drive gate', () => {
     expect(drive.choreography.terminal_items_final).toBeGreaterThanOrEqual(2);
     expect(drive.final_mode).toBe('complete');
   });
+
+  liveIt('drives a generated delegation parent through a real child session', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, delegationScript } = liveSynthesizeAndRenderDelegation(12);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: DELEGATION_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: 'Research the seeded delegation topic and return a concise summary. Seeded topic: lunar archive triage.',
+      finalStage: 'complete',
+      maxTriggers: 10,
+      driveTimeoutMs: DELEGATION_LIVE_DRIVE_TIMEOUT_MS,
+      delegationScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] delegation=${JSON.stringify(drive.delegation)}\n`);
+    process.stdout.write(`[live-drive] delegation_verdict=${JSON.stringify(drive.delegation_verdict)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.delegation_engaged).toBe(true);
+    expect(drive.delegation_verdict.delegation_engaged).toBe(true);
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.delegation?.result_status).toBe('complete');
+    expect(typeof drive.delegation?.child_session_id).toBe('string');
+    expect(drive.delegation?.child_session_id).not.toBe(drive.parent_session_id);
+    expect(drive.delegation?.child_rounds).toBeGreaterThanOrEqual(1);
+    expect(drive.delegation?.settled).toBe(true);
+    expect(drive.delegation?.degraded).toBe(false);
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1 + (drive.delegation?.child_rounds ?? 0));
+  });
+
+  liveIt('drives a generated delegation degrade path with a real provider', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, delegationScript } = liveSynthesizeAndRenderDelegation(1);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: DELEGATION_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: 'Research the seeded delegation topic and return a concise summary. Seeded topic: bounded child degradation.',
+      finalStage: 'complete',
+      maxTriggers: 10,
+      driveTimeoutMs: DELEGATION_LIVE_DRIVE_TIMEOUT_MS,
+      delegationScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] degrade_delegation=${JSON.stringify(drive.delegation)}\n`);
+    process.stdout.write(`[live-drive] degrade_verdict=${JSON.stringify(drive.delegation_verdict)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.delegation_engaged).toBe(false);
+    expect(drive.delegation?.result_status).toBe('failed');
+    expect(drive.delegation?.optional).toBe(true);
+    expect(drive.delegation?.settled).toBe(true);
+    expect(drive.delegation?.degraded).toBe(true);
+    expect(String(drive.delegation?.degrade_reason ?? '').length).toBeGreaterThan(0);
+    expect(drive.delegation_verdict.notes).toContain('delegation_result_not_complete:failed');
+  });
 });
 
 const LIVE_DRIVE_INITIAL_TEXT = [
@@ -439,6 +562,58 @@ function liveSynthesizeAndRenderConfirmationLoop(): { targetDir: string; confirm
   linkRootNodeModules(targetDir);
 
   return { targetDir, confirmationScript };
+}
+
+function liveSynthesizeAndRenderDelegation(maxDelegatedRounds: number): {
+  targetDir: string;
+  delegationScript: GeneratedLiveDriveDelegationScript;
+} {
+  const targetDir = trackedTempRoot('pgas-new-live-drive-delegation-render-');
+  const artifact = artifactFromDomain(delegationDomain(maxDelegatedRounds));
+  const delegationArtifact = artifact as SynthesizedArtifact & DelegationArtifactExtension;
+  const childArtifacts = delegationArtifact.child_artifacts ?? [];
+  expect(childArtifacts).toHaveLength(1);
+
+  renderStandaloneScaffold({
+    slug: DELEGATION_SLUG,
+    name: 'Delegation Parent Live',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedRegistrationTs: delegationArtifact.registration_ts,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+    synthesizedChildArtifacts: childArtifacts,
+  } as RenderStandaloneOptions & DelegationRenderOptions);
+  linkRootNodeModules(targetDir);
+
+  return {
+    targetDir,
+    delegationScript: {
+      resultPath: 'dispatch_research.delegation.research.result',
+      settledPath: 'dispatch_research.delegation.research.settled',
+      degradedPath: 'dispatch_research.delegation.research.degraded',
+      stage: 'dispatch_research',
+      childProgram: 'research',
+    },
+  };
+}
+
+interface DelegationArtifactExtension {
+  registration_ts?: string;
+  child_artifacts?: Array<SynthesizedArtifact & {
+    slug: string;
+    name: string;
+    registration_ts?: string;
+  }>;
+}
+
+interface DelegationRenderOptions {
+  synthesizedRegistrationTs?: string;
+  synthesizedChildArtifacts?: NonNullable<DelegationArtifactExtension['child_artifacts']>;
 }
 
 interface LiveDriveEnv {

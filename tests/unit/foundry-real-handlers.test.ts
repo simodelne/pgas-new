@@ -482,6 +482,77 @@ describe('verification handlers', () => {
       restoreEnv('PGAS_OPENAI_MODEL', previousModel);
     }
   });
+
+  it('fails delegation live drive verification when delegation never engages', async () => {
+    const previousModel = process.env.PGAS_OPENAI_MODEL;
+    process.env.PGAS_OPENAI_MODEL = 'qwen36-27b';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    driveGeneratedProgramLiveMock.mockResolvedValueOnce({
+      final_mode: 'complete',
+      terminal: true,
+      rounds: 3,
+      triggers: 2,
+      actions: ['complete_dispatch_research'],
+      terminal_actions: [],
+      world: {},
+      parent_session_id: 'parent-session-1',
+      provider_hits: 3,
+      provider_exchanges: [],
+      author_driver: 'default',
+      status_history: [],
+      choreography: {
+        decision_table_respected: true,
+        one_proposed_invariant_held: true,
+        proposed_overlap_max: 0,
+        items_seen_max: 0,
+        decisions_applied: 0,
+        terminal_items_final: 0,
+        loop_engaged: true,
+        provider_hits_ok: true,
+        notes: ['confirmation_script_absent'],
+      },
+      delegation: null,
+      delegation_verdict: {
+        delegation_engaged: false,
+        result_complete: false,
+        child_session_distinct: false,
+        child_rounds_ok: false,
+        settled: false,
+        parent_complete: true,
+        provider_hits_ok: true,
+        no_stub_markers: true,
+        notes: ['delegation_result_absent'],
+      },
+      delegation_engaged: false,
+      runner_exit_code: 0,
+      runner_output_excerpt: '',
+    });
+
+    try {
+      await expect(
+        handlers.run_generated_live_drive_verification!(payload({
+          cwd: '/tmp/out',
+          domain: delegationDomain(),
+        })),
+      ).resolves.toMatchObject({
+        kind: 'generated_live_drive_verification',
+        status: 'failed',
+        reason: expect.stringContaining('delegation choreography did not engage'),
+      });
+
+      expect(driveGeneratedProgramLiveMock).toHaveBeenCalledWith(expect.objectContaining({
+        delegationScript: {
+          resultPath: 'dispatch_research.delegation.research.result',
+          settledPath: 'dispatch_research.delegation.research.settled',
+          degradedPath: 'dispatch_research.delegation.research.degraded',
+          stage: 'dispatch_research',
+          childProgram: 'research',
+        },
+      }));
+    } finally {
+      restoreEnv('PGAS_OPENAI_MODEL', previousModel);
+    }
+  });
 });
 
 describe('web_research', () => {
@@ -579,6 +650,40 @@ function confirmationLoopDomain(): Record<string, unknown> {
     'intake.entry_channel': 'user_text',
     'intake.completion_json': JSON.stringify(completion),
     'intake.interaction_json': JSON.stringify(interaction),
+  };
+}
+
+function delegationDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'delegation-parent-live',
+    'intake.purpose': 'Dispatch one delegated child worker and complete after the result settles.',
+    'intake.entry_channel': 'user_text',
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'dispatch_research.ready',
+    }),
+    'intake.delegation_json': JSON.stringify({
+      children: [{
+        id: 'research',
+        stage: 'dispatch_research',
+        synthesize_child: {
+          kind: 'worker',
+          purpose: 'Handle delegated research work and echo the seeded topic.',
+          result_fields: {
+            summary: 'string',
+            seeded_topic: 'string',
+          },
+        },
+        payload_map: {
+          'request.topic': 'inputs.initial_user_text',
+          'domain_context.original_request': 'inputs.initial_user_text',
+        },
+        result_path: 'dispatch_research.delegation.research.result',
+        max_delegated_rounds: 12,
+        round_timeout_ms: 5000,
+        optional: true,
+      }],
+    }),
   };
 }
 

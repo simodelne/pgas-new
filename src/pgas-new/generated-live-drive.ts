@@ -22,6 +22,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import type { SynthesisContext } from '../foundry-program/synthesizer-store.js';
+import { findExecutedPathStubMarkers } from './verify.js';
 
 export interface ProviderExchange {
   path: string;
@@ -120,6 +121,7 @@ export interface GeneratedLiveDriveOptions {
   driveTimeoutMs?: number;
   env?: Record<string, string | undefined>;
   confirmationScript?: GeneratedLiveDriveConfirmationScript;
+  delegationScript?: GeneratedLiveDriveDelegationScript;
 }
 
 export interface DriveTerminalAction {
@@ -135,6 +137,7 @@ export interface GeneratedLiveDriveResult {
   actions: string[];
   terminal_actions: DriveTerminalAction[];
   world: Record<string, unknown>;
+  parent_session_id: string | null;
   provider_hits: number;
   provider_exchanges: ProviderExchange[];
   /**
@@ -146,9 +149,13 @@ export interface GeneratedLiveDriveResult {
   author_driver: 'unified' | 'default' | null;
   status_history: GeneratedLiveDriveStatusHistoryEntry[];
   choreography: GeneratedLiveDriveChoreographyVerdict;
+  delegation: GeneratedLiveDriveDelegationReport | null;
+  delegation_verdict: GeneratedLiveDriveDelegationVerdict;
+  delegation_engaged: boolean;
   runner_exit_code: number | null;
   runner_output_excerpt: string;
   runner_error?: string;
+  runner_timeout_kind?: string;
 }
 
 const DEFAULT_FINAL_STAGE = 'complete';
@@ -174,6 +181,26 @@ export interface GeneratedLiveDriveConfirmationScript {
   decisions: GeneratedLiveDriveScriptDecision[];
   decisionTable: Record<string, string>;
   terminalStatuses: string[];
+}
+
+export interface GeneratedLiveDriveDelegationScript {
+  resultPath: string;
+  settledPath: string;
+  degradedPath: string;
+  stage: string;
+  childProgram: string;
+}
+
+export interface GeneratedLiveDriveDelegationReport {
+  child_program: string;
+  result_status: string | null;
+  child_session_id: string | null;
+  child_rounds: number;
+  optional: boolean;
+  settled: boolean;
+  degraded: boolean;
+  degrade_reason: string;
+  exported_fields: Record<string, unknown>;
 }
 
 export interface GeneratedLiveDriveStatusItem {
@@ -203,6 +230,28 @@ export interface GeneratedLiveDriveChoreographyVerdict {
   loop_engaged: boolean;
   provider_hits_ok: boolean;
   notes: string[];
+}
+
+export interface GeneratedLiveDriveDelegationVerdict {
+  delegation_engaged: boolean;
+  result_complete: boolean;
+  child_session_distinct: boolean;
+  child_rounds_ok: boolean;
+  settled: boolean;
+  parent_complete: boolean;
+  provider_hits_ok: boolean;
+  no_stub_markers: boolean;
+  notes: string[];
+}
+
+export interface GeneratedLiveDriveDelegationAssessmentInput {
+  report: GeneratedLiveDriveDelegationReport | null;
+  parentSessionId: string | null;
+  finalMode: string | null;
+  expectedFinalMode?: string;
+  providerHits: number;
+  parentProviderHitMinimum?: number;
+  stubFindings?: readonly string[];
 }
 
 export function deriveConfirmationScript(
@@ -313,6 +362,78 @@ export function assessChoreography(
   };
 }
 
+export function assessDelegationEngagement(
+  input: GeneratedLiveDriveDelegationAssessmentInput,
+): GeneratedLiveDriveDelegationVerdict {
+  const notes: string[] = [];
+  const expectedFinalMode = input.expectedFinalMode ?? DEFAULT_FINAL_STAGE;
+  const report = input.report;
+
+  const resultComplete = report?.result_status === 'complete';
+  if (!report) {
+    notes.push('delegation_result_absent');
+  } else if (!resultComplete) {
+    notes.push(`delegation_result_not_complete:${String(report.result_status)}`);
+  }
+
+  const childSessionId = report?.child_session_id;
+  const childSessionDistinct = typeof childSessionId === 'string' &&
+    childSessionId.length > 0 &&
+    childSessionId !== input.parentSessionId;
+  if (!childSessionDistinct) {
+    notes.push(childSessionId === input.parentSessionId
+      ? 'child_session_id_matches_parent'
+      : 'child_session_id_missing');
+  }
+
+  const childRounds = report?.child_rounds ?? 0;
+  const childRoundsOk = Number.isFinite(childRounds) && childRounds >= 1;
+  if (!childRoundsOk) {
+    notes.push(`child_rounds_below_minimum:${String(childRounds)}`);
+  }
+
+  const settled = report?.settled === true;
+  if (!settled) {
+    notes.push('delegation_not_settled');
+  }
+
+  const parentComplete = input.finalMode === expectedFinalMode;
+  if (!parentComplete) {
+    notes.push(`parent_not_complete:expected=${expectedFinalMode}:actual=${String(input.finalMode)}`);
+  }
+
+  const parentProviderHitMinimum = input.parentProviderHitMinimum ?? 1;
+  const providerHitMinimum = parentProviderHitMinimum + Math.max(childRounds, 0);
+  const providerHitsOk = input.providerHits >= providerHitMinimum;
+  if (!providerHitsOk) {
+    notes.push(`provider_hits_below_parent_plus_child:min=${String(providerHitMinimum)}:actual=${String(input.providerHits)}`);
+  }
+
+  const stubFindings = input.stubFindings ?? [];
+  const noStubMarkers = stubFindings.length === 0;
+  if (!noStubMarkers) {
+    notes.push(`stub_markers_present:${stubFindings.slice(0, 3).join(';')}`);
+  }
+
+  return {
+    delegation_engaged: resultComplete &&
+      childSessionDistinct &&
+      childRoundsOk &&
+      settled &&
+      parentComplete &&
+      providerHitsOk &&
+      noStubMarkers,
+    result_complete: resultComplete,
+    child_session_distinct: childSessionDistinct,
+    child_rounds_ok: childRoundsOk,
+    settled,
+    parent_complete: parentComplete,
+    provider_hits_ok: providerHitsOk,
+    no_stub_markers: noStubMarkers,
+    notes,
+  };
+}
+
 export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptions): Promise<GeneratedLiveDriveResult> {
   const workDir = join(options.targetDir, '.pgas-new-live-drive');
   rmSync(workDir, { recursive: true, force: true });
@@ -323,7 +444,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
 
   const proxy = await startCountingProviderProxy(options.providerBaseUrl);
   try {
-    writeFileSync(runnerPath, renderLiveDriveRunnerSource(options.slug, options.confirmationScript));
+    writeFileSync(runnerPath, renderLiveDriveRunnerSource(options.slug, options.confirmationScript, options.delegationScript));
 
     const runner = await runNodeScript(runnerPath, {
       cwd: options.targetDir,
@@ -350,23 +471,42 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
         ...(options.confirmationScript
           ? { PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT: JSON.stringify(options.confirmationScript) }
           : {}),
+        ...(options.delegationScript
+          ? { PGAS_LIVE_DRIVE_DELEGATION_SCRIPT: JSON.stringify(options.delegationScript) }
+          : {}),
       },
     });
 
     const report = readDriveReport(reportPath);
     const providerHits = proxy.hits();
     const statusHistory = parseStatusHistory(report?.status_history);
+    const finalMode = typeof report?.final_mode === 'string' ? report.final_mode : null;
+    const world = isRecord(report?.world) ? report.world : {};
+    const parentSessionId = typeof report?.session_id === 'string' ? report.session_id : null;
+    const delegation = parseDelegationReport(report?.delegation);
+    const delegationVerdict = options.delegationScript
+      ? assessDelegationEngagement({
+          report: delegation,
+          parentSessionId,
+          finalMode,
+          expectedFinalMode: options.finalStage ?? DEFAULT_FINAL_STAGE,
+          providerHits,
+          parentProviderHitMinimum: 1,
+          stubFindings: generatedStageOutputStubFindings(world),
+        })
+      : noDelegationScriptVerdict(providerHits);
     const choreography = options.confirmationScript
       ? assessChoreography(statusHistory, options.confirmationScript, providerHits)
       : noConfirmationScriptChoreography(providerHits);
     return {
-      final_mode: typeof report?.final_mode === 'string' ? report.final_mode : null,
+      final_mode: finalMode,
       terminal: report?.terminal === true,
       rounds: typeof report?.rounds === 'number' ? report.rounds : 0,
       triggers: typeof report?.triggers === 'number' ? report.triggers : 0,
       actions: Array.isArray(report?.actions) ? report.actions.filter(isNonEmptyString) : [],
       terminal_actions: parseTerminalActions(report?.terminal_actions),
-      world: isRecord(report?.world) ? report.world : {},
+      world,
+      parent_session_id: parentSessionId,
       provider_hits: providerHits,
       provider_exchanges: proxy.exchanges(),
       author_driver: report?.author_driver === 'unified' || report?.author_driver === 'default'
@@ -374,9 +514,13 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
         : null,
       status_history: statusHistory,
       choreography,
+      delegation,
+      delegation_verdict: delegationVerdict,
+      delegation_engaged: delegationVerdict.delegation_engaged,
       runner_exit_code: runner.exitCode,
       runner_output_excerpt: runner.output.slice(-4_000),
       ...(typeof report?.error === 'string' ? { runner_error: report.error } : {}),
+      ...(typeof report?.timeout_kind === 'string' ? { runner_timeout_kind: report.timeout_kind } : {}),
     };
   } finally {
     await proxy.close();
@@ -395,7 +539,11 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
 export function renderLiveDriveRunnerSource(
   slug: string,
   confirmationScript?: GeneratedLiveDriveConfirmationScript,
+  delegationScript?: GeneratedLiveDriveDelegationScript,
 ): string {
+  if (delegationScript) {
+    return renderDelegationLiveDriveRunnerSource(slug, delegationScript.childProgram);
+  }
   if (confirmationScript) {
     return renderConfirmationLiveDriveRunnerSource(slug);
   }
@@ -534,6 +682,334 @@ function writeReport(report: Record<string, unknown>): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+main().catch((error: unknown) => {
+  writeReport({ error: error instanceof Error ? (error.stack ?? error.message) : String(error) });
+  process.exit(1);
+});
+`;
+}
+
+export function renderDelegationLiveDriveRunnerSource(slug: string, childProgram: string): string {
+  const pascal = toPascalCase(slug);
+  const childPascal = toPascalCase(childProgram);
+  return `import { writeFileSync } from 'node:fs';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { create${childPascal}ProgramEntry } from '../src/programs/${childProgram}/registration.js';
+
+const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
+const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
+const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
+const FINAL_STAGE = process.env.PGAS_LIVE_DRIVE_FINAL_STAGE ?? 'complete';
+const MAX_TRIGGERS = Number(process.env.PGAS_LIVE_DRIVE_MAX_TRIGGERS ?? '12');
+const DEADLINE = Date.now() + Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '540000');
+const delegationScript = parseDelegationScript(process.env.PGAS_LIVE_DRIVE_DELEGATION_SCRIPT ?? '');
+
+interface DriveState {
+  mode: string | null;
+  terminal: boolean;
+  roundCount: number;
+  world: Record<string, unknown>;
+  actions: string[];
+  terminalActions: Array<{ name: string; payload_excerpt: string }>;
+}
+
+interface DelegationScript {
+  resultPath: string;
+  settledPath: string;
+  degradedPath: string;
+  stage: string;
+  childProgram: string;
+}
+
+async function main(): Promise<void> {
+  // Opt-in unified native-tools author driver: mirrors the rendered scaffold's
+  // src/server.ts gating. Default (PGAS_AUTHOR_DRIVER unset) boots the engine's
+  // legacy JSON author path exactly as before; the dynamic import keeps the
+  // default path byte-identical even against a scaffold without the module.
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
+  const server = await createPgasServer({
+    programs: [
+      { name: '${slug}', entry: create${pascal}ProgramEntry() },
+      { name: '${childProgram}', entry: create${childPascal}ProgramEntry() },
+    ],
+    devMode: true,
+    ...(drivers ? { drivers } : {}),
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  const created = await client.sessions.create({
+    program: '${slug}',
+    domain_context: { query: INITIAL_TEXT },
+  });
+  const sessionId = created.sessionId;
+
+  let payloadText = INITIAL_TEXT;
+  let triggers = 0;
+  let state = await readState(client, sessionId);
+  while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
+    const before = state.roundCount;
+    try {
+      await triggerWithDeadline(client, sessionId, { channel: ENTRY_CHANNEL, payload: payloadText });
+    } catch (error) {
+      if (/terminal/iu.test(String(error))) break;
+      if (isTriggerInFlightTimeout(error)) {
+        const latest = await safeReadState(client, sessionId, state);
+        writeDriveReport({
+          session_id: sessionId,
+          state: latest,
+          triggers,
+          drivers,
+          timeout_kind: 'trigger_in_flight',
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+        });
+        process.exit(1);
+      }
+      throw error;
+    }
+    triggers += 1;
+    payloadText = 'Continue to the next stage of the workflow.';
+    state = await waitForRound(client, sessionId, before);
+  }
+
+  state = await readState(client, sessionId);
+  writeDriveReport({ session_id: sessionId, state, triggers, drivers });
+  process.exit(0);
+}
+
+async function triggerWithDeadline(
+  client: PgasClient,
+  sessionId: string,
+  payload: { channel: string; payload: unknown },
+): Promise<void> {
+  const remaining = DEADLINE - Date.now();
+  if (remaining <= 0) {
+    throw new Error('trigger_in_flight_timeout: deadline reached before trigger');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.sessions.trigger(sessionId, payload),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('trigger_in_flight_timeout: parent trigger exceeded live-drive deadline')), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTriggerInFlightTimeout(error: unknown): boolean {
+  return /trigger_in_flight_timeout/u.test(error instanceof Error ? error.message : String(error));
+}
+
+async function waitForRound(client: PgasClient, sessionId: string, before: number): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function safeReadState(client: PgasClient, sessionId: string, fallback: DriveState): Promise<DriveState> {
+  try {
+    return await readState(client, sessionId);
+  } catch {
+    return fallback;
+  }
+}
+
+async function readState(client: PgasClient, sessionId: string): Promise<DriveState> {
+  const [envelope, worldResponse, roundsResponse] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+    client.sessions.rounds(sessionId),
+  ]);
+  const rounds = Array.isArray(roundsResponse.rounds) ? roundsResponse.rounds : [];
+  const status = typeof envelope.status === 'string' ? envelope.status : '';
+  const stateRecord = envelope.state as Record<string, unknown> | undefined;
+  const mode = firstString(envelope.mode, stateRecord?.mode);
+  const terminalActions = rounds.flatMap((round) => terminalActionOf(round));
+  return {
+    mode,
+    terminal: Boolean(stateRecord?.terminal ?? envelope.terminal) || status.toLowerCase() === 'completed',
+    roundCount: rounds.length,
+    world: worldResponse.domain as Record<string, unknown>,
+    actions: terminalActions.map((action) => action.name),
+    terminalActions,
+  };
+}
+
+function parseDelegationScript(raw: string): DelegationScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT is required for delegation live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    settledPath: stringField(parsed, 'settledPath'),
+    degradedPath: stringField(parsed, 'degradedPath'),
+    stage: stringField(parsed, 'stage'),
+    childProgram: stringField(parsed, 'childProgram'),
+  };
+  if (!script.resultPath || !script.settledPath || !script.degradedPath || !script.stage || !script.childProgram) {
+    throw new Error('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT is missing required resultPath/settledPath/degradedPath/stage/childProgram');
+  }
+  return script;
+}
+
+function writeDriveReport(input: {
+  session_id: string;
+  state: DriveState;
+  triggers: number;
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  timeout_kind?: string;
+  error?: string;
+}): void {
+  writeReport({
+    final_mode: input.state.mode,
+    terminal: input.state.terminal,
+    rounds: input.state.roundCount,
+    triggers: input.triggers,
+    actions: input.state.actions,
+    terminal_actions: input.state.terminalActions,
+    world: input.state.world,
+    session_id: input.session_id,
+    author_driver: input.drivers ? 'unified' : 'default',
+    delegation: delegationReportFromWorld(input.state.world, delegationScript),
+    ...(input.timeout_kind ? { timeout_kind: input.timeout_kind } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  });
+}
+
+function delegationReportFromWorld(world: Record<string, unknown>, script: DelegationScript): Record<string, unknown> {
+  const result = recordFromWorldPath(world, script.resultPath);
+  const status = stringValue(result.status);
+  const sessionId = stringValue(result.sessionId);
+  const rounds = numberValue(result.rounds);
+  const settled = valueAtWorldPath(world, script.settledPath) === true;
+  const degraded = valueAtWorldPath(world, script.degradedPath) === true;
+  const degradeReason = stringValue(valueAtWorldPath(world, degradeReasonPath(script))) ?? '';
+  return {
+    child_program: script.childProgram,
+    result_status: status,
+    child_session_id: sessionId,
+    child_rounds: rounds ?? 0,
+    optional: result.optional === true,
+    settled,
+    degraded,
+    degrade_reason: degradeReason,
+    exported_fields: exportedFields(result),
+  };
+}
+
+function recordFromWorldPath(world: Record<string, unknown>, path: string): Record<string, unknown> {
+  const direct = valueAtWorldPath(world, path);
+  const record = isRecord(direct) ? { ...direct } : {};
+  const prefix = path + '.';
+  for (const [key, value] of Object.entries(world)) {
+    if (!key.startsWith(prefix)) continue;
+    const field = key.slice(prefix.length);
+    if (field.length > 0 && !field.includes('.')) {
+      record[field] = value;
+    }
+  }
+  return record;
+}
+
+function exportedFields(result: Record<string, unknown>): Record<string, unknown> {
+  const reserved = new Set(['status', 'sessionId', 'rounds', 'mode', 'reason', 'optional', 'result']);
+  const fields: Record<string, unknown> = {};
+  if (isRecord(result.result)) {
+    Object.assign(fields, result.result);
+  }
+  for (const [key, value] of Object.entries(result)) {
+    if (!reserved.has(key)) {
+      fields[key] = value;
+    }
+  }
+  return fields;
+}
+
+function degradeReasonPath(script: DelegationScript): string {
+  return script.degradedPath.endsWith('.degraded')
+    ? script.degradedPath.slice(0, -'.degraded'.length) + '.degrade_reason'
+    : script.degradedPath + '.reason';
+}
+
+function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(world, path)) {
+    return world[path];
+  }
+  let cursor: unknown = world;
+  for (const part of path.split('.')) {
+    if (!isRecord(cursor) || !Object.prototype.hasOwnProperty.call(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
+  if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+  const result = (round as { result?: unknown }).result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+  const terminal = (result as { terminal?: unknown }).terminal;
+  if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+  const name = (terminal as { name?: unknown }).name;
+  if (typeof name !== 'string' || name.length === 0) return [];
+  const payload = (terminal as { payload?: unknown }).payload;
+  return [{ name, payload_excerpt: JSON.stringify(payload ?? null).slice(0, 4_000) }];
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function writeReport(report: Record<string, unknown>): void {
+  if (REPORT_PATH.length > 0) {
+    writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 main().catch((error: unknown) => {
@@ -909,6 +1385,7 @@ function runNodeScript(
 }
 
 interface DriveReport {
+  session_id?: unknown;
   final_mode?: unknown;
   terminal?: unknown;
   rounds?: unknown;
@@ -918,6 +1395,8 @@ interface DriveReport {
   world?: unknown;
   author_driver?: unknown;
   status_history?: unknown;
+  delegation?: unknown;
+  timeout_kind?: unknown;
   error?: unknown;
 }
 
@@ -973,6 +1452,21 @@ function parseStatusHistory(value: unknown): GeneratedLiveDriveStatusHistoryEntr
   });
 }
 
+function parseDelegationReport(value: unknown): GeneratedLiveDriveDelegationReport | null {
+  if (!isRecord(value)) return null;
+  return {
+    child_program: stringOrEmpty(value.child_program),
+    result_status: nullableString(value.result_status),
+    child_session_id: nullableString(value.child_session_id),
+    child_rounds: numberOrZero(value.child_rounds),
+    optional: value.optional === true,
+    settled: value.settled === true,
+    degraded: value.degraded === true,
+    degrade_reason: stringOrEmpty(value.degrade_reason),
+    exported_fields: isRecord(value.exported_fields) ? value.exported_fields : {},
+  };
+}
+
 function noConfirmationScriptChoreography(providerHits: number): GeneratedLiveDriveChoreographyVerdict {
   return {
     decision_table_respected: true,
@@ -985,6 +1479,33 @@ function noConfirmationScriptChoreography(providerHits: number): GeneratedLiveDr
     provider_hits_ok: providerHits >= 1,
     notes: providerHits >= 1 ? ['confirmation_script_absent'] : ['confirmation_script_absent', 'provider_hits_below_minimum'],
   };
+}
+
+function noDelegationScriptVerdict(providerHits: number): GeneratedLiveDriveDelegationVerdict {
+  return {
+    delegation_engaged: false,
+    result_complete: false,
+    child_session_distinct: false,
+    child_rounds_ok: false,
+    settled: false,
+    parent_complete: false,
+    provider_hits_ok: providerHits >= 1,
+    no_stub_markers: true,
+    notes: providerHits >= 1 ? ['delegation_script_absent'] : ['delegation_script_absent', 'provider_hits_below_minimum'],
+  };
+}
+
+function generatedStageOutputStubFindings(world: Record<string, unknown>): string[] {
+  const findings: string[] = [];
+  for (const [key, value] of Object.entries(world)) {
+    if (!/\.(result_json|items_json|output)($|\.)/u.test(key) && !/\.result($|\.)/u.test(key)) {
+      continue;
+    }
+    for (const finding of findExecutedPathStubMarkers(value)) {
+      findings.push(`${key}${finding.path}: ${finding.marker}`);
+    }
+  }
+  return findings;
 }
 
 function descriptorStatusField(descriptor: ConfirmationLoopDescriptorForScript): string | undefined {
@@ -1010,6 +1531,23 @@ function toPascalCase(value: string): string {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function stringOrEmpty(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function numberOrZero(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

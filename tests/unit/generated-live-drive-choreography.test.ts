@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  assessDelegationEngagement,
   assessChoreography,
   deriveConfirmationScript,
   renderLiveDriveRunnerSource,
+  type GeneratedLiveDriveDelegationReport,
   type GeneratedLiveDriveStatusHistoryEntry,
 } from '../../src/pgas-new/generated-live-drive.js';
 
@@ -142,6 +144,113 @@ describe('generated live-drive choreography helpers', () => {
 
     expect(hash(source)).toBe('ddededebbe54ba9710ca8609a4fe5e9591e4ba78e3879016fd4d75ca7b980404');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
+  });
+
+  it('renders delegation evidence collection from the landed result, not child session routes', () => {
+    const source = renderLiveDriveRunnerSource('delegation-parent-live', undefined, {
+      resultPath: 'dispatch_research.delegation.research.result',
+      settledPath: 'dispatch_research.delegation.research.settled',
+      degradedPath: 'dispatch_research.delegation.research.degraded',
+      stage: 'dispatch_research',
+      childProgram: 'research',
+    });
+
+    expect(source).toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
+    expect(source).toContain('createResearchProgramEntry');
+    expect(source).toContain('recordFromWorldPath(world, script.resultPath)');
+    expect(source).not.toContain('client.sessions.get(child');
+    expect(source).not.toContain('client.sessions.rounds(child');
+  });
+});
+
+describe('generated delegation live-drive verdict helpers', () => {
+  it('passes only when a landed child result proves real child-session engagement', () => {
+    const verdict = assessDelegationEngagement({
+      report: delegationReport({
+        result_status: 'complete',
+        child_session_id: 'child-session-1',
+        child_rounds: 2,
+        settled: true,
+        degraded: false,
+      }),
+      parentSessionId: 'parent-session-1',
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 3,
+      parentProviderHitMinimum: 1,
+      stubFindings: [],
+    });
+
+    expect(verdict.delegation_engaged).toBe(true);
+    expect(verdict.result_complete).toBe(true);
+    expect(verdict.child_session_distinct).toBe(true);
+    expect(verdict.child_rounds_ok).toBe(true);
+    expect(verdict.provider_hits_ok).toBe(true);
+    expect(verdict.notes).toEqual([]);
+  });
+
+  it('fails closed when no landed delegation result exists', () => {
+    const verdict = assessDelegationEngagement({
+      report: null,
+      parentSessionId: 'parent-session-1',
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 3,
+      parentProviderHitMinimum: 1,
+      stubFindings: [],
+    });
+
+    expect(verdict.delegation_engaged).toBe(false);
+    expect(verdict.result_complete).toBe(false);
+    expect(verdict.notes).toContain('delegation_result_absent');
+  });
+
+  it('fails the happy-path verdict for a degraded child result even when parent completes', () => {
+    const verdict = assessDelegationEngagement({
+      report: delegationReport({
+        result_status: 'failed',
+        child_session_id: 'child-session-1',
+        child_rounds: 1,
+        settled: true,
+        degraded: true,
+        degrade_reason: 'max delegated rounds exceeded',
+      }),
+      parentSessionId: 'parent-session-1',
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 2,
+      parentProviderHitMinimum: 1,
+      stubFindings: [],
+    });
+
+    expect(verdict.delegation_engaged).toBe(false);
+    expect(verdict.result_complete).toBe(false);
+    expect(verdict.settled).toBe(true);
+    expect(verdict.parent_complete).toBe(true);
+    expect(verdict.notes).toContain('delegation_result_not_complete:failed');
+  });
+
+  it('fails when provider-hit accounting cannot cover parent plus child rounds', () => {
+    const verdict = assessDelegationEngagement({
+      report: delegationReport({
+        result_status: 'complete',
+        child_session_id: 'child-session-1',
+        child_rounds: 2,
+        settled: true,
+        degraded: false,
+      }),
+      parentSessionId: 'parent-session-1',
+      finalMode: 'complete',
+      expectedFinalMode: 'complete',
+      providerHits: 2,
+      parentProviderHitMinimum: 1,
+      stubFindings: [],
+    });
+
+    expect(verdict.delegation_engaged).toBe(false);
+    expect(verdict.provider_hits_ok).toBe(false);
+    expect(verdict.notes).toContain('provider_hits_below_parent_plus_child:min=3:actual=2');
   });
 });
 
@@ -164,4 +273,21 @@ function history(
 
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function delegationReport(
+  overrides: Partial<GeneratedLiveDriveDelegationReport> = {},
+): GeneratedLiveDriveDelegationReport {
+  return {
+    child_program: 'research',
+    result_status: 'complete',
+    child_session_id: 'child-session-1',
+    child_rounds: 1,
+    optional: true,
+    settled: true,
+    degraded: false,
+    degrade_reason: '',
+    exported_fields: { summary: 'delegated work complete' },
+    ...overrides,
+  };
 }
