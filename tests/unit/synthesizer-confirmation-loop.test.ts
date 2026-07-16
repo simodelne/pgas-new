@@ -209,6 +209,13 @@ describe('confirmation_loop descriptor synthesis', () => {
     expect(artifact.handlers_ts).toContain('reconstructArray(Object.fromEntries(snapshot), itemsPath)');
     expect(artifact.smoke_test_ts).toContain('generated confirmation-loop smoke');
     expect(artifact.smoke_test_ts).not.toContain('complete_review_work');
+    // Regression (confirmation live-drive RED, 2026-07-16 — SpecWiringError
+    // HANDLER_NO_ACTION): the loop stage advances via the aggregate guard, not a
+    // complete_<stage> action, so handlers_ts/tools_ts must NOT emit an orphaned
+    // complete_review_work handler/tool. loadSpecWithPatterns does not run the
+    // engine's validateSpecWiring; createPgasServer boot (and the live-drive) does.
+    expect(artifact.handlers_ts).not.toContain('complete_review_work');
+    expect(artifact.tools_ts).not.toContain('complete_review_work');
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
     expect(() => assertConfirmationPairingTerminals(parsed)).not.toThrow();
   });
