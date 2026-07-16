@@ -69,10 +69,10 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'delegation_research_agent',
-    status: 'refuses',
-    evidence: 'no synthesis of a research-agent child pattern (fan-out with caps, timeout→degrade).',
+    status: 'scaffolds_with_gap',
+    evidence: 'research-agent child synthesis now emits the self-contained child shape route-level hermetic-proven; host-backed research emits only a typed connector contract, fixture-backed mock, and explicit capability gap.',
     since_version: '3.22.0',
-    gap_note: 'uplift PR-6 (research-agent child synthesis), gated on the default-delegation-resolution spike.',
+    gap_note: "research-agent child (self-contained) is synthesized + route-level hermetic-proven; flips to synthesizes on a green delegation live-drive of the self-contained variant. The backed variant's research backend is a declared host connector (never foundry code).",
   },
   {
     capability: 'document_upload_intake',

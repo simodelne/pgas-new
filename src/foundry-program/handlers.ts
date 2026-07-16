@@ -662,6 +662,7 @@ export const handlers: Record<string, ToolHandler> = {
           synthesizedStageSources: stageSources,
           synthesizedToolsTs: synthesized.tools_ts,
           synthesizedSmokeTestTs: synthesized.smoke_test_ts,
+          synthesizedCapabilityGaps: synthesized.capability_gaps,
           synthesizedChildArtifacts: synthesized.child_artifacts,
         });
     assertAllPlannedArtifactsWritten(domain, result.written);

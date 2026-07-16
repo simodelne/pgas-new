@@ -37,6 +37,7 @@ const REASONING_STAGE = 'brief_summary';
 const REASONING_ACTION = 'complete_brief_summary';
 const CONFIRMATION_SLUG = 'work-unit-flow-live';
 const DELEGATION_SLUG = 'delegation-parent-live';
+const RESEARCH_AGENT_DELEGATION_SLUG = 'delegation-research-agent-live';
 const DELEGATION_LIVE_DRIVE_TIMEOUT_MS = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
 const DELEGATION_LIVE_TEST_TIMEOUT_MS = Math.max(LIVE_TIMEOUT_MS, DELEGATION_LIVE_DRIVE_TIMEOUT_MS + 60_000);
 
@@ -212,6 +213,36 @@ function delegationDomain(maxDelegatedRounds: number): Record<string, unknown> {
       final_stage: 'complete',
       guard_field: 'dispatch_research.ready',
     }),
+  };
+}
+
+function researchAgentDelegationDescriptor(maxDelegatedRounds: number): Record<string, unknown> {
+  const base = delegationDescriptor(maxDelegatedRounds);
+  const child = (base.children as Record<string, unknown>[])[0] as Record<string, unknown>;
+  const synthesizeChild = child.synthesize_child as Record<string, unknown>;
+  return {
+    ...base,
+    children: [
+      {
+        ...child,
+        synthesize_child: {
+          ...synthesizeChild,
+          kind: 'research_agent',
+          purpose: 'Research the seeded delegation topic and echo it in the exported result fields.',
+        },
+      },
+    ],
+  };
+}
+
+function researchAgentDelegationDomain(maxDelegatedRounds: number): Record<string, unknown> {
+  return {
+    ...delegationDomain(maxDelegatedRounds),
+    'program.slug': RESEARCH_AGENT_DELEGATION_SLUG,
+    'program.name': 'Delegation Research Agent Live',
+    'program.target_dir': '/tmp/delegation-research-agent-live',
+    'intake.purpose': 'Dispatch one self-contained delegated research-agent child and complete after the result settles.',
+    'intake.delegation_json': JSON.stringify(researchAgentDelegationDescriptor(maxDelegatedRounds)),
   };
 }
 
@@ -448,6 +479,39 @@ describe('generated program live drive gate', () => {
     expect(drive.provider_hits).toBeGreaterThanOrEqual(1 + (drive.delegation?.child_rounds ?? 0));
   });
 
+  liveIt('drives a generated self-contained research-agent delegation parent through a real child session', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, delegationScript } = liveSynthesizeAndRenderResearchAgentDelegation(12);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: RESEARCH_AGENT_DELEGATION_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: 'Research the seeded delegation topic and return a concise summary. Seeded topic: research-agent lunar archive triage.',
+      finalStage: 'complete',
+      maxTriggers: 10,
+      driveTimeoutMs: DELEGATION_LIVE_DRIVE_TIMEOUT_MS,
+      delegationScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] research_agent_delegation=${JSON.stringify(drive.delegation)}\n`);
+    process.stdout.write(`[live-drive] research_agent_delegation_verdict=${JSON.stringify(drive.delegation_verdict)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.delegation_engaged).toBe(true);
+    expect(drive.delegation_verdict.delegation_engaged).toBe(true);
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.delegation?.result_status).toBe('complete');
+    expect(typeof drive.delegation?.child_session_id).toBe('string');
+    expect(drive.delegation?.child_session_id).not.toBe(drive.parent_session_id);
+    expect(drive.delegation?.child_rounds).toBeGreaterThanOrEqual(1);
+    expect(drive.delegation?.settled).toBe(true);
+    expect(drive.delegation?.degraded).toBe(false);
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1 + (drive.delegation?.child_rounds ?? 0));
+  });
+
   liveIt('drives a generated delegation degrade path with a real provider', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
     const env = requireLiveDriveEnv();
     const { targetDir, delegationScript } = liveSynthesizeAndRenderDelegation(1);
@@ -577,6 +641,44 @@ function liveSynthesizeAndRenderDelegation(maxDelegatedRounds: number): {
   renderStandaloneScaffold({
     slug: DELEGATION_SLUG,
     name: 'Delegation Parent Live',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedRegistrationTs: delegationArtifact.registration_ts,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+    synthesizedChildArtifacts: childArtifacts,
+  } as RenderStandaloneOptions & DelegationRenderOptions);
+  linkRootNodeModules(targetDir);
+
+  return {
+    targetDir,
+    delegationScript: {
+      resultPath: 'dispatch_research.delegation.research.result',
+      settledPath: 'dispatch_research.delegation.research.settled',
+      degradedPath: 'dispatch_research.delegation.research.degraded',
+      stage: 'dispatch_research',
+      childProgram: 'research',
+    },
+  };
+}
+
+function liveSynthesizeAndRenderResearchAgentDelegation(maxDelegatedRounds: number): {
+  targetDir: string;
+  delegationScript: GeneratedLiveDriveDelegationScript;
+} {
+  const targetDir = trackedTempRoot('pgas-new-live-drive-research-agent-delegation-render-');
+  const artifact = artifactFromDomain(researchAgentDelegationDomain(maxDelegatedRounds));
+  const delegationArtifact = artifact as SynthesizedArtifact & DelegationArtifactExtension;
+  const childArtifacts = delegationArtifact.child_artifacts ?? [];
+  expect(childArtifacts).toHaveLength(1);
+
+  renderStandaloneScaffold({
+    slug: RESEARCH_AGENT_DELEGATION_SLUG,
+    name: 'Delegation Research Agent Live',
     outDir: targetDir,
     synthesizedSpecYaml: artifact.spec_yaml,
     synthesizedRegistrationTs: delegationArtifact.registration_ts,

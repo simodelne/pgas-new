@@ -39,8 +39,8 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // Delegation live-drive green on qwen (real child session ran + returned, parent complete,
     // fail-closed delegation_engaged verdict all-green) — so synthesizes.
     expect(capabilityStatus('delegation_child_session')).toBe('synthesizes');
+    expect(capabilityStatus('delegation_research_agent')).toBe('scaffolds_with_gap');
     for (const cap of [
-      'delegation_research_agent',
       'document_upload_intake',
       'rich_frontend',
       'export_docx_trackchange',

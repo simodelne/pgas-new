@@ -7,7 +7,7 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { DelegationChildDescriptor, DelegationDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
@@ -149,6 +149,8 @@ export interface SynthesizedSpec {
   handlers_index_ts: string;
   tools_ts: string;
   smoke_test_ts: string;
+  stage_sources?: Record<string, string>;
+  capability_gaps?: CapabilityGap[];
   child_artifacts?: SynthesizedChildArtifact[];
   stage_classification: ClassifiedStage[];
   body_stage_slugs: string[];
@@ -329,6 +331,7 @@ export function synthesizeProgramSpecFromDomain(
   );
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
   const childArtifacts = synthesizeDelegationChildArtifacts(slug, name, delegationChildren);
+  const capabilityGaps = capabilityGapsForDelegationChildren(delegationChildren);
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
     NAME: name,
@@ -581,6 +584,7 @@ export function synthesizeProgramSpecFromDomain(
     }, reasoningContractsBySlug),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren),
+    ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
     ...(delegationChildren.length > 0 ? {
       registration_ts: renderRegistrationSource(toPascalCase(slug), {
         delegationPolicy: delegationPolicyForChildren(delegationChildren),
@@ -921,6 +925,10 @@ function applyDelegationSchema(
     schema[`${child.result_path}.reason`] = 'string';
     schema[`${child.result_path}.optional`] = 'boolean';
     schema[`${child.result_path}.result`] = 'object';
+    if (child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector') {
+      schema[`${child.result_path}.result_json`] = 'string';
+      schema[`${child.result_path}.adapter_kind`] = 'string';
+    }
     for (const [field, type] of delegationResultFields(child)) {
       schema[`${child.result_path}.${field}`] = type;
     }
@@ -1116,6 +1124,9 @@ function delegationResultProjectionPaths(child: DelegationChildDescriptor): stri
     `${child.result_path}.rounds`,
     `${child.result_path}.sessionId`,
     `${child.result_path}.result`,
+    ...(child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector'
+      ? [`${child.result_path}.result_json`, `${child.result_path}.adapter_kind`]
+      : []),
     ...delegationResultFields(child).map(([field]) => `${child.result_path}.${field}`),
   ]);
 }
@@ -3024,7 +3035,8 @@ function renderSmokeTestSource(
   confirmationLoops: ConfirmationLoopDescriptor[] = [],
   delegationChildren: DelegationChildDescriptor[] = [],
 ): string {
-  const delegationSmokeChild = delegationChildren.find((child) => child.synthesize_child?.kind === 'worker');
+  const delegationSmokeChild = delegationChildren.find((child) =>
+    child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent');
   if (delegationSmokeChild) {
     return renderDelegationSmokeTestSource(slug, name, entryChannel, delegationSmokeChild, transitionActions);
   }
@@ -3384,8 +3396,19 @@ function synthesizeDelegationChildArtifacts(
   children: DelegationChildDescriptor[],
 ): SynthesizedChildArtifact[] {
   return children
-    .filter((child) => child.synthesize_child?.kind === 'worker')
-    .map((child) => synthesizeWorkerChildArtifact(parentSlug, parentName, child));
+    .filter((child) => child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent')
+    .map((child) => synthesizeDelegationChildArtifact(parentSlug, parentName, child));
+}
+
+function synthesizeDelegationChildArtifact(
+  parentSlug: string,
+  parentName: string,
+  child: DelegationChildDescriptor,
+): SynthesizedChildArtifact {
+  if (child.synthesize_child?.kind === 'research_agent') {
+    return synthesizeResearchAgentChildArtifact(parentSlug, parentName, child);
+  }
+  return synthesizeWorkerChildArtifact(parentSlug, parentName, child);
 }
 
 function synthesizeWorkerChildArtifact(
@@ -3411,6 +3434,52 @@ function synthesizeWorkerChildArtifact(
     name: childName,
     spec_yaml: specYaml,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
+    registration_ts: renderRegistrationSource(toPascalCase(childSlug), {
+      delegationResultPolicy: delegationResultPolicyForChild(child),
+    }),
+  };
+}
+
+function synthesizeResearchAgentChildArtifact(
+  parentSlug: string,
+  parentName: string,
+  child: DelegationChildDescriptor,
+): SynthesizedChildArtifact {
+  if (!child.synthesize_child) {
+    throw new Error(`delegation child ${child.id} is missing synthesize_child`);
+  }
+  const childSlug = delegationTargetSpec(child);
+  const childName = `${parentName} ${toPascalCase(child.id)} Research Agent`;
+  const backend = researchChildBackend(child);
+  const childDomain = researchAgentChildDomain(parentSlug, childSlug, childName, child, backend);
+  const artifact = synthesizeProgramSpecFromDomain(childDomain, backend === 'self_contained'
+    ? {
+        reasoningContracts: {
+          research: researchAgentChildReasoningContract(child),
+        },
+      }
+    : {});
+  const specYaml = patchDelegationChildSpecForDelegation(artifact.spec_yaml, child, 'research');
+  const gap = backend === 'host_connector' ? researchBackendCapabilityGap(child) : undefined;
+  const contractsTs = backend === 'host_connector'
+    ? appendResearchHostConnectorContracts(artifact.contracts_ts, child, gap!)
+    : artifact.contracts_ts;
+  return {
+    ...artifact,
+    slug: childSlug,
+    name: childName,
+    spec_yaml: specYaml,
+    sha256: createHash('sha256').update(specYaml).digest('hex'),
+    contracts_ts: contractsTs,
+    ...(backend === 'host_connector'
+      ? {
+          stage_sources: {
+            ...(artifact.stage_sources ?? {}),
+            research: renderResearchHostConnectorMockStageSource(child),
+          },
+          capability_gaps: gap ? [gap] : [],
+        }
+      : {}),
     registration_ts: renderRegistrationSource(toPascalCase(childSlug), {
       delegationResultPolicy: delegationResultPolicyForChild(child),
     }),
@@ -3513,7 +3582,132 @@ function workerChildReasoningContract(child: DelegationChildDescriptor): Reasoni
   };
 }
 
+function researchAgentChildDomain(
+  parentSlug: string,
+  childSlug: string,
+  childName: string,
+  child: DelegationChildDescriptor,
+  backend: 'host_connector' | 'self_contained',
+): Record<string, unknown> {
+  const resultFields = child.synthesize_child?.result_fields ?? {};
+  const resultSchema = Object.fromEntries(Object.keys(resultFields).map((field) => [field, 'string']));
+  return {
+    'program.slug': childSlug,
+    'program.name': childName,
+    'program.target_dir': `/tmp/${childSlug}`,
+    'intake.purpose': backend === 'host_connector'
+      ? `Expose a host-backed research connector contract for ${parentSlug}; the generated child uses only an in-memory mock.`
+      : `Research a delegated request for ${parentSlug} using the seeded request context.`,
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      {
+        slug: 'receive',
+        is_bootstrap: true,
+        domain_spec: {
+          reads: ['inputs.request.topic', 'inputs.domain_context.source_program'],
+          produces: {},
+          rules: ['Accept the delegated research request seeded by the parent session.'],
+          invariants: ['Do not invent a different request topic.'],
+        },
+      },
+      {
+        slug: 'research',
+        domain_spec: {
+          reads: ['inputs.request.topic', 'inputs.request.query', 'inputs.domain_context.source_program', 'inputs.domain_context.original_request'],
+          produces: {
+            result_json: backend === 'host_connector'
+              ? { ...resultSchema, adapter_kind: 'string' }
+              : resultSchema,
+            items_json: [`${child.id}:<seeded_topic>`],
+          },
+          rules: backend === 'host_connector'
+            ? [
+                'Do not implement a real research backend in foundry code.',
+                'Use only the fixture-backed in-memory mock research connector.',
+                'Echo inputs.request.topic exactly into the seeded_topic result field when that field exists.',
+              ]
+            : [
+                'Research over the delegated request using only the projected inputs.request and inputs.domain_context fields.',
+                'Echo inputs.request.topic exactly into research.result.seeded_topic when that field exists.',
+              ],
+          invariants: backend === 'host_connector'
+            ? [
+                'adapter_kind must be in_memory_mock.',
+                'The exported seeded_topic proves parent input enrichment reached the child.',
+              ]
+            : ['The exported seeded_topic proves parent input enrichment reached the child.'],
+        },
+      },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'receive', to: 'research', trigger: 'received', guard_field: 'receive.started' },
+      { from: 'research', to: 'complete', trigger: 'completed', guard_field: 'research.done' },
+    ]),
+    'intake.delegation_json': JSON.stringify({
+      enabled: false,
+      stages: {
+        research: backend === 'host_connector'
+          ? {
+              kind: 'external-adapter',
+              research_backend: 'host_connector',
+              host_required: true,
+              integration_gap: true,
+              connector_slug: delegationTargetSpec(child),
+            }
+          : { kind: 'llm-reasoning', reasoning_per_turn: true },
+      },
+    }),
+    'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'research.done' }),
+  };
+}
+
+function researchAgentChildReasoningContract(child: DelegationChildDescriptor): ReasoningStageContract {
+  const rawFields = child.synthesize_child?.result_fields ?? {};
+  const fields = Object.entries(rawFields).map(([name, rawType]) => ({
+    name,
+    type: reasoningFieldTypeFor(rawType),
+    description: name === 'seeded_topic'
+      ? 'Exact echo of inputs.request.topic supplied by parent input enrichment.'
+      : `Delegated research ${name.replace(/_/gu, ' ')} result.`,
+  }));
+  const cannedResult = Object.fromEntries(fields.map((field) => [
+    field.name,
+    field.type === 'number'
+      ? 1
+      : field.type === 'boolean'
+        ? true
+        : field.type === 'string_array'
+          ? [`${field.name}-sample`]
+          : field.name === 'seeded_topic'
+            ? 'seeded delegation topic'
+            : `${field.name}-sample`,
+  ]));
+  return {
+    contract_version: REASONING_CONTRACT_VERSION,
+    stage: 'research',
+    reasoning_prompt: `Complete delegated research request ${child.id}. Use the projected inputs.request.topic, inputs.request.query, and inputs.domain_context fields. Return the requested result fields; seeded_topic must exactly echo inputs.request.topic when present.`,
+    result_schema: {
+      fields,
+      allow_extra_fields: true,
+    },
+    items_schema: {
+      templates: [`${child.id}:research:<summary>`],
+      description: 'One concise delegated-research item summary.',
+    },
+    canned_example: {
+      result: cannedResult,
+      items: [`${child.id}:research:complete`],
+    },
+    contract_source: 'deterministic_fallback',
+  };
+}
+
 function patchWorkerChildSpecForDelegation(specYaml: string, child: DelegationChildDescriptor): string {
+  return patchDelegationChildSpecForDelegation(specYaml, child, 'work');
+}
+
+function patchDelegationChildSpecForDelegation(specYaml: string, child: DelegationChildDescriptor, middleStage: 'research' | 'work'): string {
   const spec = load(specYaml) as MutableRecord;
   const schema = recordField(spec, 'schema');
   schema['inputs.request'] = 'object';
@@ -3529,7 +3723,7 @@ function patchWorkerChildSpecForDelegation(specYaml: string, child: DelegationCh
   schema['inputs.domain_context.original_request'] = 'string';
 
   const projection = recordField(spec, 'projection');
-  for (const modeName of ['receive', 'work', 'complete']) {
+  for (const modeName of ['receive', middleStage, 'complete']) {
     const modeProjection = recordField(projection, modeName);
     const include = Array.isArray(modeProjection.include) ? modeProjection.include as string[] : [];
     modeProjection.include = unique([
@@ -3546,19 +3740,19 @@ function patchWorkerChildSpecForDelegation(specYaml: string, child: DelegationCh
 
   const prompts = recordField(spec, 'prompts');
   prompts.receive = `${String(prompts.receive ?? '')}\nAccept the delegated request; inputs.request and inputs.domain_context are seeded by the parent delegation.`;
-  prompts.work = `${String(prompts.work ?? '')}\nUse inputs.request.topic as the delegated topic. The seeded_topic result field, when present, must echo that exact value.`;
+  prompts[middleStage] = `${String(prompts[middleStage] ?? '')}\nUse inputs.request.topic as the delegated topic. The seeded_topic result field, when present, must echo that exact value.`;
 
   const actionMap = recordField(spec, 'action_map');
-  const completeWork = recordField(actionMap, 'complete_work');
-  const mutations = Array.isArray(completeWork.mutations) ? completeWork.mutations as MutableRecord[] : [];
+  const completeStage = recordField(actionMap, `complete_${middleStage}`);
+  const mutations = Array.isArray(completeStage.mutations) ? completeStage.mutations as MutableRecord[] : [];
   for (const mutation of mutations) {
-    if (mutation.path === 'work.result.seeded_topic') {
+    if (mutation.path === `${middleStage}.result.seeded_topic`) {
       mutation.value = '';
       mutation.from_arg = 'seeded_topic';
       mutation.from_state = 'inputs.request.topic';
     }
   }
-  completeWork.mutations = mutations;
+  completeStage.mutations = mutations;
 
   const rendered = dump(spec, { lineWidth: -1, noRefs: true, sortKeys: false });
   validateSynthesizedSpec(rendered);
@@ -3571,6 +3765,117 @@ function reasoningFieldTypeFor(value: string): ReasoningStageContract['result_sc
   if (normalized === 'boolean') return 'boolean';
   if (normalized === 'string_array' || normalized === 'array') return 'string_array';
   return 'string';
+}
+
+function researchChildBackend(child: DelegationChildDescriptor): 'host_connector' | 'self_contained' {
+  return child.synthesize_child?.research_backend === 'host_connector' ? 'host_connector' : 'self_contained';
+}
+
+function childResultStage(child: DelegationChildDescriptor): 'research' | 'work' {
+  return child.synthesize_child?.kind === 'research_agent' ? 'research' : 'work';
+}
+
+function researchBackendCapabilityGap(child: DelegationChildDescriptor): CapabilityGap {
+  const connectorSlug = delegationTargetSpec(child);
+  return {
+    capability: 'delegation_research_agent',
+    stage: 'research',
+    connector_slug: connectorSlug,
+    message: `research backend is host-required — implement the ${connectorSlug} connector`,
+  };
+}
+
+function capabilityGapsForDelegationChildren(children: DelegationChildDescriptor[]): CapabilityGap[] {
+  return children
+    .filter((child) => child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector')
+    .map(researchBackendCapabilityGap);
+}
+
+function tsTypeForResultField(value: string): string {
+  const normalized = value.toLowerCase().replace(/[-\s]+/gu, '_');
+  if (normalized === 'number') return 'number';
+  if (normalized === 'boolean') return 'boolean';
+  if (normalized === 'string_array' || normalized === 'array') return 'string[]';
+  return 'string';
+}
+
+function appendResearchHostConnectorContracts(source: string, child: DelegationChildDescriptor, gap: CapabilityGap): string {
+  const fields = Object.entries(child.synthesize_child?.result_fields ?? {});
+  const resultMembers = fields
+    .map(([field, type]) => `  ${field}: ${tsTypeForResultField(type)};`)
+    .join('\n');
+  const contractFields = fields
+    .map(([field, type]) => `    { name: ${tsString(field)}, type: ${tsString(type)} },`)
+    .join('\n');
+  return `${source}
+
+export interface ResearchHostConnectorRequest {
+  topic: string;
+  query?: string;
+  source_program?: string;
+  original_request?: string;
+}
+
+export interface ResearchHostConnectorResult {
+${resultMembers}
+}
+
+export interface ResearchHostConnector {
+  research(request: ResearchHostConnectorRequest): Promise<ResearchHostConnectorResult>;
+}
+
+export const researchHostConnectorContract = {
+  connector_slug: ${tsString(gap.connector_slug)},
+  request: {
+    topic: 'string',
+    query: 'string',
+    source_program: 'string',
+    original_request: 'string',
+  },
+  result_fields: [
+${contractFields}
+  ],
+  fixture_adapter_kind: 'in_memory_mock',
+} as const;
+
+export const capabilityGaps = ${JSON.stringify([gap], null, 2)} as const;
+`;
+}
+
+function renderResearchHostConnectorMockStageSource(child: DelegationChildDescriptor): string {
+  const fieldEntries = Object.entries(child.synthesize_child?.result_fields ?? {})
+    .map(([field, type]) => {
+      if (field === 'seeded_topic') {
+        return `    seeded_topic: topic,`;
+      }
+      const normalizedType = tsTypeForResultField(type);
+      if (normalizedType === 'number') return `    ${field}: 1,`;
+      if (normalizedType === 'boolean') return `    ${field}: true,`;
+      if (normalizedType === 'string[]') return `    ${field}: [${tsString(`${field}-sample`)}],`;
+      return `    ${field}: ${tsString(`${field}-sample`)},`;
+    })
+    .join('\n');
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const topic = stringFact(input.domain['inputs.request.topic'], 'seeded delegation topic');
+  const result = {
+${fieldEntries}
+    adapter_kind: 'in_memory_mock',
+  };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify([\`research:\${topic}\`]),
+    digest: '',
+    adapter_kind: 'in_memory_mock',
+  };
+}
+
+function stringFact(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+`;
 }
 
 function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
@@ -3588,10 +3893,20 @@ function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
 function delegationResultPolicyForChild(child: DelegationChildDescriptor): {
   fields: Array<{ path: string; key: string }>;
 } {
+  const stage = childResultStage(child);
+  if (child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector') {
+    return {
+      fields: [
+        { path: `${stage}.output`, key: 'result' },
+        { path: `${stage}.output.result_json`, key: 'result_json' },
+        { path: `${stage}.output.adapter_kind`, key: 'adapter_kind' },
+      ],
+    };
+  }
   return {
     fields: [
-      { path: 'work.result', key: 'result' },
-      ...delegationResultFields(child).map(([field]) => ({ path: `work.result.${field}`, key: field })),
+      { path: `${stage}.result`, key: 'result' },
+      ...delegationResultFields(child).map(([field]) => ({ path: `${stage}.result.${field}`, key: field })),
     ],
   };
 }
@@ -3670,6 +3985,22 @@ function renderDelegationSmokeTestSource(
   const childSlug = delegationTargetSpec(child);
   const parentPascal = toPascalCase(slug);
   const childPascal = toPascalCase(childSlug);
+  const childStage = childResultStage(child);
+  const backedResearch = child.synthesize_child?.kind === 'research_agent' && researchChildBackend(child) === 'host_connector';
+  const childCompleteAction = `complete_${childStage}`;
+  const childCompleteChannel = backedResearch ? 'stage_output' : 'widget_output';
+  const childCompletePayload = backedResearch
+    ? `{ __stage_runtime: { now_iso: '2026-07-16T00:00:00.000Z', random: 0.25 } }`
+    : `{
+          result_json: JSON.stringify({ summary: 'child completed delegated work' }),
+          items_json: JSON.stringify(['delegated-work-complete']),
+          summary: 'child completed delegated work',
+          seeded_topic: 'seeded delegation topic',
+        }`;
+  const childResultAssertions = backedResearch
+    ? `    expect(String(result.result_json)).toContain('seeded delegation topic');
+    expect(result.adapter_kind).toBe('in_memory_mock');`
+    : `    expect(result.seeded_topic).toBe('seeded delegation topic');`;
   const transitionAction = transitionActions.find((action) => action.source === child.stage);
   const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
   const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
@@ -3699,12 +4030,7 @@ describe('generated delegation smoke', () => {
         scripted(effect('begin_work', {})),
         scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { intent: 'complete-child' } }, ${tsString(delegationChannelName(child))})),
         scripted(effect('begin_work', {}), 'seeded delegation topic'),
-        scripted(effect('complete_work', {
-          result_json: JSON.stringify({ summary: 'child completed delegated work' }),
-          items_json: JSON.stringify(['delegated-work-complete']),
-          summary: 'child completed delegated work',
-          seeded_topic: 'seeded delegation topic',
-        }), 'seeded delegation topic'),
+        scripted(effect(${tsString(childCompleteAction)}, ${childCompletePayload}, ${tsString(childCompleteChannel)}), 'seeded delegation topic'),
         scripted(effect(${tsString(transitionActionName)}, {
           result_json: JSON.stringify({ parent: 'complete after delegation' }),
           items_json: JSON.stringify(['parent-complete']),
@@ -3715,7 +4041,7 @@ describe('generated delegation smoke', () => {
     expect(result.status).toBe('complete');
     expect(Number(result.rounds)).toBeGreaterThanOrEqual(1);
     expect(result.mode).toBe('complete');
-    expect(result.seeded_topic).toBe('seeded delegation topic');
+${childResultAssertions}
     expect(complete.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
     expect(complete.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(false);
     expect(complete.final.mode).toBe('complete');
@@ -5260,6 +5586,15 @@ export function assertDelegationChildrenDescriptor(
     const kind = requiredString(synthesizeChild.kind, 'delegation.children[0].synthesize_child.kind');
     if (kind !== 'research_agent' && kind !== 'worker') {
       throw new Error(`delegation.children[0].synthesize_child.kind must be research_agent or worker; got ${kind}`);
+    }
+    if (synthesizeChild.research_backend !== undefined) {
+      const researchBackend = requiredString(synthesizeChild.research_backend, 'delegation.children[0].synthesize_child.research_backend');
+      if (researchBackend !== 'host_connector' && researchBackend !== 'self_contained') {
+        throw new Error(`delegation.children[0].synthesize_child.research_backend must be self_contained or host_connector; got ${researchBackend}`);
+      }
+      if (kind !== 'research_agent') {
+        throw new Error('delegation.children[0].synthesize_child.research_backend is only valid for kind research_agent');
+      }
     }
     requiredString(synthesizeChild.purpose, 'delegation.children[0].synthesize_child.purpose');
     const resultFields = requiredRecord(synthesizeChild.result_fields, 'delegation.children[0].synthesize_child.result_fields');

@@ -2,7 +2,15 @@ export interface DelegationChildSynthesizeDescriptor {
   kind: 'research_agent' | 'worker';
   purpose: string;
   result_fields: Record<string, string>;
+  research_backend?: 'host_connector' | 'self_contained';
   slug?: string;
+}
+
+export interface CapabilityGap {
+  capability: string;
+  stage: string;
+  connector_slug: string;
+  message: string;
 }
 
 export interface DelegationChildDescriptor {
@@ -123,6 +131,7 @@ export interface SynthesizedArtifact {
   handlers_index_ts: string;
   tools_ts: string;
   smoke_test_ts: string;
+  capability_gaps?: CapabilityGap[];
   child_artifacts?: Array<Omit<SynthesizedArtifact, 'created_at' | 'child_artifacts'> & {
     slug: string;
     name: string;

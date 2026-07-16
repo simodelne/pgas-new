@@ -58,6 +58,36 @@ const delegationDomain = {
   }),
 };
 
+function researchAgentDescriptor(researchBackend?: 'host_connector' | 'self_contained'): Record<string, unknown> {
+  const child = delegationDescriptor.children[0] as Record<string, unknown>;
+  const synthesizeChild = child.synthesize_child as Record<string, unknown>;
+  return {
+    ...delegationDescriptor,
+    children: [
+      {
+        ...child,
+        synthesize_child: {
+          ...synthesizeChild,
+          kind: 'research_agent',
+          purpose: 'Research the seeded topic and echo it in the result fields.',
+          ...(researchBackend ? { research_backend: researchBackend } : {}),
+        },
+      },
+    ],
+  };
+}
+
+function delegationDomainWith(slug: string, name: string, purpose: string, descriptor: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...delegationDomain,
+    'program.slug': slug,
+    'program.name': name,
+    'program.target_dir': `/tmp/${slug}`,
+    'intake.purpose': purpose,
+    'intake.delegation_json': JSON.stringify(descriptor),
+  };
+}
+
 describe('generated delegation smoke test', () => {
   it('boots synthesized parent and worker child through the route and proves settled result echo', { timeout: 120_000 }, () => {
     const artifact = artifactFromDomain(delegationDomain);
@@ -110,10 +140,121 @@ describe('generated delegation smoke test', () => {
       rmSync(targetDir, { recursive: true, force: true });
     }
   });
+
+  it('boots synthesized parent and self-contained research-agent child through the route and proves settled result echo', { timeout: 120_000 }, () => {
+    const slug = 'delegation-research-parent-hermetic';
+    const name = 'Delegation Research Parent Hermetic';
+    const artifact = artifactFromDomain(delegationDomainWith(
+      slug,
+      name,
+      'Dispatch one self-contained delegated research-agent child and complete after the result settles.',
+      researchAgentDescriptor(),
+    ));
+    const delegationArtifact = artifact as SynthesizedArtifact & DelegationArtifactExtension;
+    const childArtifacts = delegationArtifact.child_artifacts ?? [];
+    expect(childArtifacts).toHaveLength(1);
+
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-research-delegation-render-'));
+
+    try {
+      renderStandaloneScaffold({
+        slug,
+        name,
+        outDir: targetDir,
+        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedRegistrationTs: delegationArtifact.registration_ts,
+        synthesizedContractsTs: artifact.contracts_ts,
+        synthesizedHandlersTs: artifact.handlers_ts,
+        synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+        synthesizedStageSources: artifact.stage_sources,
+        synthesizedToolsTs: artifact.tools_ts,
+        synthesizedSmokeTestTs: artifact.smoke_test_ts,
+        synthesizedChildArtifacts: childArtifacts,
+      } as RenderStandaloneOptions & DelegationRenderOptions);
+      linkRootNodeModules(targetDir);
+
+      const childSpec = readFileSync(join(targetDir, 'src/programs/research/specs.yml'), 'utf8');
+      expect(childSpec).toContain('research.result.seeded_topic');
+      expect(childSpec).toContain('from_state: inputs.request.topic');
+
+      const childRegistration = readFileSync(join(targetDir, 'src/programs/research/registration.ts'), 'utf8');
+      expect(childRegistration).toContain('delegationResultPolicy');
+      expect(childRegistration).toContain("path: 'research.result.seeded_topic'");
+
+      expect(artifact.smoke_test_ts).toContain('runs synthesized delegation hermetically through the route');
+      expect(artifact.smoke_test_ts).toContain("expect(result.seeded_topic).toBe('seeded delegation topic')");
+      expect(artifact.smoke_test_ts).not.toContain('createTestHarness');
+
+      const output = runGeneratedSmokeTest(targetDir);
+      expect(output).toContain('1 passed');
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
+
+  it('renders and boots host-backed research-agent child with host connector gap', { timeout: 120_000 }, () => {
+    const slug = 'delegation-backed-research-parent-hermetic';
+    const name = 'Delegation Backed Research Parent Hermetic';
+    const artifact = artifactFromDomain(delegationDomainWith(
+      slug,
+      name,
+      'Dispatch one host-backed delegated research-agent child and surface the host connector gap.',
+      researchAgentDescriptor('host_connector'),
+    ));
+    const delegationArtifact = artifact as SynthesizedArtifact & DelegationArtifactExtension;
+    const childArtifacts = delegationArtifact.child_artifacts ?? [];
+    expect(childArtifacts).toHaveLength(1);
+    expect(delegationArtifact.capability_gaps).toEqual([
+      expect.objectContaining({
+        capability: 'delegation_research_agent',
+        message: expect.stringContaining('research backend is host-required'),
+      }),
+    ]);
+
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-backed-research-delegation-render-'));
+
+    try {
+      renderStandaloneScaffold({
+        slug,
+        name,
+        outDir: targetDir,
+        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedRegistrationTs: delegationArtifact.registration_ts,
+        synthesizedContractsTs: artifact.contracts_ts,
+        synthesizedHandlersTs: artifact.handlers_ts,
+        synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+        synthesizedStageSources: artifact.stage_sources,
+        synthesizedToolsTs: artifact.tools_ts,
+        synthesizedSmokeTestTs: artifact.smoke_test_ts,
+        synthesizedChildArtifacts: childArtifacts,
+        synthesizedCapabilityGaps: delegationArtifact.capability_gaps,
+      } as RenderStandaloneOptions & DelegationRenderOptions);
+      linkRootNodeModules(targetDir);
+
+      const childSpec = readFileSync(join(targetDir, 'src/programs/research/specs.yml'), 'utf8');
+      expect(childSpec).toContain('research.output.adapter_kind');
+      const childContracts = readFileSync(join(targetDir, 'src/programs/research/contracts.ts'), 'utf8');
+      expect(childContracts).toContain('export interface ResearchHostConnector');
+      expect(childContracts).toContain('export const researchHostConnectorContract');
+      expect(childContracts).toContain('export const capabilityGaps');
+      const childStage = readFileSync(join(targetDir, 'src/programs/research/stages/research.ts'), 'utf8');
+      expect(childStage).toContain("adapter_kind: 'in_memory_mock'");
+      const childRegistration = readFileSync(join(targetDir, 'src/programs/research/registration.ts'), 'utf8');
+      expect(childRegistration).toContain("path: 'research.output.result_json'");
+      expect(readFileSync(join(targetDir, 'README.md'), 'utf8')).toContain('research backend is host-required');
+      expect(readFileSync(join(targetDir, 'audit/PGAS-NEW-GRADUATION.md'), 'utf8')).toContain('research backend is host-required');
+
+      const output = runGeneratedSmokeTest(targetDir);
+      expect(output).toContain('1 passed');
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
 });
 
 interface DelegationArtifactExtension {
   registration_ts?: string;
+  capability_gaps?: Array<Record<string, unknown>>;
   child_artifacts?: Array<SynthesizedSpec & {
     slug: string;
     name: string;
@@ -125,6 +266,7 @@ interface DelegationArtifactExtension {
 interface DelegationRenderOptions {
   synthesizedRegistrationTs?: string;
   synthesizedChildArtifacts?: NonNullable<DelegationArtifactExtension['child_artifacts']>;
+  synthesizedCapabilityGaps?: NonNullable<DelegationArtifactExtension['capability_gaps']>;
 }
 
 function artifactFromDomain(domain: Record<string, unknown>): SynthesizedArtifact {
