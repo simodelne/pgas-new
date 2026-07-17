@@ -5,6 +5,7 @@ export interface ClassifiedStage {
   archetype: StageArchetype;
   rationale: string;
   adapter_kind?: 'in_memory_mock' | 'repo_integration';
+  export_kind?: 'export_docx' | 'export_html';
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
@@ -16,6 +17,8 @@ interface StageInput {
   slug: string;
   is_bootstrap?: boolean;
   is_terminal?: boolean;
+  kind?: unknown;
+  export_kind?: unknown;
   domain_spec?: unknown;
 }
 
@@ -98,6 +101,16 @@ function classifyStage(
 ): ClassifiedStage {
   const slug = stage.slug;
   const stageDelegation = stageDelegationForSlug(delegation, slug);
+  const exportKind = explicitExportKind(stage);
+  if (exportKind) {
+    return {
+      slug,
+      archetype: 'pure-compute',
+      export_kind: exportKind,
+      rationale: `pure compute export: ${slug} was explicitly marked as ${exportKind}.`,
+    };
+  }
+
   const explicitArchetype = explicitDelegationArchetype(stageDelegation);
   const stageScopedText = [
     slug,
@@ -156,6 +169,15 @@ function classifyStage(
     archetype: 'pure-compute',
     rationale: `pure compute: ${slug} can be implemented as deterministic local logic against the frozen stage contract.`,
   };
+}
+
+function explicitExportKind(stage: StageInput): 'export_docx' | 'export_html' | undefined {
+  const raw = [stage.kind, stage.export_kind]
+    .find((candidate): candidate is string => typeof candidate === 'string')
+    ?.toLowerCase();
+  if (raw === 'export_docx' || raw === 'docx_export') return 'export_docx';
+  if (raw === 'export_html' || raw === 'html_export') return 'export_html';
+  return undefined;
 }
 
 function explicitDelegationArchetype(value: unknown): StageArchetype | undefined {

@@ -28,11 +28,10 @@ import { renderStructuredDocxDocument } from './fixtures/export-docx-render.gold
 // and produces a real OOXML ZIP. The engine bits use the same scripted-author route-level
 // harness as tests/integration/upload-engine-falsifier.test.ts (createPgasServer +
 // createPgasClient(appTransport(server.app)) — NOT createTestHarness, which bypasses route
-// validation). This falsifier proves the MECHANISM only; it does NOT flip the registry status
-// (F-7 pins export_docx_plain at `refuses` — the emitter lands in PR-E2, the live-drive in PR-E3).
+// validation). This falsifier proves the MECHANISM only; PR-E2 adds the deterministic emitter
+// and moves F-7 to `scaffolds_with_gap`; the live-drive flip remains PR-E3.
 //
-// F-4 (diffTokens byte-stability) is intentionally NOT here: diffTokens does not exist until
-// PR-E2. Its falsifier ships WITH it in PR-E2 (falsifier-first within E2). See the export design
+// F-4 (diffTokens byte-stability) ships as a focused PR-E2 unit falsifier. See the export design
 // doc §4 / §5 (pgas-new-export-design-20260717.md).
 
 const EXPORT_PROGRAM = 'export-render-falsifier';
@@ -163,14 +162,11 @@ describe('export render route-level falsifier (PR-10 / PR-E1)', () => {
       return { refused };
     });
 
-    // ── F-7: registry honesty — E1 proves the mechanism, it does NOT flip the status ──
+    // ── F-7: registry honesty — E2 emits hermetic scaffolds; live-drive proof is still pending ──
     await recordFalsifier('F-7', failures, async () => {
       const plain = capabilityEntry('export_docx_plain');
-      expect(plain?.status, 'export_docx_plain status at PR-E1 (mechanism proven, not yet synthesized)').toBe('refuses');
-      // gap_note corrected: plain-DOCX byte generation IS portable; the block is the missing
-      // emitter (PR-E2) + live-drive (PR-E3), not a host dependency.
-      expect(plain?.gap_note ?? '').toMatch(/portable/i);
-      expect(plain?.gap_note ?? '').toMatch(/PR-E2|PR-E3|emitter/);
+      expect(plain?.status, 'export_docx_plain status at PR-E2 (emitter hermetic-proven; live-drive pending)').toBe('scaffolds_with_gap');
+      expect(plain?.gap_note ?? '').toMatch(/PR-E3|live-drive/i);
       const track = capabilityEntry('export_docx_trackchange');
       expect(track?.status).toBe('refuses');
       expect(track?.gap_note ?? '').toMatch(/1738/);

@@ -66,6 +66,11 @@ export interface GeneratedArtifactPlanOptions {
   includeSmokeTest?: boolean;
   capabilityGaps?: readonly unknown[];
   requestedArtifactPaths?: string[];
+  exportSurfaces?: {
+    docx?: boolean;
+    html?: boolean;
+    diff?: boolean;
+  };
 }
 
 export function createStandaloneArtifactPlan(
@@ -133,6 +138,7 @@ export function createStandaloneArtifactPlan(
       artifact('tool', `src/programs/${slug}/tools.ts`, 'Declare semantic repo, git, verification, research, and session tool metadata.', 'branch_write', [
         'typecheck',
       ]),
+      ...standaloneExportArtifacts(slug, options.exportSurfaces),
       artifact('test', 'tests/spec-load.test.ts', 'Verify generated specs load through pgas-server testing surfaces.', 'static_verify', [
         'npm-test',
       ]),
@@ -193,6 +199,10 @@ export function createExistingRepoArtifactPlan(
       'program-deterministic',
     ]),
     artifact('export', `${programPath}/export/docx.ts`, 'Provide deterministic DOCX document export support for the attached program.', 'branch_write', [
+      'typecheck',
+      'program-deterministic',
+    ]),
+    artifact('export', `${programPath}/export/diff.ts`, 'Provide deterministic word-level diff token support for attached export surfaces.', 'branch_write', [
       'typecheck',
       'program-deterministic',
     ]),
@@ -258,6 +268,35 @@ export function createExistingRepoArtifactPlan(
       ...requestedArtifacts(options.requestedArtifactPaths ?? [], coreArtifacts, programPath),
     ]),
   };
+}
+
+function standaloneExportArtifacts(
+  slug: string,
+  exportSurfaces: GeneratedArtifactPlanOptions['exportSurfaces'],
+): PlannedArtifact[] {
+  if (!exportSurfaces) {
+    return [];
+  }
+  return [
+    ...(exportSurfaces.html
+      ? [artifact('export', `src/programs/${slug}/export/html.ts`, 'Provide deterministic HTML document export support.', 'branch_write', [
+          'typecheck',
+          'program-deterministic',
+        ])]
+      : []),
+    ...(exportSurfaces.docx
+      ? [artifact('export', `src/programs/${slug}/export/docx.ts`, 'Provide deterministic DOCX document export support.', 'branch_write', [
+          'typecheck',
+          'program-deterministic',
+        ])]
+      : []),
+    ...(exportSurfaces.diff
+      ? [artifact('export', `src/programs/${slug}/export/diff.ts`, 'Provide deterministic word-level diff token support.', 'branch_write', [
+          'typecheck',
+          'program-deterministic',
+        ])]
+      : []),
+  ];
 }
 
 function existingRepoUserFacingArtifacts(programPath: string, manifest: WiringManifest): PlannedArtifact[] {
