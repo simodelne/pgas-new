@@ -719,24 +719,6 @@ export const handlers: Record<string, ToolHandler> = {
       if (unmerged.length > 0) {
         throw new Error(`git rebase conflict; unmerged paths:\n${unmerged.join('\n')}`);
       }
-      // #96: `git rebase --autostash` stashes tracked-modified files but leaves
-      // untracked generated artifacts in place. If an untracked generated path
-      // collides with a path added on origin/<target_branch>, git aborts with
-      // "untracked working tree files would be overwritten by checkout" and
-      // rolls back cleanly (nothing is lost). Surface the colliding paths as an
-      // actionable conflict rather than rethrowing the opaque raw git error, so
-      // rebase_verify reports which generated artifact needs reconciling.
-      if (/untracked working tree files would be overwritten/u.test(message)) {
-        const collisions = message
-          .split(/\r?\n/u)
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0 && !line.startsWith('error:') && !line.startsWith('Please ') && !line.startsWith('Aborting') && !/[.:]$/u.test(line));
-        const detail = collisions.length > 0 ? `\n${collisions.join('\n')}` : '';
-        throw new Error(
-          `git rebase blocked: untracked generated artifacts collide with origin/${targetBranch}:${detail}\n` +
-            'Reconcile or remove the colliding generated path(s), then re-run rebase verification.',
-        );
-      }
       throw error;
     }
     return { kind: 'git_rebase_latest', status: 'passed', evidence_id: evidenceId('rebase') };

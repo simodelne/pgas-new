@@ -57,54 +57,6 @@ describe('git_rebase_latest real git behavior', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-
-  it('reports an actionable conflict when an untracked generated path collides with upstream', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'pgas-new-rebase-untracked-collide-'));
-    const origin = join(root, 'origin.git');
-    const seed = join(root, 'seed');
-    const work = join(root, 'work');
-    try {
-      git(root, ['init', '--bare', '--initial-branch=main', origin]);
-      mkdirSync(seed);
-      git(seed, ['init', '--initial-branch=main']);
-      configureGitUser(seed);
-      writeFileSync(join(seed, 'tracked.txt'), 'base tracked file\n');
-      git(seed, ['add', '.']);
-      git(seed, ['commit', '-m', 'initial']);
-      git(seed, ['remote', 'add', 'origin', origin]);
-      git(seed, ['push', '-u', 'origin', 'main']);
-
-      git(root, ['clone', '--branch', 'main', origin, work]);
-      configureGitUser(work);
-      git(work, ['checkout', '-b', 'feature/generated-program']);
-      writeFileSync(join(work, 'feature.txt'), 'generated program commit\n');
-      git(work, ['add', 'feature.txt']);
-      git(work, ['commit', '-m', 'feature artifact baseline']);
-
-      // Untracked generated artifact in the work tree.
-      writeFileSync(join(work, 'collides.txt'), 'generated untracked\n');
-
-      // Upstream independently adds the SAME path.
-      writeFileSync(join(seed, 'collides.txt'), 'upstream content\n');
-      git(seed, ['add', 'collides.txt']);
-      git(seed, ['commit', '-m', 'upstream adds colliding path']);
-      git(seed, ['push', 'origin', 'main']);
-
-      await expect(
-        handlers.git_rebase_latest({
-          cwd: work,
-          target_branch: 'main',
-          domain: { 'program.target_dir': work },
-        }),
-      ).rejects.toThrow(/untracked generated artifacts collide with origin\/main[\s\S]*collides\.txt/u);
-
-      // git aborts cleanly: the branch is unchanged and the untracked file remains.
-      const status = git(work, ['status', '--porcelain']);
-      expect(status).toContain('?? collides.txt');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
 });
 
 function configureGitUser(cwd: string): void {
