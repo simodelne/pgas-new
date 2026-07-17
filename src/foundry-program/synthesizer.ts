@@ -1220,6 +1220,7 @@ function applyDocumentsSchema(
   schema[`${resultPath}.char_count`] = 'number';
   schema[`${resultPath}.file_count`] = 'number';
   schema[`${resultPath}.files_json`] = 'string';
+  schema[`${resultPath}.extraction_kind`] = 'string';
   schema[`${resultPath}.status`] = 'string';
   schema[`${resultPath}.reason`] = 'string';
   schema[documentsSourceReadyPath(documents)] = 'boolean';
@@ -1260,6 +1261,7 @@ function applyDocumentsActions(
         { op: 'MSet', path: `${documents.result_path}.char_count`, value: 0 },
         { op: 'MSet', path: `${documents.result_path}.file_count`, value: 0 },
         { op: 'MSet', path: `${documents.result_path}.files_json`, value: '[]' },
+        { op: 'MSet', path: `${documents.result_path}.extraction_kind`, value: 'skipped_no_documents' },
         { op: 'MSet', path: documentsSourceReadyPath(documents), value: true },
       ],
       channel: 'widget_output',
@@ -1351,6 +1353,7 @@ function applyDocumentsReactions(
       `${documents.result_path}.char_count`,
       `${documents.result_path}.file_count`,
       `${documents.result_path}.files_json`,
+      `${documents.result_path}.extraction_kind`,
     ],
   };
 }
@@ -1413,6 +1416,7 @@ function applyDocumentsProjection(
     `${documents.result_path}.char_count`,
     `${documents.result_path}.file_count`,
     `${documents.result_path}.files_json`,
+    `${documents.result_path}.extraction_kind`,
     documentsSourceReadyPath(documents),
   ];
   hostProjection.include = unique([...hostInclude, ...hostPaths]);
@@ -1427,6 +1431,7 @@ function applyDocumentsProjection(
     `${documents.result_path}.char_count`,
     `${documents.result_path}.file_count`,
     `${documents.result_path}.files_json`,
+    `${documents.result_path}.extraction_kind`,
     documentsSourceReadyPath(documents),
   ];
   for (const modeName of modeNames.slice(Math.max(hostIndex + 1, 0))) {
@@ -2708,6 +2713,7 @@ function settleDocumentSource(
         { op: 'MSet' as const, path: \`\${resultPath}.char_count\`, value: 0 },
         { op: 'MSet' as const, path: \`\${resultPath}.file_count\`, value: 0 },
         { op: 'MSet' as const, path: \`\${resultPath}.files_json\`, value: '[]' },
+        { op: 'MSet' as const, path: \`\${resultPath}.extraction_kind\`, value: 'skipped_no_documents' },
         { op: 'MSet' as const, path: readyPath, value: true },
       ],
     };
@@ -2761,13 +2767,13 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
   const documentRecords = rawDocuments.filter(isDocumentRecord);
   const allowedMimeTypes = new Set<string>(${allowedTypes});
   const summaries = documentRecords.map(documentSummary);
-  const eligible: Array<{ document: Record<string, unknown>; text: string }> = [];
+  const eligible: Array<{ document: Record<string, unknown>; text: string; extraction_kind: string }> = [];
   for (const document of documentRecords) {
     if (!documentMimeAllowed(document, allowedMimeTypes)) {
       continue;
     }
     if (typeof document.content_text === 'string') {
-      eligible.push({ document, text: document.content_text });
+      eligible.push({ document, text: document.content_text, extraction_kind: 'content_text' });
       continue;
     }
     ${docxExtractionEnabled ? `if (documentIsDocx(document) && typeof document.content_base64 === 'string') {
@@ -2780,10 +2786,11 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
           char_count: 0,
           file_count: 0,
           files_json: JSON.stringify(summaries),
+          extraction_kind: docxExtractionKind(bytes),
           reason: extracted.reason,
         };
       }
-      eligible.push({ document, text: extracted.text });
+      eligible.push({ document, text: extracted.text, extraction_kind: docxExtractionKind(bytes) });
       continue;
     }` : ''}
   }
@@ -2797,6 +2804,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
       char_count: 0,
       file_count: 0,
       files_json: JSON.stringify(summaries),
+      extraction_kind: 'none',
       reason: sawUnsupported ? ${docxExtractionEnabled ? "'uploaded documents were not supported content_text or DOCX content_base64 documents'" : "'uploaded documents were not text/markdown content_text documents'"} : 'no engine-injected document content_text was available',
     };
   }
@@ -2805,6 +2813,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
     ? eligible[0]?.text ?? ''
     : eligible.map((entry, index) => \`--- file: \${documentName(entry.document, index)} ---\\n\\n\${entry.text}\`).join('\\n\\n');
   const charCount = fullText.length;
+  const extractionKind = combinedExtractionKind(eligible.map((entry) => entry.extraction_kind));
   if (charCount < ${String(minChars)}) {
     return {
       status: 'blocked_low_fidelity',
@@ -2812,6 +2821,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
       char_count: charCount,
       file_count: eligible.length,
       files_json: JSON.stringify(eligible.map((entry) => documentSummary(entry.document))),
+      extraction_kind: extractionKind,
       reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
     };
   }
@@ -2821,6 +2831,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
     char_count: charCount,
     file_count: eligible.length,
     files_json: JSON.stringify(eligible.map((entry) => documentSummary(entry.document))),
+    extraction_kind: extractionKind,
   };
 }
 
@@ -2831,6 +2842,7 @@ function skippedDocumentSource(): Record<string, unknown> {
     char_count: 0,
     file_count: 0,
     files_json: '[]',
+    extraction_kind: 'skipped_no_documents',
   };
 }
 
@@ -2865,7 +2877,51 @@ function documentIsDocx(document: Record<string, unknown>): boolean {
   return raw.toLowerCase() === ${tsString(DOCX_MIME_TYPE)};
 }
 
-function documentName(document: Record<string, unknown>, index: number): string {
+function combinedExtractionKind(kinds: string[]): string {
+  if (kinds.length === 1) {
+    return kinds[0] ?? 'unknown';
+  }
+  if (kinds.includes('docx_deflate')) {
+    return 'mixed_docx_deflate';
+  }
+  if (kinds.includes('docx_store')) {
+    return 'mixed_docx_store';
+  }
+  if (kinds.every((kind) => kind === 'content_text')) {
+    return 'content_text';
+  }
+  return kinds.length > 0 ? 'mixed' : 'unknown';
+}
+
+${docxExtractionEnabled ? `function docxExtractionKind(bytes: Uint8Array): string {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  let sawEntry = false;
+  let sawDeflate = false;
+  while (offset + 4 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+    sawEntry = true;
+    const method = view.getUint16(offset + 8, true);
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    if (method === 8) {
+      sawDeflate = true;
+    } else if (method !== 0) {
+      return 'docx_unknown';
+    }
+    const dataEnd = offset + 30 + nameLength + extraLength + compressedSize;
+    if (dataEnd > bytes.length) {
+      return 'docx_unknown';
+    }
+    offset = dataEnd;
+  }
+  if (!sawEntry) {
+    return 'docx_unknown';
+  }
+  return sawDeflate ? 'docx_deflate' : 'docx_store';
+}
+
+` : ''}function documentName(document: Record<string, unknown>, index: number): string {
   return typeof document.name === 'string' && document.name.length > 0
     ? document.name
     : \`document-\${String(index + 1)}\`;

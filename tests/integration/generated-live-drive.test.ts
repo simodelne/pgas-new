@@ -26,6 +26,7 @@ import {
   driveGeneratedProgramLive,
   type GeneratedLiveDriveConfirmationScript,
   type GeneratedLiveDriveDelegationScript,
+  type GeneratedLiveDriveExtractionScript,
   type GeneratedLiveDriveExportScript,
   type GeneratedLiveDriveUploadScript,
 } from '../../src/pgas-new/generated-live-drive.js';
@@ -44,8 +45,11 @@ const DELEGATION_SLUG = 'delegation-parent-live';
 const RESEARCH_AGENT_DELEGATION_SLUG = 'delegation-research-agent-live';
 const UPLOAD_SLUG = 'document-upload-live';
 const EXPORT_SLUG = 'docx-export-live';
+const EXTRACTION_SLUG = 'docx-extraction-live';
 const EXPORT_REASONING_STAGE = 'compose_export';
 const EXPORT_STAGE = 'export_document';
+const EXTRACTION_REASONING_STAGE = 'summarize_source';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const DELEGATION_LIVE_DRIVE_TIMEOUT_MS = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
 const DELEGATION_LIVE_TEST_TIMEOUT_MS = Math.max(LIVE_TIMEOUT_MS, DELEGATION_LIVE_DRIVE_TIMEOUT_MS + 60_000);
 
@@ -329,6 +333,42 @@ const exportDomain = {
     final_stage: 'complete',
     guard_field: `${EXPORT_STAGE}.ready`,
     outputs: ['a .docx export of the composed memo'],
+  }),
+};
+
+const extractionDomain = {
+  'program.slug': EXTRACTION_SLUG,
+  'program.name': 'DOCX Extraction Live',
+  'program.target_dir': '/tmp/docx-extraction-live',
+  'program.design_path': 'design',
+  'intake.purpose': 'Request an uploaded DOCX document, extract its text deterministically, summarize the source, and complete.',
+  'intake.entry_channel': 'user_text',
+  'intake.stages_json': JSON.stringify([
+    { slug: 'intake', is_bootstrap: true },
+    { slug: 'ingest_source' },
+    { slug: EXTRACTION_REASONING_STAGE },
+    { slug: 'complete', is_terminal: true },
+  ]),
+  'intake.transitions_json': JSON.stringify([
+    { from: 'intake', to: 'ingest_source', trigger: 'started', guard_field: 'intake.started' },
+    { from: 'ingest_source', to: EXTRACTION_REASONING_STAGE, trigger: 'source_ready', guard_field: 'work.source_ready' },
+    { from: EXTRACTION_REASONING_STAGE, to: 'complete', trigger: 'summarized', guard_field: `${EXTRACTION_REASONING_STAGE}.done` },
+  ]),
+  'intake.delegation_json': JSON.stringify({
+    [EXTRACTION_REASONING_STAGE]: { kind: 'llm-reasoning' },
+  }),
+  'intake.documents_json': JSON.stringify({
+    version: 1,
+    stage: 'ingest_source',
+    upload_types: [DOCX_MIME],
+    extraction: 'self_contained',
+    target: { root: 'work.source' },
+    required: true,
+    fidelity_floor: { min_chars: 80 },
+  }),
+  'intake.completion_json': JSON.stringify({
+    final_stage: 'complete',
+    guard_field: `${EXTRACTION_REASONING_STAGE}.done`,
   }),
 };
 
@@ -666,6 +706,42 @@ describe('generated program live drive gate', () => {
     expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
   });
 
+  liveIt('drives a generated docx extraction program through real upload + provider stages', { timeout: LIVE_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, extractionScript } = await liveSynthesizeAndRenderExtraction(env);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: EXTRACTION_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: [
+        'Please request the source DOCX document, ingest it through the upload flow, summarize its contents, and complete.',
+        'Use the uploaded document bytes as the source of truth; do not ask me to paste the document text.',
+      ].join(' '),
+      finalStage: 'complete',
+      maxTriggers: 14,
+      driveTimeoutMs: 900_000,
+      extractionScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] extraction=${JSON.stringify(drive.extraction)}\n`);
+    process.stdout.write(`[live-drive] extraction_verdict=${JSON.stringify(drive.extraction_verdict)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.extraction_engaged).toBe(true);
+    expect(drive.extraction_verdict.extraction_engaged).toBe(true);
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.extraction?.source_status).toBe('extracted');
+    expect(drive.extraction?.source_ready).toBe(true);
+    expect(drive.extraction?.sentinel_present).toBe(true);
+    expect(drive.extraction?.extraction_kind).toBe('docx_deflate');
+    expect(drive.extraction?.sentinel_not_in_raw_upload).toBe(true);
+    expect(drive.extraction?.char_count).toBe(drive.extraction?.expected_char_count);
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
+  });
+
   liveIt('drives a generated delegation degrade path with a real provider', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
     const env = requireLiveDriveEnv();
     const { targetDir, delegationScript } = liveSynthesizeAndRenderDelegation(1);
@@ -837,6 +913,49 @@ async function liveSynthesizeAndRenderExport(env: LiveDriveEnv): Promise<{
       resultPath: exportDescriptor!.payloadRef,
       stage: exportDescriptor!.stage,
       nonce: `PGAS-EXPORT-NONCE-${randomUUID()}`,
+    },
+  };
+}
+
+async function liveSynthesizeAndRenderExtraction(env: LiveDriveEnv): Promise<{
+  targetDir: string;
+  extractionScript: GeneratedLiveDriveExtractionScript;
+}> {
+  const cacheDir = trackedTempRoot('pgas-new-live-drive-extraction-cache-');
+  const targetDir = trackedTempRoot('pgas-new-live-drive-extraction-render-');
+  const artifact = await withRequiredLlmContract(() =>
+    synthesizeDomainLogic(artifactFromDomain(extractionDomain), {
+      cacheDir,
+      providerUrl: env.baseUrl,
+      model: env.model,
+    }));
+  const documents = artifact.synthesis_context?.documents;
+  expect(documents, 'extraction documents descriptor').toBeTruthy();
+  expect(artifact.document_extraction_surfaces?.docx, 'standalone docx extraction surface').toBe(true);
+
+  renderStandaloneScaffold({
+    slug: EXTRACTION_SLUG,
+    name: 'DOCX Extraction Live',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+    synthesizedDocumentExtractionSurfaces: artifact.document_extraction_surfaces,
+    synthesizedExportSurfaces: { docx: true },
+  });
+  linkRootNodeModules(targetDir);
+
+  return {
+    targetDir,
+    extractionScript: {
+      resultPath: documents!.result_path,
+      sourceReadyPath: sourceReadyPath(documents!.result_path),
+      stage: documents!.stage,
+      sentinel: `PGAS-EXTRACTION-NONCE-${randomUUID()}`,
     },
   };
 }
