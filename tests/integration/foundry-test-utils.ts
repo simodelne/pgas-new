@@ -13,12 +13,27 @@ import type { TestHarness, TestHarnessSnapshot } from '@simodelne/pgas-server/te
 // the instant the predicate holds.
 const WAIT_FOR_SNAPSHOT_DEADLINE_MS = 15_000;
 
+// A heavily-loaded shared CI runner can occasionally need more than the 15s
+// default; `PGAS_TEST_WAIT_SNAPSHOT_MS` lets an operator extend the poll deadline
+// without a code change. A valid positive integer overrides the default; anything
+// else (unset / non-numeric / non-positive) falls back to it.
+function waitSnapshotTimeoutMs(): number {
+  const raw = process.env.PGAS_TEST_WAIT_SNAPSHOT_MS;
+  if (raw !== undefined) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return WAIT_FOR_SNAPSHOT_DEADLINE_MS;
+}
+
 export async function waitForSnapshot(
   harness: TestHarness,
   predicate: (snapshot: TestHarnessSnapshot) => boolean,
   label: string,
 ): Promise<TestHarnessSnapshot> {
-  const deadline = Date.now() + WAIT_FOR_SNAPSHOT_DEADLINE_MS;
+  const deadline = Date.now() + waitSnapshotTimeoutMs();
   let latest = await harness.snapshot();
 
   while (!predicate(latest) && Date.now() < deadline) {
