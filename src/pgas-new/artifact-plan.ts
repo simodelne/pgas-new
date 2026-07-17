@@ -16,6 +16,7 @@ export type ArtifactKind =
   | 'projection'
   | 'frontend'
   | 'export'
+  | 'extract'
   | 'stage'
   | 'tool'
   | 'test'
@@ -70,6 +71,9 @@ export interface GeneratedArtifactPlanOptions {
     docx?: boolean;
     html?: boolean;
     diff?: boolean;
+  };
+  documentExtractionSurfaces?: {
+    docx?: boolean;
   };
 }
 
@@ -139,6 +143,7 @@ export function createStandaloneArtifactPlan(
         'typecheck',
       ]),
       ...standaloneExportArtifacts(slug, options.exportSurfaces),
+      ...standaloneDocumentExtractionArtifacts(slug, options.documentExtractionSurfaces),
       artifact('test', 'tests/spec-load.test.ts', 'Verify generated specs load through pgas-server testing surfaces.', 'static_verify', [
         'npm-test',
       ]),
@@ -206,6 +211,7 @@ export function createExistingRepoArtifactPlan(
       'typecheck',
       'program-deterministic',
     ]),
+    ...existingRepoDocumentExtractionArtifacts(programPath, options.documentExtractionSurfaces),
     artifact('handler', `${programPath}/handlers.ts`, 'Implement stubbed program handlers for repo-owned integration.', 'branch_write', [
       'program-deterministic',
     ]),
@@ -297,6 +303,32 @@ function standaloneExportArtifacts(
         ])]
       : []),
   ];
+}
+
+function standaloneDocumentExtractionArtifacts(
+  slug: string,
+  surfaces: GeneratedArtifactPlanOptions['documentExtractionSurfaces'],
+): PlannedArtifact[] {
+  if (!surfaces?.docx) {
+    return [];
+  }
+  return [artifact('extract', `src/programs/${slug}/extract/docx.ts`, 'Provide deterministic DOCX text extraction support.', 'branch_write', [
+    'typecheck',
+    'program-deterministic',
+  ])];
+}
+
+function existingRepoDocumentExtractionArtifacts(
+  programPath: string,
+  surfaces: GeneratedArtifactPlanOptions['documentExtractionSurfaces'],
+): PlannedArtifact[] {
+  if (!surfaces?.docx) {
+    return [];
+  }
+  return [artifact('extract', `${programPath}/extract/docx.ts`, 'Provide deterministic DOCX text extraction support for the attached program.', 'branch_write', [
+    'typecheck',
+    'program-deterministic',
+  ])];
 }
 
 function existingRepoUserFacingArtifacts(programPath: string, manifest: WiringManifest): PlannedArtifact[] {
@@ -406,6 +438,7 @@ function isProgramRelativeArtifactPath(path: string): boolean {
     || path === 'handlers.ts'
     || path === 'tools.ts'
     || /^export\/[^/]+\.ts$/u.test(path)
+    || /^extract\/[^/]+\.ts$/u.test(path)
     || /^stages\/[^/]+\.ts$/u.test(path)
     || /^handlers\/[^/]+\.ts$/u.test(path);
 }
@@ -422,6 +455,7 @@ function uniqueArtifacts(artifacts: PlannedArtifact[]): PlannedArtifact[] {
 function kindForRequestedArtifact(path: string): ArtifactKind {
   if (path.includes('/projection.') || path.endsWith('/projection.ts')) return 'projection';
   if (path.includes('frontend')) return 'frontend';
+  if (path.includes('/extract/')) return 'extract';
   if (path.includes('/export/') || path.includes('docx') || path.includes('html')) return 'export';
   if (path.startsWith('qc/')) return 'qc';
   if (path.startsWith('tests/')) return 'test';

@@ -46,9 +46,9 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // Self-contained text upload live-drive green on qwen (program read the uploaded file's
     // exact bytes — char_count match + run-nonce sentinel present, fail-closed) — so synthesizes.
     expect(capabilityStatus('document_upload_intake')).toBe('synthesizes');
+    expect(capabilityStatus('document_extraction_docx')).toBe('scaffolds_with_gap');
+    expect(capabilityStatus('document_extraction_pdf')).toBe('scaffolds_with_gap');
     for (const cap of [
-      'document_extraction_docx',
-      'document_extraction_pdf',
       'rich_frontend',
       'export_docx_trackchange',
     ]) {
@@ -253,19 +253,14 @@ describe('honest refusal safe-stop', () => {
     expect(err.message).toContain('uplift'); // gap_note routed into the message
   });
 
-  it('refuses a DOCX extraction demand until the emitter/live ladder lands', () => {
-    let thrown: unknown;
-    try {
-      assertSynthesizableCapabilities({
-        purpose: 'Extract body text from an uploaded DOCX contract and store the exact character count.',
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(CapabilityRefusalError);
-    const err = thrown as CapabilityRefusalError;
-    expect(err.refused.map((demand) => demand.capability)).toContain('document_extraction_docx');
-    expect(err.message).toMatch(/PR-U5-F|PR-U5-E|PR-U5-L|DOCX/i);
+  it('allows a DOCX extraction demand as scaffolds_with_gap until the live ladder lands', () => {
+    const assessment = assertSynthesizableCapabilities({
+      purpose: 'Extract body text from an uploaded DOCX contract and store the exact character count.',
+    });
+
+    expect(assessment.scaffolds_with_gap.map((demand) => demand.capability)).toContain('document_extraction_docx');
+    expect(assessment.refuses).toEqual([]);
+    expect(capabilityStatus('document_extraction_docx')).toBe('scaffolds_with_gap');
   });
 
   it('treats an unknown capability id conservatively as a refusal', () => {

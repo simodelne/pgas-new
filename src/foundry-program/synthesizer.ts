@@ -7,7 +7,7 @@ import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
@@ -163,6 +163,7 @@ export interface SynthesizedSpec {
   stage_sources?: Record<string, string>;
   capability_gaps?: CapabilityGap[];
   export_surfaces?: ExportSurfaces;
+  document_extraction_surfaces?: DocumentExtractionSurfaces;
   export_descriptors?: ExportStageDescriptor[];
   child_artifacts?: SynthesizedChildArtifact[];
   stage_classification: ClassifiedStage[];
@@ -253,9 +254,13 @@ const DOCUMENT_UPLOAD_TYPES = new Map<string, string>([
   ['application/zip', 'application/zip'],
   ['application/x-zip-compressed', 'application/x-zip-compressed'],
 ]);
-const SELF_CONTAINED_DOCUMENT_UPLOAD_TYPES = new Set(['text/plain', 'text/markdown']);
+const DOCX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const PDF_MIME_TYPE = 'application/pdf';
+const SELF_CONTAINED_DOCUMENT_UPLOAD_TYPES = new Set(
+  [...DOCUMENT_UPLOAD_TYPES.values()].filter((uploadType) => uploadType !== PDF_MIME_TYPE),
+);
 const DOCUMENT_SELF_CONTAINED_GAP_NOTE =
-  'DOCX/PDF extraction is a host connector — use extraction: host_connector (PR-U5); self-contained is text/markdown only';
+  'PDF extraction is a host connector — use extraction: host_connector with connector_slug; self-contained DOCX is supported by the generated extractor';
 
 const SKELETON_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -311,6 +316,8 @@ export function synthesizeProgramSpecFromDomain(
   assertSynthesizableCapabilities(capabilityInput);
   const exportDescriptors = exportDescriptorsFor(stages, requestedCapabilities, name);
   const exportSurfaces = exportSurfacesFor(exportDescriptors, requestedCapabilities);
+  const documentExtractionSurfaces = documentExtractionSurfacesFor(documents);
+  const documentExtractionGaps = capabilityGapsForDocumentExtraction(documents);
 
   assertStages(stages);
   assertTransitions(transitions);
@@ -392,7 +399,10 @@ export function synthesizeProgramSpecFromDomain(
   );
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
   const childArtifacts = synthesizeDelegationChildArtifacts(slug, name, delegationChildren);
-  const capabilityGaps = capabilityGapsForDelegationChildren(delegationChildren);
+  const capabilityGaps = [
+    ...capabilityGapsForDelegationChildren(delegationChildren),
+    ...documentExtractionGaps,
+  ];
   const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors);
   const registrationPolicies = {
     ...(delegationChildren.length > 0 ? { delegationPolicy: delegationPolicyForChildren(delegationChildren) } : {}),
@@ -631,11 +641,16 @@ export function synthesizeProgramSpecFromDomain(
   validateSynthesizedSpec(specYaml);
   const bodyStageSlugs = nonTerminalStageSlugs(stages, completion);
 
+  const contractsTs = appendDocumentExtractionHostConnectorContracts(
+    renderContractsSource(stages, stageClassification, transitionActions, reasoningContractsBySlug),
+    documentExtractionGaps,
+  );
+
   return {
     spec_yaml: specYaml,
     mode_names: modeNames,
     sha256: createHash('sha256').update(specYaml).digest('hex'),
-    contracts_ts: renderContractsSource(stages, stageClassification, transitionActions, reasoningContractsBySlug),
+    contracts_ts: contractsTs,
     handlers_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: true,
       resolverImport: './handlers/_resolver.js',
@@ -648,6 +663,7 @@ export function synthesizeProgramSpecFromDomain(
       confirmationLoops,
       delegationChildren,
       documents,
+      docxExtractorImport: './extract/docx.js',
     }, reasoningContractsBySlug),
     handlers_index_ts: renderHandlersSource(transitionActions, {
       includeReactionHandlers: false,
@@ -661,6 +677,7 @@ export function synthesizeProgramSpecFromDomain(
       confirmationLoops,
       delegationChildren,
       documents,
+      docxExtractorImport: '../extract/docx.js',
     }, reasoningContractsBySlug),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
@@ -669,6 +686,7 @@ export function synthesizeProgramSpecFromDomain(
       registration_ts: renderRegistrationSource(toPascalCase(slug), registrationPolicies),
     } : {}),
     ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
+    ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
     ...(exportDescriptors.length > 0 ? { export_descriptors: exportDescriptors } : {}),
     ...(childArtifacts.length > 0 ? { child_artifacts: childArtifacts } : {}),
     stage_classification: stageClassification,
@@ -683,6 +701,7 @@ export function synthesizeProgramSpecFromDomain(
       delegation,
       ...(documents ? { documents } : {}),
       ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
+      ...(hasDocumentExtractionSurfaces(documentExtractionSurfaces) ? { document_extraction_surfaces: documentExtractionSurfaces } : {}),
       ...(exportDescriptors.length > 0 ? { export_descriptors: exportDescriptors } : {}),
       ...(interaction ? { interaction } : {}),
       completion,
@@ -2106,6 +2125,51 @@ function hasExportSurfaces(surfaces: ExportSurfaces): boolean {
   return surfaces.docx === true || surfaces.html === true || surfaces.diff === true;
 }
 
+function documentExtractionSurfacesFor(documents: DocumentsDescriptor | undefined): DocumentExtractionSurfaces {
+  if (documentsDemandsSelfContainedDocx(documents)) {
+    return { docx: true };
+  }
+  return {};
+}
+
+function hasDocumentExtractionSurfaces(surfaces: DocumentExtractionSurfaces): boolean {
+  return surfaces.docx === true;
+}
+
+function documentsDemandsSelfContainedDocx(documents: DocumentsDescriptor | undefined): boolean {
+  return documents?.extraction === 'self_contained' && documents.upload_types.some(isDocxMimeType);
+}
+
+function documentsDemandsHostConnectorPdf(documents: DocumentsDescriptor | undefined): boolean {
+  return documents?.extraction === 'host_connector' && documents.upload_types.some(isPdfMimeType);
+}
+
+function isDocxMimeType(value: string): boolean {
+  return value.toLowerCase() === DOCX_MIME_TYPE;
+}
+
+function isPdfMimeType(value: string): boolean {
+  return value.toLowerCase() === PDF_MIME_TYPE;
+}
+
+function capabilityGapsForDocumentExtraction(documents: DocumentsDescriptor | undefined): CapabilityGap[] {
+  if (!documentsDemandsHostConnectorPdf(documents)) {
+    return [];
+  }
+  const connectorSlug = documentExtractionPdfConnectorSlug(documents!);
+  return [{
+    capability: 'document_extraction_pdf',
+    stage: documents!.stage,
+    connector_slug: connectorSlug,
+    message: `PDF text extraction is host-required — implement the ${connectorSlug} connector; scanned/OCR extraction is out of foundry scope.`,
+  }];
+}
+
+function documentExtractionPdfConnectorSlug(documents: DocumentsDescriptor): string {
+  const slug = documents.connector_slug?.trim();
+  return slug && slug.length > 0 ? slug : 'pdf_text_extractor';
+}
+
 function applyExportDescriptorsToClassifications(
   stages: ClassifiedStage[],
   descriptors: readonly ExportStageDescriptor[],
@@ -2347,6 +2411,7 @@ function renderHandlersSource(
     confirmationLoops: ConfirmationLoopDescriptor[];
     delegationChildren: DelegationChildDescriptor[];
     documents?: DocumentsDescriptor;
+    docxExtractorImport?: string;
   },
   reasoningContractsBySlug: Map<string, ReasoningStageContract>,
 ): string {
@@ -2369,6 +2434,7 @@ function renderHandlersSource(
   const usesDelegationHandlers = options.includeReactionHandlers && options.delegationChildren.length > 0;
   const usesDocumentHandlers = options.documents !== undefined;
   const usesDocumentReactionHandlers = options.includeReactionHandlers && options.documents !== undefined;
+  const usesDocxExtractor = documentsDemandsSelfContainedDocx(options.documents);
   const bodyActions = unique(stageActions.filter((action) => action.archetype !== 'llm-reasoning').map((action) => action.source));
   const stageImports = bodyActions
     .map((stage) => `import { runStage as run${toPascalCase(stage)} } from ${tsString(`${options.stageImportPrefix}/${stage}.js`)};`)
@@ -2376,6 +2442,10 @@ function renderHandlersSource(
   const contractsImport = bodyActions.length > 0
     ? `import { createStageRuntime, normalizeStageOutput, resolveStageInput } from ${tsString(options.contractsImport)};`
     : '';
+  const docxExtractorImport = usesDocxExtractor
+    ? `import { extractDocxText } from ${tsString(options.docxExtractorImport ?? './extract/docx.js')};`
+    : '';
+  const docxExtractorImportBlock = docxExtractorImport ? `${docxExtractorImport}\n` : '';
   const sessionControlHandlers = CONTROL_PLANE_ACTIONS
     .filter((action) => action !== 'record_user_note')
     .map((action) => `  async ${action}(payload) {
@@ -2535,7 +2605,7 @@ function reasoningOutputConformant(
   return `import type { ${reactionImport}ToolHandler } from '@simodelne/pgas-server/plugin.js';
 ${usesIndexedCollectionLifecycle || usesConfirmationLoopHandlers ? "import { reconstructArray } from '@simodelne/pgas-server/plugin.js';\n" : ''}import { resolveDomainValue, type HandlerPayload } from ${tsString(options.resolverImport)};
 ${contractsImport}
-${stageImports ? `${stageImports}\n` : ''}
+${docxExtractorImportBlock}${stageImports ? `${stageImports}\n` : ''}
 
 // Generated by pgas-new from the approved stage topology. Deterministic stage
 // wrappers return values written through action_map.result_path; LLM reasoning
@@ -2595,6 +2665,7 @@ function renderDocumentReactionEntries(documents: DocumentsDescriptor): string {
 function renderDocumentHelper(documents: DocumentsDescriptor, includeReactionHelpers: boolean): string {
   const allowedTypes = JSON.stringify(documents.upload_types);
   const minChars = documentMinChars(documents);
+  const docxExtractionEnabled = documentsDemandsSelfContainedDocx(documents);
   const reactionHelpers = includeReactionHelpers
     ? `
 
@@ -2688,12 +2759,34 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
   const request = payload.request as { documents?: unknown } | undefined;
   const rawDocuments = Array.isArray(request?.documents) ? request.documents : [];
   const documentRecords = rawDocuments.filter(isDocumentRecord);
-  const preferredRecords = documentRecords.filter((document) =>
-    typeof document.content_text === 'string' && typeof document.size === 'number');
-  const textRecords = (preferredRecords.length > 0 ? preferredRecords : documentRecords)
-    .filter((document) => typeof document.content_text === 'string');
   const allowedMimeTypes = new Set<string>(${allowedTypes});
-  const eligible = textRecords.filter((document) => documentMimeAllowed(document, allowedMimeTypes));
+  const summaries = documentRecords.map(documentSummary);
+  const eligible: Array<{ document: Record<string, unknown>; text: string }> = [];
+  for (const document of documentRecords) {
+    if (!documentMimeAllowed(document, allowedMimeTypes)) {
+      continue;
+    }
+    if (typeof document.content_text === 'string') {
+      eligible.push({ document, text: document.content_text });
+      continue;
+    }
+    ${docxExtractionEnabled ? `if (documentIsDocx(document) && typeof document.content_base64 === 'string') {
+      const bytes = Buffer.from(document.content_base64, 'base64');
+      const extracted = extractDocxText(bytes);
+      if (!extracted.ok) {
+        return {
+          status: 'blocked_extraction_failed',
+          full_text: '',
+          char_count: 0,
+          file_count: 0,
+          files_json: JSON.stringify(summaries),
+          reason: extracted.reason,
+        };
+      }
+      eligible.push({ document, text: extracted.text });
+      continue;
+    }` : ''}
+  }
 
   if (eligible.length === 0) {
     const sawUnsupported = documentRecords.some((document) =>
@@ -2703,14 +2796,14 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
       full_text: '',
       char_count: 0,
       file_count: 0,
-      files_json: JSON.stringify(documentRecords.map(documentSummary)),
-      reason: sawUnsupported ? 'uploaded documents were not text/markdown content_text documents' : 'no engine-injected document content_text was available',
+      files_json: JSON.stringify(summaries),
+      reason: sawUnsupported ? ${docxExtractionEnabled ? "'uploaded documents were not supported content_text or DOCX content_base64 documents'" : "'uploaded documents were not text/markdown content_text documents'"} : 'no engine-injected document content_text was available',
     };
   }
 
   const fullText = eligible.length === 1
-    ? String(eligible[0]?.content_text ?? '')
-    : eligible.map((document, index) => \`--- file: \${documentName(document, index)} ---\\n\\n\${String(document.content_text ?? '')}\`).join('\\n\\n');
+    ? eligible[0]?.text ?? ''
+    : eligible.map((entry, index) => \`--- file: \${documentName(entry.document, index)} ---\\n\\n\${entry.text}\`).join('\\n\\n');
   const charCount = fullText.length;
   if (charCount < ${String(minChars)}) {
     return {
@@ -2718,7 +2811,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
       full_text: fullText,
       char_count: charCount,
       file_count: eligible.length,
-      files_json: JSON.stringify(eligible.map(documentSummary)),
+      files_json: JSON.stringify(eligible.map((entry) => documentSummary(entry.document))),
       reason: \`extracted text length \${String(charCount)} below minimum ${String(minChars)}\`,
     };
   }
@@ -2727,7 +2820,7 @@ function ingestUploadedDocuments(payload: HandlerPayload): Record<string, unknow
     full_text: fullText,
     char_count: charCount,
     file_count: eligible.length,
-    files_json: JSON.stringify(eligible.map(documentSummary)),
+    files_json: JSON.stringify(eligible.map((entry) => documentSummary(entry.document))),
   };
 }
 
@@ -2761,6 +2854,15 @@ function documentMimeAllowed(document: Record<string, unknown>, allowedMimeTypes
       ? document.mimeType
       : '';
   return allowedMimeTypes.has(raw.toLowerCase());
+}
+
+function documentIsDocx(document: Record<string, unknown>): boolean {
+  const raw = typeof document.mime_type === 'string'
+    ? document.mime_type
+    : typeof document.mimeType === 'string'
+      ? document.mimeType
+      : '';
+  return raw.toLowerCase() === ${tsString(DOCX_MIME_TYPE)};
 }
 
 function documentName(document: Record<string, unknown>, index: number): string {
@@ -4902,6 +5004,73 @@ ${contractFields}
 } as const;
 
 export const capabilityGaps = ${JSON.stringify([gap], null, 2)} as const;
+`;
+}
+
+function appendDocumentExtractionHostConnectorContracts(source: string, gaps: readonly CapabilityGap[]): string {
+  if (gaps.length === 0) {
+    return source;
+  }
+  const [gap] = gaps;
+  return `${source}
+
+export interface DocumentExtractionHostConnectorDocument {
+  name?: string;
+  mime_type?: string;
+  size?: number;
+  content_base64: string;
+}
+
+export interface DocumentExtractionHostConnectorRequest {
+  stage: string;
+  connector_slug: string;
+  documents: readonly DocumentExtractionHostConnectorDocument[];
+}
+
+export interface DocumentExtractionHostConnectorFileResult {
+  name?: string;
+  text: string;
+  char_count: number;
+}
+
+export interface DocumentExtractionHostConnectorResult {
+  text: string;
+  char_count: number;
+  files: readonly DocumentExtractionHostConnectorFileResult[];
+}
+
+export interface DocumentExtractionHostConnector {
+  extractText(request: DocumentExtractionHostConnectorRequest): Promise<DocumentExtractionHostConnectorResult>;
+}
+
+export const documentExtractionHostConnectorContract = {
+  connector_slug: ${tsString(gap!.connector_slug)},
+  request: {
+    stage: 'string',
+    connector_slug: 'string',
+    documents: 'DocumentExtractionHostConnectorDocument[]',
+  },
+  result: {
+    text: 'string',
+    char_count: 'number',
+    files: 'DocumentExtractionHostConnectorFileResult[]',
+  },
+  fixture_adapter_kind: 'in_memory_mock',
+} as const;
+
+export async function documentExtractionHostConnectorFixtureMock(
+  request: DocumentExtractionHostConnectorRequest,
+): Promise<DocumentExtractionHostConnectorResult> {
+  const files = request.documents.map((document, index) => {
+    const label = document.name && document.name.length > 0 ? document.name : \`document-\${String(index + 1)}.pdf\`;
+    const text = \`HOST_CONNECTOR_MOCK_PDF_TEXT \${label}\`;
+    return { name: document.name, text, char_count: text.length };
+  });
+  const text = files.map((file) => file.text).join('\\n\\n');
+  return { text, char_count: text.length, files };
+}
+
+export const capabilityGaps = ${JSON.stringify(gaps, null, 2)} as const;
 `;
 }
 

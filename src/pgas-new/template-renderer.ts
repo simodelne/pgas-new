@@ -35,6 +35,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   synthesizedSmokeTestTs?: string;
   synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
   synthesizedExportSurfaces?: GeneratedArtifactPlanOptions['exportSurfaces'];
+  synthesizedDocumentExtractionSurfaces?: GeneratedArtifactPlanOptions['documentExtractionSurfaces'];
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -51,6 +52,7 @@ export interface RenderExistingRepoOptions extends ProgramIdentity {
   synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
   synthesizedSmokeTestTs?: string;
+  synthesizedDocumentExtractionSurfaces?: GeneratedArtifactPlanOptions['documentExtractionSurfaces'];
 }
 
 export interface RenderResult {
@@ -75,6 +77,7 @@ interface SynthesizedSources {
   toolsTs?: string;
   smokeTestTs?: string;
   exportSurfaces?: GeneratedArtifactPlanOptions['exportSurfaces'];
+  documentExtractionSurfaces?: GeneratedArtifactPlanOptions['documentExtractionSurfaces'];
   capabilityGaps: CapabilityGapInput[];
   childArtifacts: SynthesizedChildSources[];
 }
@@ -145,6 +148,7 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       capabilityGaps: synthesizedSources.capabilityGaps,
       exportSurfaces: synthesizedSources.exportSurfaces,
+      documentExtractionSurfaces: synthesizedSources.documentExtractionSurfaces,
     },
   );
   const plan = withSynthesizedChildArtifacts(basePlan, synthesizedSources.childArtifacts);
@@ -168,6 +172,7 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
     {
       stageSlugs: options.stageSlugs ?? Object.keys(synthesizedSources.stageSources ?? {}),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
+      documentExtractionSurfaces: synthesizedSources.documentExtractionSurfaces,
     },
   );
   assertSupportedTemplate(options.template);
@@ -364,6 +369,9 @@ function templateForExistingUserFacingArtifact(artifact: PlannedArtifact, slug: 
   if (path.endsWith(`/${slug}/export/docx.ts`)) {
     return spec('consumer/export-docx.ts.tmpl', ['NAME']);
   }
+  if (path.endsWith(`/${slug}/extract/docx.ts`)) {
+    return spec('consumer/extract-docx.ts.tmpl', []);
+  }
   if (path.endsWith(`/${slug}/export/diff.ts`)) {
     return spec('consumer/export-diff.ts.tmpl', []);
   }
@@ -450,6 +458,9 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
   }
   if (path === `src/programs/${slug}/export/docx.ts`) {
     return spec('consumer/export-docx.ts.tmpl', ['NAME']);
+  }
+  if (path === `src/programs/${slug}/extract/docx.ts`) {
+    return spec('consumer/extract-docx.ts.tmpl', []);
   }
   if (path === `src/programs/${slug}/export/diff.ts`) {
     return spec('consumer/export-diff.ts.tmpl', []);
@@ -947,6 +958,7 @@ function synthesizedSourcesFor(options: {
   synthesizedToolsTs?: string;
   synthesizedSmokeTestTs?: string;
   synthesizedExportSurfaces?: GeneratedArtifactPlanOptions['exportSurfaces'];
+  synthesizedDocumentExtractionSurfaces?: GeneratedArtifactPlanOptions['documentExtractionSurfaces'];
   synthesizedCapabilityGaps?: CapabilityGapInput[];
   synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
 }): SynthesizedSources {
@@ -960,6 +972,7 @@ function synthesizedSourcesFor(options: {
     toolsTs: options.synthesizedToolsTs,
     smokeTestTs: options.synthesizedSmokeTestTs,
     exportSurfaces: options.synthesizedExportSurfaces,
+    documentExtractionSurfaces: options.synthesizedDocumentExtractionSurfaces,
     capabilityGaps: options.synthesizedCapabilityGaps ?? [],
     childArtifacts: (options.synthesizedChildArtifacts ?? []).map((child) => ({
       slug: child.slug,
