@@ -144,26 +144,8 @@ available_programs:
 });
 
 describe('manifest-driven connector foundry falsifier', () => {
-  it.fails('F-3 proves the manifest reuse gap while availablePrograms is still dead plumbing', () => {
-    const artifact = synthesizeResearchDemand([MANIFEST_ENTRY]);
-    const parsed = load(artifact.spec_yaml) as ParsedDelegationSpec;
-    const child = artifact.synthesis_context.delegation?.children?.[0] as Record<string, unknown> | undefined;
-
-    expect(parsed.channels.research_call.target_spec).toBe('SimoneOS Legal Research');
-    expect(artifact.child_artifacts).toBeUndefined();
-    expect(artifact.contracts_ts).not.toContain('ResearchHostConnector');
-    expect((artifact.child_artifacts ?? []).map((childArtifact) => childArtifact.contracts_ts).join('\n'))
-      .not.toContain('ResearchHostConnector');
-    expect(artifact.capability_gaps ?? []).not.toContainEqual(expect.objectContaining({
-      capability: 'delegation_research_agent',
-    }));
-    expect(artifact.registration_ts).toContain('SimoneOS Legal Research');
-    expect(artifact.registration_ts).toContain('research');
-    expect(child).toMatchObject({
-      target_spec: 'SimoneOS Legal Research',
-      registered_name: 'research',
-    });
-    expect(child).not.toHaveProperty('synthesize_child');
+  it('F-3 rewrites a backed research demand to manifest target_spec reuse', () => {
+    expectManifestReuse(synthesizeResearchDemand([MANIFEST_ENTRY]));
   });
 
   it('Case B emits the synthesized ResearchHostConnector stub and gap when no manifest entry is available', () => {
@@ -179,6 +161,30 @@ describe('manifest-driven connector foundry falsifier', () => {
 
     expectStubbedResearchFallback(synthesizeResearchDemand([nonMatchingEntry]));
   });
+
+  it('real simoneos manifest fixture wires legal research and leaves sibling entries inert', () => {
+    // Scope note: delegation v1 validates exactly one child, so this fixture proves
+    // sibling manifest entries do not interfere rather than attempting 3-way fan-out.
+    const realSimoneosPrograms = [
+      MANIFEST_ENTRY,
+      {
+        slug: 'document-ingest',
+        target_spec: 'SimoneOS Document Ingest',
+        provides: 'delegation_document_ingest',
+      },
+      {
+        slug: 'contract-review-service',
+        target_spec: 'contract-review-service',
+        provides: 'delegation_contract_review',
+      },
+    ] as unknown as WiringAvailableProgram[];
+
+    const artifact = synthesizeResearchDemand(realSimoneosPrograms);
+
+    expectManifestReuse(artifact);
+    expect(artifact.registration_ts).not.toContain('document-ingest');
+    expect(artifact.registration_ts).not.toContain('contract-review-service');
+  });
 });
 
 function synthesizeResearchDemand(availablePrograms: WiringAvailableProgram[]): SynthesizedSpec {
@@ -186,6 +192,31 @@ function synthesizeResearchDemand(availablePrograms: WiringAvailableProgram[]): 
     targetKind: 'existing_repo',
     availablePrograms,
   });
+}
+
+function expectManifestReuse(artifact: SynthesizedSpec): void {
+  const parsed = load(artifact.spec_yaml) as ParsedDelegationSpec;
+  const child = artifact.synthesis_context.delegation?.children?.[0] as Record<string, unknown> | undefined;
+
+  expect(parsed.channels.research_call.target_spec).toBe('SimoneOS Legal Research');
+  expect(artifact.child_artifacts).toBeUndefined();
+  expect(artifact.contracts_ts).not.toContain('ResearchHostConnector');
+  expect((artifact.child_artifacts ?? []).map((childArtifact) => childArtifact.contracts_ts).join('\n'))
+    .not.toContain('ResearchHostConnector');
+  expect(artifact.capability_gaps ?? []).not.toContainEqual(expect.objectContaining({
+    capability: 'delegation_research_agent',
+  }));
+  expect(artifact.registration_ts).toContain('SimoneOS Legal Research');
+  expect(artifact.registration_ts).toContain('research');
+  expect(child).toMatchObject({
+    target_spec: 'SimoneOS Legal Research',
+    registered_name: 'research',
+  });
+  expect(child).not.toHaveProperty('synthesize_child');
+  expect(artifact.smoke_test_ts).toContain('createManifestReuseStubChildEntry');
+  expect(artifact.smoke_test_ts).toContain("name: 'research'");
+  expect(artifact.smoke_test_ts).not.toContain("../src/programs/SimoneOS Legal Research/registration.js");
+  expect(artifact.smoke_test_ts).not.toContain('src/programs/SimoneOS Legal Research/');
 }
 
 function expectStubbedResearchFallback(artifact: SynthesizedSpec): void {

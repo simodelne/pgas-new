@@ -279,7 +279,10 @@ export function synthesizeProgramSpecFromDomain(
   const initialEntryPath = initialInputPath(entryChannel);
   const stages = normalizeStages(parseStagesDomainField(domain));
   let transitions = parseJsonDomainField<IntakeTransition[]>(domain, 'intake.transitions_json');
-  const delegation = parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json');
+  const delegation = resolveDelegationChildrenAgainstManifest(
+    parseJsonDomainField<DelegationDescriptor>(domain, 'intake.delegation_json'),
+    options.availablePrograms ?? [],
+  );
   const rawDocuments = optionalJsonDomainField(domain, 'intake.documents_json');
   const documents = normalizeDocumentsDescriptor(rawDocuments);
   let completion = parseJsonDomainField<Completion>(domain, 'intake.completion_json');
@@ -3984,6 +3987,10 @@ function renderSmokeTestSource(
   if (delegationSmokeChild) {
     return renderDelegationSmokeTestSource(slug, name, entryChannel, delegationSmokeChild, transitionActions);
   }
+  const reuseDelegationSmokeChild = delegationChildren.find((child) => child.target_spec && child.registered_name);
+  if (reuseDelegationSmokeChild) {
+    return renderReuseDelegationSmokeTestSource(slug, name, entryChannel, reuseDelegationSmokeChild, transitionActions);
+  }
   if (confirmationLoops.length > 0) {
     return renderConfirmationLoopSmokeTestSource(slug, name, entryChannel, confirmationLoops, completion.collection_lifecycle);
   }
@@ -4993,6 +5000,38 @@ function researchChildBackend(child: DelegationChildDescriptor): 'host_connector
   return child.synthesize_child?.research_backend === 'host_connector' ? 'host_connector' : 'self_contained';
 }
 
+function resolveDelegationChildrenAgainstManifest(
+  delegation: DelegationDescriptor,
+  availablePrograms: WiringAvailableProgram[],
+): DelegationDescriptor {
+  if (!Array.isArray(delegation.children) || delegation.children.length === 0 || availablePrograms.length === 0) {
+    return delegation;
+  }
+
+  let changed = false;
+  const children = delegation.children.map((child) => {
+    const entry = availablePrograms.find((candidate) =>
+      candidate.provides === 'delegation_research_agent' &&
+      child.synthesize_child?.kind === 'research_agent' &&
+      researchChildBackend(child) === 'host_connector');
+    if (!entry) {
+      return child;
+    }
+
+    changed = true;
+    const { synthesize_child: _deleted, ...rewritten } = child;
+    return {
+      ...rewritten,
+      target_spec: entry.target_spec,
+      registered_name: entry.slug,
+      payload_map: entry.payload_map ?? child.payload_map,
+      result_path: entry.result_path ?? child.result_path,
+    };
+  });
+
+  return changed ? { ...delegation, children } : delegation;
+}
+
 function childResultStage(child: DelegationChildDescriptor): 'research' | 'work' {
   return child.synthesize_child?.kind === 'research_agent' ? 'research' : 'work';
 }
@@ -5172,7 +5211,10 @@ function delegationPolicyForChildren(children: DelegationChildDescriptor[]): {
   inputEnrichment: Array<{ source: string; target: string }>;
 } {
   return {
-    allowedTargetPrograms: unique(children.map(delegationTargetSpec)),
+    allowedTargetPrograms: unique(children.flatMap((child) => [
+      delegationTargetSpec(child),
+      ...(child.registered_name ? [child.registered_name] : []),
+    ])),
     inputEnrichment: children.flatMap((child) =>
       Object.entries(child.payload_map).map(([target, source]) => ({ source, target })),
     ),
@@ -5283,6 +5325,356 @@ function renderTsValue(value: unknown): string {
     return tsString(value);
   }
   return JSON.stringify(value);
+}
+
+function renderReuseDelegationSmokeTestSource(
+  slug: string,
+  name: string,
+  entryChannel: string,
+  child: DelegationChildDescriptor,
+  transitionActions: TransitionAction[],
+): string {
+  const parentPascal = toPascalCase(slug);
+  const childTargetSpec = delegationTargetSpec(child);
+  const childRegistryName = child.registered_name ?? childTargetSpec;
+  const transitionAction = transitionActions.find((action) => action.source === child.stage);
+  const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
+  const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+  const resultPath = child.result_path;
+  const base = delegationStateBase(child);
+  const policy = delegationPolicyForChildren([child]);
+  const childSpecYaml = `name: ${JSON.stringify(childTargetSpec)}
+termination: BoundedSession
+topology: CyclicTopology
+pure: true
+
+preamble: |
+  Inline manifest-reuse smoke child for ${name}.
+
+initial: receive
+terminal: [complete]
+
+features:
+  - base
+
+channels:
+  user_text: { direction: In, sync: Async }
+  child_output: { direction: Out, sync: Sync }
+
+modes:
+  receive:
+    vocabulary: [accept_request]
+    channels: [user_text, child_output]
+    transitions:
+      - target: work
+        guard: { kind: FieldTruthy, path: child.received }
+  work:
+    vocabulary: [finish_work]
+    channels: [user_text, child_output]
+    transitions:
+      - target: complete
+        guard: { kind: FieldTruthy, path: work.done }
+  complete:
+    vocabulary: []
+    channels: [child_output]
+
+proceed_to:
+  accept_request: work
+  finish_work: complete
+
+projection:
+  receive:
+    include: [inputs.request, inputs.request.topic, inputs.domain_context, inputs.domain_context.source_program]
+    exclude: []
+  work:
+    include: [inputs.request, inputs.request.topic, child.received, work.summary, work.seeded_topic]
+    exclude: []
+  complete:
+    include: [inputs.request, inputs.request.topic, child.received, work.done, work.summary, work.seeded_topic]
+    exclude: []
+
+prompts:
+  receive: "Accept the delegated manifest-reuse request."
+  work: "Finish the delegated manifest-reuse request and echo the seeded topic."
+  complete: "Terminal."
+
+ingestion:
+  user_text:
+    - inputs.user_text
+
+action_map:
+  accept_request:
+    description: "Record that the delegated request was received."
+    mutations:
+      - { op: MSet, path: child.received, value: true }
+    channel: child_output
+  finish_work:
+    description: "Complete the delegated manifest-reuse request."
+    mutations:
+      - { op: MSet, path: work.done, value: true }
+      - { op: MSet, path: work.summary, from_arg: summary }
+      - { op: MSet, path: work.seeded_topic, from_arg: seeded_topic }
+    channel: child_output
+
+schema:
+  inputs.user_text: string
+  inputs.request: object
+  inputs.request.topic: string
+  inputs.domain_context: object
+  inputs.domain_context.source_program: string
+  inputs.domain_context.source_session_id: string
+  inputs.domain_context.target_program: string
+  child.received: boolean
+  work.done: boolean
+  work.summary: string
+  work.seeded_topic: string
+
+repair_bound: 2
+
+fallback:
+  channel: child_output
+  payload: { ok: false }
+`;
+  return `import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import {
+  createProgramAdapters,
+  createToolRegistry,
+  loadSpecWithPatterns,
+  type ProgramEntry,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
+import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { handlers, reactionHandlers } from '../src/programs/${slug}/handlers.js';
+import { register${parentPascal}Tools } from '../src/programs/${slug}/tools.js';
+
+describe('generated manifest reuse delegation smoke', () => {
+  it('runs manifest-reused delegation hermetically through the route for ${name}', async () => {
+    const complete = await runDelegationScenario({
+      script: [
+        scripted(effect('begin_work', {})),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { topic: 'seeded delegation topic' } }, ${tsString(delegationChannelName(child))})),
+        scripted(effect('accept_request', { accepted: true }, 'child_output'), 'seeded delegation topic'),
+        scripted(effect('finish_work', {
+          summary: 'complete legal research',
+          seeded_topic: 'seeded delegation topic',
+        }, 'child_output'), 'seeded delegation topic'),
+        scripted(effect(${tsString(transitionActionName)}, {
+          result_json: JSON.stringify({ parent: 'complete after delegation' }),
+          items_json: JSON.stringify(['parent-complete']),
+        }, ${tsString(transitionChannel)})),
+      ],
+    });
+    const result = resultAt(complete.afterDelegation.domain, ${tsString(resultPath)});
+    expect(result.status).toBe('complete');
+    expect(Number(result.rounds)).toBeGreaterThanOrEqual(1);
+    expect(result.mode).toBe('complete');
+    expect(result.summary).toBe('complete legal research');
+    expect(result.seeded_topic).toBe('seeded delegation topic');
+    expect(complete.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
+    expect(complete.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(false);
+    expect(complete.final.mode).toBe('complete');
+
+    const degraded = await runDelegationScenario({
+      parentMaxDelegatedRounds: 1,
+      script: [
+        scripted(effect('begin_work', {})),
+        scripted(effect(${tsString(delegationRequestActionName(child))}, { request: { topic: 'force-degrade' } }, ${tsString(delegationChannelName(child))})),
+        scripted(effect('accept_request', { accepted: true }, 'child_output'), 'force-degrade'),
+        scripted(effect(${tsString(transitionActionName)}, {
+          result_json: JSON.stringify({ parent: 'complete after degraded delegation' }),
+          items_json: JSON.stringify(['parent-complete-after-degrade']),
+        }, ${tsString(transitionChannel)})),
+      ],
+    });
+    const degradeResult = resultAt(degraded.afterDelegation.domain, ${tsString(resultPath)});
+    expect(degradeResult.status).toBe('failed');
+    expect(degradeResult.optional).toBe(true);
+    expect(degraded.afterDelegation.domain[${tsString(`${base}.settled`)}]).toBe(true);
+    expect(degraded.afterDelegation.domain[${tsString(`${base}.degraded`)}]).toBe(true);
+    expect(String(degraded.afterDelegation.domain[${tsString(`${base}.degrade_reason`)}]).length).toBeGreaterThan(0);
+    expect(degraded.final.mode).toBe('complete');
+  });
+});
+
+interface DelegationScenario {
+  parentMaxDelegatedRounds?: number;
+  script: ScriptedAuthorResponse[];
+}
+
+interface ScriptedAuthorResponse {
+  response: ReturnType<typeof effect>;
+  expectPromptIncludes?: string;
+}
+
+interface Snapshot {
+  mode: string | null;
+  domain: Record<string, unknown>;
+}
+
+async function runDelegationScenario(scenario: DelegationScenario): Promise<{ afterDelegation: Snapshot; final: Snapshot }> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-reuse-delegation-smoke-'));
+  const server = await createPgasServer({
+    programs: [
+      {
+        name: ${tsString(slug)},
+        entry: scenario.parentMaxDelegatedRounds === undefined
+          ? create${parentPascal}ProgramEntry()
+          : createPatchedParentEntry(tempDir, scenario.parentMaxDelegatedRounds),
+      },
+      { name: ${tsString(childRegistryName)}, entry: createManifestReuseStubChildEntry(tempDir) },
+    ],
+    drivers: {
+      authorHandle: scriptedAuthor(scenario.script),
+      observerHandle: {
+        modelId: 'generated-reuse-delegation-smoke-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  try {
+    const created = await client.sessions.create({ program: ${tsString(slug)} });
+    const sessionId = created.sessionId;
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch manifest-reused research' });
+    const afterDelegation = await readSnapshot(client, sessionId);
+    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    const final = await readSnapshot(client, sessionId);
+    return { afterDelegation, final };
+  } finally {
+    await server.close();
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function createPatchedParentEntry(tempDir: string, maxDelegatedRounds: number): ProgramEntry {
+  const sourcePath = decodeURIComponent(new URL('../src/programs/${slug}/specs.yml', import.meta.url).pathname);
+  const source = readFileSync(sourcePath, 'utf8');
+  const patched = source.replace(/max_delegated_rounds: \\d+/u, \`max_delegated_rounds: \${String(maxDelegatedRounds)}\`);
+  const specPath = join(tempDir, 'parent-patched-specs.yml');
+  writeFileSync(specPath, patched, 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  const toolRegistry = createToolRegistry();
+  register${parentPascal}Tools(toolRegistry);
+  return {
+    spec,
+    reactionHandlers,
+    delegationPolicy: {
+      allowedTargetPrograms: ${JSON.stringify(policy.allowedTargetPrograms)},
+      inputEnrichment: ${JSON.stringify(policy.inputEnrichment)},
+    },
+    createAdapters: (ctx) => {
+      const adapters = createProgramAdapters(spec, ctx, handlers);
+      if (spec.tools) {
+        for (const [name, decl] of spec.tools) {
+          if (toolRegistry.has(name)) {
+            adapters.outputs.set(decl.channelId, toolRegistry.createAdapter(name));
+          }
+        }
+      }
+      return adapters;
+    },
+  };
+}
+
+function createManifestReuseStubChildEntry(tempDir: string): ProgramEntry {
+  const specPath = join(tempDir, 'manifest-reuse-child-specs.yml');
+  writeFileSync(specPath, manifestReuseStubChildSpec(), 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  return {
+    spec,
+    delegationResultPolicy: {
+      fields: [
+        { path: 'work.summary', key: 'summary' },
+        { path: 'work.seeded_topic', key: 'seeded_topic' },
+      ],
+    },
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, manifestReuseStubChildHandlers),
+  };
+}
+
+const manifestReuseStubChildHandlers: Record<string, ToolHandler> = {
+  async accept_request(payload) {
+    return { ok: true, action: 'accept_request', payload };
+  },
+  async finish_work(payload) {
+    return { ok: true, action: 'finish_work', payload };
+  },
+};
+
+function manifestReuseStubChildSpec(): string {
+  return ${JSON.stringify(childSpecYaml)};
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    domain: world.domain as Record<string, unknown>,
+  };
+}
+
+function resultAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
+  const direct = domain[pathKey];
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return direct as Record<string, unknown>;
+  }
+  const prefix = \`\${pathKey}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(domain)) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return result;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-reuse-delegation-smoke-author',
+    async complete(prompt: string) {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated reuse delegation smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      if (response.expectPromptIncludes && !prompt.includes(response.expectPromptIncludes)) {
+        throw new Error(\`expected generated reuse delegation prompt to include \${response.expectPromptIncludes}\`);
+      }
+      return JSON.stringify(response.response);
+    },
+  };
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function scripted(response: ReturnType<typeof effect>, expectPromptIncludes?: string): ScriptedAuthorResponse {
+  return { response, ...(expectPromptIncludes ? { expectPromptIncludes } : {}) };
+}
+`;
 }
 
 function renderDelegationSmokeTestSource(

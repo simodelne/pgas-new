@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { synthesizeProgramSpecFromDomain, type SynthesizedSpec } from '../../src/foundry-program/synthesizer.js';
+import { synthesizeProgramSpecFromDomain, type SynthesizeProgramSpecOptions, type SynthesizedSpec } from '../../src/foundry-program/synthesizer.js';
 import type { SynthesizedArtifact } from '../../src/foundry-program/synthesizer-store.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
 
@@ -250,6 +250,55 @@ describe('generated delegation smoke test', () => {
       rmSync(targetDir, { recursive: true, force: true });
     }
   });
+
+  it('boots manifest-reused research child through an inline smoke stub', { timeout: 120_000 }, () => {
+    const slug = 'delegation-reuse-research-parent-hermetic';
+    const name = 'Delegation Reuse Research Parent Hermetic';
+    const artifact = artifactFromDomain(delegationDomainWith(
+      slug,
+      name,
+      'Dispatch one host-backed research-agent child through a manifest-reused program.',
+      researchAgentDescriptor('host_connector'),
+    ), {
+      targetKind: 'existing_repo',
+      availablePrograms: [
+        {
+          slug: 'research',
+          target_spec: 'SimoneOS Legal Research',
+          provides: 'delegation_research_agent',
+        },
+      ],
+    });
+    const delegationArtifact = artifact as SynthesizedArtifact & DelegationArtifactExtension;
+    expect(delegationArtifact.child_artifacts).toBeUndefined();
+    expect(artifact.smoke_test_ts).toContain('createManifestReuseStubChildEntry');
+    expect(artifact.smoke_test_ts).toContain("name: 'research'");
+    expect(artifact.smoke_test_ts).not.toContain('../src/programs/SimoneOS Legal Research/registration.js');
+
+    const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-reuse-research-delegation-render-'));
+
+    try {
+      renderStandaloneScaffold({
+        slug,
+        name,
+        outDir: targetDir,
+        synthesizedSpecYaml: artifact.spec_yaml,
+        synthesizedRegistrationTs: delegationArtifact.registration_ts,
+        synthesizedContractsTs: artifact.contracts_ts,
+        synthesizedHandlersTs: artifact.handlers_ts,
+        synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+        synthesizedStageSources: artifact.stage_sources,
+        synthesizedToolsTs: artifact.tools_ts,
+        synthesizedSmokeTestTs: artifact.smoke_test_ts,
+      } as RenderStandaloneOptions & DelegationRenderOptions);
+      linkRootNodeModules(targetDir);
+
+      const output = runGeneratedSmokeTest(targetDir);
+      expect(output).toContain('1 passed');
+    } finally {
+      rmSync(targetDir, { recursive: true, force: true });
+    }
+  });
 });
 
 interface DelegationArtifactExtension {
@@ -269,9 +318,9 @@ interface DelegationRenderOptions {
   synthesizedCapabilityGaps?: NonNullable<DelegationArtifactExtension['capability_gaps']>;
 }
 
-function artifactFromDomain(domain: Record<string, unknown>): SynthesizedArtifact {
+function artifactFromDomain(domain: Record<string, unknown>, options?: SynthesizeProgramSpecOptions): SynthesizedArtifact {
   return {
-    ...synthesizeProgramSpecFromDomain(domain),
+    ...synthesizeProgramSpecFromDomain(domain, options),
     created_at: '2026-07-16T00:00:00.000Z',
   };
 }
