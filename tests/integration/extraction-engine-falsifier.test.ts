@@ -17,9 +17,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assertSynthesizableCapabilities,
-  CapabilityRefusalError,
   capabilityEntry,
 } from '../../src/foundry-program/capability-registry.js';
+import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
+import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
 import { extractDocxText } from './fixtures/extract-docx.reference.js';
 import { renderStructuredDocxDocument } from './fixtures/export-docx-render.golden.js';
 
@@ -174,26 +175,30 @@ describe('extraction route-level engine falsifier (PR-U5-F)', () => {
     await recordFalsifier('X-8', failures, async () => {
       const docx = capabilityEntry('document_extraction_docx');
       const pdf = capabilityEntry('document_extraction_pdf');
-      expect(docx?.status).toBe('refuses');
-      expect(docx?.gap_note ?? '').toMatch(/extraction falsifier PR-U5-F|PR-U5-E|PR-U5-L/i);
-      expect(pdf?.status).toBe('refuses');
-      expect(pdf?.gap_note ?? '').toMatch(/host-connector|OCR|out of scope/i);
+      expect(docx?.status).toBe('synthesizes');
+      expect(docx?.evidence ?? '').toMatch(/live-drive|nonce|deflate|extraction_engaged/i);
+      expect(pdf?.status).toBe('scaffolds_with_gap');
+      expect(pdf?.gap_note ?? '').toMatch(/typed connector|host-side|OCR|scanned/i);
 
-      let thrown: unknown;
-      try {
-        assertSynthesizableCapabilities({
-          purpose: 'Extract body text from an uploaded DOCX contract and count the characters.',
-        });
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown).toBeInstanceOf(CapabilityRefusalError);
-      const err = thrown as CapabilityRefusalError;
-      expect(err.refused.map((demand) => demand.capability)).toContain('document_extraction_docx');
+      const assessment = assertSynthesizableCapabilities({
+        purpose: 'Extract body text from an uploaded DOCX contract and count the characters.',
+      });
+      expect(assessment.synthesizes.map((demand) => demand.capability)).toContain('document_extraction_docx');
+      expect(assessment.refuses).toEqual([]);
+      const artifact = synthesizeProgramSpecFromDomain(synthesizedDocxExtractionDomain());
+      expect(artifact.handlers_ts).toContain("import { extractDocxText } from './extract/docx.js'");
+      expect(artifact.handlers_ts).toContain("Buffer.from(document.content_base64, 'base64')");
+      expect(artifact.document_extraction_surfaces).toEqual({ docx: true });
+      const plan = createStandaloneArtifactPlan(
+        { slug: 'u5e-docx-extraction', name: 'U5E DOCX Extraction' },
+        { stageSlugs: artifact.body_stage_slugs, documentExtractionSurfaces: artifact.document_extraction_surfaces },
+      );
+      expect(plan.artifacts.map((entry) => entry.path)).toContain('src/programs/u5e-docx-extraction/extract/docx.ts');
       return {
         document_extraction_docx: docx?.status,
         document_extraction_pdf: pdf?.status,
-        refused: err.refused.map((demand) => demand.capability),
+        scaffolds_with_gap: assessment.scaffolds_with_gap.map((demand) => demand.capability),
+        emitted_docx_extractor: true,
       };
     });
 
@@ -365,6 +370,39 @@ function createExtractionHandlers(state: ExtractionHandlerState): Record<string,
       state.observations.push(observation);
       return ingestDocuments(documents, state);
     },
+  };
+}
+
+function synthesizedDocxExtractionDomain(): Record<string, unknown> {
+  return {
+    'program.slug': 'u5e-docx-extraction',
+    'program.name': 'U5E DOCX Extraction',
+    'program.target_dir': '/tmp/u5e-docx-extraction',
+    'intake.purpose': 'Extract body text from uploaded DOCX contracts.',
+    'intake.entry_channel': 'user_text',
+    'intake.stages_json': JSON.stringify([
+      { slug: 'intake', is_bootstrap: true },
+      { slug: 'ingest_source' },
+      { slug: 'complete', is_terminal: true },
+    ]),
+    'intake.transitions_json': JSON.stringify([
+      { from: 'intake', to: 'ingest_source', trigger: 'started', guard_field: 'intake.started' },
+      { from: 'ingest_source', to: 'complete', trigger: 'source_ready', guard_field: 'work.source_ready' },
+    ]),
+    'intake.delegation_json': JSON.stringify({ enabled: false }),
+    'intake.documents_json': JSON.stringify({
+      version: 1,
+      stage: 'ingest_source',
+      upload_types: [TEXT_MIME, DOCX_MIME],
+      extraction: 'self_contained',
+      target: { root: SOURCE_PATH },
+      required: true,
+      fidelity_floor: { min_chars: 1 },
+    }),
+    'intake.completion_json': JSON.stringify({
+      final_stage: 'complete',
+      guard_field: 'work.source_ready',
+    }),
   };
 }
 

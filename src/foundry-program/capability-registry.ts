@@ -76,22 +76,21 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   {
     capability: 'document_upload_intake',
     status: 'synthesizes',
-    evidence: 'self-contained text/markdown upload-intake is synthesized (document_upload channel + ingestion + zero-LLM-arg ingest_documents handler reading request.documents content_text + source_ready reaction + park/request + skip paths) and PROVEN end-to-end by the upload live-drive against a real provider (qwen36-27b): the generated program booted on createPgasServer, a per-run sentinel text file was uploaded via client.files.upload, and the program read its EXACT bytes — char_count matched the fixture byte-length exactly (260==260) and the run-nonce sentinel was present in work.source.full_text, source_ready true, parent complete. Fail-closed upload_engaged verdict all-green (extraction_exact + sentinel_present unfakeable by mock or LLM paraphrase). DOCX/PDF extraction remains a host connector (never foundry code); scanned/complex-layout permanently out of synthesis scope.',
+    evidence: 'self-contained text/markdown upload-intake is synthesized (document_upload channel + ingestion + zero-LLM-arg ingest_documents handler reading request.documents content_text + source_ready reaction + park/request + skip paths) and PROVEN end-to-end by the upload live-drive against a real provider (qwen36-27b): the generated program booted on createPgasServer, a per-run sentinel text file was uploaded via client.files.upload, and the program read its EXACT bytes — char_count matched the fixture byte-length exactly (260==260) and the run-nonce sentinel was present in work.source.full_text, source_ready true, parent complete. Fail-closed upload_engaged verdict all-green (extraction_exact + sentinel_present unfakeable by mock or LLM paraphrase). Binary DOCX/PDF extraction is tracked separately by document_extraction_docx/document_extraction_pdf; scanned/complex-layout permanently out of synthesis scope.',
     since_version: '3.25.0',
   },
   {
     capability: 'document_extraction_docx',
-    status: 'refuses',
-    evidence: 'PR-U5-F adds the hermetic route-level falsifier and reference DOCX extractor fixture; the foundry emitter and live-drive proof have not landed in this PR.',
+    status: 'synthesizes',
+    evidence: 'PROVEN end-to-end by the docx extraction live-drive against a real provider (qwen36-27b): a generated program drove to complete (5 rounds, 7 provider hits), received a real DEFLATE-compressed .docx upload through the real files route, and the foundry-emitted zero-npm `node:zlib` extractor INFLATED the OOXML and parsed the body text — char_count exact (258==258) with the per-run nonce present in work.source.full_text. Fail-closed extraction_engaged verdict all-green: extraction_kind=docx_deflate AND sentinel_not_in_raw_upload=true (the nonce is provably absent from the raw upload bytes + base64 — recoverable only by genuine inflate + <w:t> parse; strictly stronger than the #187 byte-visible text kill). PDF extraction remains a host connector (document_extraction_pdf); scanned/OCR permanently out of scope.',
     since_version: '3.27.0',
-    gap_note: 'hermetic mechanism proven by extraction falsifier PR-U5-F; deterministic DOCX extractor emitter is PR-U5-E, live flip PR-U5-L',
   },
   {
     capability: 'document_extraction_pdf',
-    status: 'refuses',
-    evidence: 'General PDF text extraction requires host-side font/CMap semantics; PR-U5-F includes only a minimal-PDF negative control and no portable PDF extractor.',
+    status: 'scaffolds_with_gap',
+    evidence: 'General PDF text extraction requires host-side font/CMap semantics; PR-U5-E emits a typed DocumentExtractionHostConnector contract, fixture mock, and per-program capability_gaps entry, but no foundry PDF extractor.',
     since_version: '3.27.0',
-    gap_note: 'host-connector track; typed connector + mock + capability_gap in PR-U5-E; extraction itself permanently host-side; scanned/OCR permanently out of scope',
+    gap_note: 'typed connector + mock + gap; extraction permanently host-side; scanned/OCR permanently refused',
   },
   {
     capability: 'rich_frontend',

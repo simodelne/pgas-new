@@ -124,6 +124,7 @@ export interface GeneratedLiveDriveOptions {
   delegationScript?: GeneratedLiveDriveDelegationScript;
   uploadScript?: GeneratedLiveDriveUploadScript;
   exportScript?: GeneratedLiveDriveExportScript;
+  extractionScript?: GeneratedLiveDriveExtractionScript;
 }
 
 export interface DriveTerminalAction {
@@ -160,6 +161,9 @@ export interface GeneratedLiveDriveResult {
   export: GeneratedLiveDriveExportReport | null;
   export_verdict: GeneratedLiveDriveExportVerdict;
   export_engaged: boolean;
+  extraction: GeneratedLiveDriveExtractionReport | null;
+  extraction_verdict: GeneratedLiveDriveExtractionVerdict;
+  extraction_engaged: boolean;
   runner_exit_code: number | null;
   runner_output_excerpt: string;
   runner_error?: string;
@@ -213,6 +217,13 @@ export interface GeneratedLiveDriveExportScript {
   nonce: string;
 }
 
+export interface GeneratedLiveDriveExtractionScript {
+  resultPath: string;
+  sourceReadyPath: string;
+  stage: string;
+  sentinel: string;
+}
+
 export interface GeneratedLiveDriveDelegationReport {
   child_program: string;
   result_status: string | null;
@@ -235,6 +246,20 @@ export interface GeneratedLiveDriveUploadReport {
   uploaded_file_id: string | null;
   refs_landed: boolean;
   upload_accepted: boolean;
+}
+
+export interface GeneratedLiveDriveExtractionReport {
+  source_status: string | null;
+  char_count: number;
+  expected_char_count: number;
+  source_ready: boolean;
+  full_text_excerpt: string;
+  sentinel_present: boolean;
+  uploaded_file_id: string | null;
+  refs_landed: boolean;
+  upload_accepted: boolean;
+  extraction_kind: string | null;
+  sentinel_not_in_raw_upload: boolean;
 }
 
 export interface GeneratedLiveDriveExportArtifactRecord {
@@ -323,6 +348,23 @@ export interface GeneratedLiveDriveExportVerdict {
   notes: string[];
 }
 
+export interface GeneratedLiveDriveExtractionVerdict {
+  extraction_engaged: boolean;
+  upload_accepted: boolean;
+  refs_landed: boolean;
+  content_extracted: boolean;
+  sentinel_present: boolean;
+  extraction_exact: boolean;
+  source_ready: boolean;
+  parent_complete: boolean;
+  provider_hits_ok: boolean;
+  no_stub_markers: boolean;
+  extraction_kind_docx_deflate: boolean;
+  sentinel_not_in_raw_upload: boolean;
+  reason: string | null;
+  notes: string[];
+}
+
 export interface GeneratedLiveDriveDelegationAssessmentInput {
   report: GeneratedLiveDriveDelegationReport | null;
   parentSessionId: string | null;
@@ -342,6 +384,16 @@ export interface GeneratedLiveDriveUploadAssessmentInput {
   providerHits: number;
   stubFindings?: readonly string[];
   /** the upload host stage; its items_json may be legitimately empty when it only ingests source. */
+  hostStage?: string;
+}
+
+export interface GeneratedLiveDriveExtractionAssessmentInput {
+  report: GeneratedLiveDriveExtractionReport | null;
+  finalMode: string | null;
+  expectedFinalMode?: string;
+  providerHits: number;
+  stubFindings?: readonly string[];
+  /** the extraction host stage; its items_json may be legitimately empty when it only ingests source. */
   hostStage?: string;
 }
 
@@ -633,6 +685,109 @@ export function assessUploadEngagement(
   };
 }
 
+export function assessExtractionEngagement(
+  input: GeneratedLiveDriveExtractionAssessmentInput,
+): GeneratedLiveDriveExtractionVerdict {
+  const notes: string[] = [];
+  const expectedFinalMode = input.expectedFinalMode ?? DEFAULT_FINAL_STAGE;
+  const report = input.report;
+
+  const uploadAccepted = report?.upload_accepted === true;
+  if (!report) {
+    notes.push('extraction_report_absent');
+  } else if (!uploadAccepted) {
+    notes.push('upload_not_accepted');
+  }
+
+  const refsLanded = report?.refs_landed === true;
+  if (!refsLanded) {
+    notes.push('file_refs_not_landed');
+  }
+
+  const contentExtracted = report?.source_status === 'extracted';
+  if (!contentExtracted) {
+    notes.push(`source_status_not_extracted:${String(report?.source_status ?? null)}`);
+  }
+
+  const sentinelPresent = report?.sentinel_present === true;
+  if (!sentinelPresent) {
+    notes.push('sentinel_absent');
+  }
+
+  const actualCharCount = report?.char_count ?? 0;
+  const expectedCharCount = report?.expected_char_count ?? 0;
+  const extractionExact = Number.isFinite(actualCharCount) &&
+    Number.isFinite(expectedCharCount) &&
+    expectedCharCount > 0 &&
+    actualCharCount === expectedCharCount;
+  if (!extractionExact) {
+    notes.push(`char_count_mismatch:expected=${String(expectedCharCount)}:actual=${String(actualCharCount)}`);
+  }
+
+  const sourceReady = report?.source_ready === true;
+  if (!sourceReady) {
+    notes.push('source_ready_false');
+  }
+
+  const parentComplete = input.finalMode === expectedFinalMode;
+  if (!parentComplete) {
+    notes.push(`parent_not_complete:expected=${expectedFinalMode}:actual=${String(input.finalMode)}`);
+  }
+
+  const providerHitsOk = input.providerHits >= 1;
+  if (!providerHitsOk) {
+    notes.push('provider_hits_below_minimum');
+  }
+
+  const hostItemsPrefix = input.hostStage ? `${input.hostStage}.items_json` : null;
+  const stubFindings = (input.stubFindings ?? []).filter(
+    (finding) => hostItemsPrefix === null || !finding.startsWith(hostItemsPrefix),
+  );
+  const noStubMarkers = stubFindings.length === 0;
+  if (!noStubMarkers) {
+    notes.push(`stub_markers_present:${stubFindings.slice(0, 3).join(';')}`);
+  }
+
+  const extractionKindDocxDeflate = report?.extraction_kind === 'docx_deflate';
+  if (!extractionKindDocxDeflate) {
+    notes.push(`extraction_kind_not_docx_deflate:${String(report?.extraction_kind ?? null)}`);
+  }
+
+  const sentinelNotInRawUpload = report?.sentinel_not_in_raw_upload === true;
+  if (!sentinelNotInRawUpload) {
+    notes.push('sentinel_visible_in_raw_upload');
+  }
+
+  const extractionEngaged = uploadAccepted &&
+    refsLanded &&
+    contentExtracted &&
+    sentinelPresent &&
+    extractionExact &&
+    sourceReady &&
+    parentComplete &&
+    providerHitsOk &&
+    noStubMarkers &&
+    extractionKindDocxDeflate &&
+    sentinelNotInRawUpload;
+
+  return {
+    extraction_engaged: extractionEngaged,
+    upload_accepted: uploadAccepted,
+    refs_landed: refsLanded,
+    content_extracted: contentExtracted,
+    sentinel_present: sentinelPresent,
+    extraction_exact: extractionExact,
+    source_ready: sourceReady,
+    parent_complete: parentComplete,
+    provider_hits_ok: providerHitsOk,
+    no_stub_markers: noStubMarkers,
+    extraction_kind_docx_deflate: extractionKindDocxDeflate,
+    sentinel_not_in_raw_upload: sentinelNotInRawUpload,
+    reason: extractionEngaged ? null : notes[0] ?? 'extraction_engagement_failed',
+    notes,
+  };
+}
+
 export function assessExportEngagement(
   input: GeneratedLiveDriveExportAssessmentInput,
 ): GeneratedLiveDriveExportVerdict {
@@ -713,6 +868,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       options.delegationScript,
       options.uploadScript,
       options.exportScript,
+      options.extractionScript,
     ));
 
     const runner = await runNodeScript(runnerPath, {
@@ -752,6 +908,12 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
         ...(options.exportScript
           ? { PGAS_LIVE_DRIVE_EXPORT_SCRIPT: JSON.stringify(options.exportScript) }
           : {}),
+        ...(options.extractionScript
+          ? {
+              PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT: JSON.stringify(options.extractionScript),
+              PGAS_LIVE_DRIVE_UPLOADS_DIR: join(workDir, 'uploads'),
+            }
+          : {}),
       },
     });
 
@@ -764,6 +926,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
     const delegation = parseDelegationReport(report?.delegation);
     const upload = parseUploadReport(report?.upload);
     const exportReport = parseExportReport(report?.export);
+    const extraction = parseExtractionReport(report?.extraction);
     const delegationVerdict = options.delegationScript
       ? assessDelegationEngagement({
           report: delegation,
@@ -796,6 +959,16 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
           nonce: options.exportScript.nonce,
         })
       : noExportScriptVerdict();
+    const extractionVerdict = options.extractionScript
+      ? assessExtractionEngagement({
+          report: extraction,
+          finalMode,
+          expectedFinalMode: options.finalStage ?? DEFAULT_FINAL_STAGE,
+          providerHits,
+          stubFindings: generatedStageOutputStubFindings(world),
+          hostStage: options.extractionScript.stage,
+        })
+      : noExtractionScriptVerdict(providerHits);
     return {
       final_mode: finalMode,
       terminal: report?.terminal === true,
@@ -821,6 +994,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       export: exportReport,
       export_verdict: exportVerdict,
       export_engaged: exportVerdict.export_engaged,
+      extraction,
+      extraction_verdict: extractionVerdict,
+      extraction_engaged: extractionVerdict.extraction_engaged,
       runner_exit_code: runner.exitCode,
       runner_output_excerpt: runner.output.slice(-4_000),
       ...(typeof report?.error === 'string' ? { runner_error: report.error } : {}),
@@ -846,7 +1022,11 @@ export function renderLiveDriveRunnerSource(
   delegationScript?: GeneratedLiveDriveDelegationScript,
   uploadScript?: GeneratedLiveDriveUploadScript,
   exportScript?: GeneratedLiveDriveExportScript,
+  extractionScript?: GeneratedLiveDriveExtractionScript,
 ): string {
+  if (extractionScript) {
+    return renderExtractionLiveDriveRunnerSource(slug);
+  }
   if (uploadScript) {
     return renderUploadLiveDriveRunnerSource(slug);
   }
@@ -1279,6 +1459,563 @@ function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown
     cursor = cursor[part];
   }
   return cursor;
+}
+
+function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
+  if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+  const result = (round as { result?: unknown }).result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+  const terminal = (result as { terminal?: unknown }).terminal;
+  if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+  const name = (terminal as { name?: unknown }).name;
+  if (typeof name !== 'string' || name.length === 0) return [];
+  const payload = (terminal as { payload?: unknown }).payload;
+  return [{ name, payload_excerpt: JSON.stringify(payload ?? null).slice(0, 4_000) }];
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function writeReport(report: Record<string, unknown>): void {
+  if (REPORT_PATH.length > 0) {
+    writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
+main().catch((error: unknown) => {
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
+  process.exit(1);
+});
+`;
+}
+
+export function renderExtractionLiveDriveRunnerSource(slug: string): string {
+  const pascal = toPascalCase(slug);
+  return `import { writeFileSync } from 'node:fs';
+import { deflateRawSync } from 'node:zlib';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+import { renderStructuredDocxDocument } from '../src/programs/${slug}/export/docx.js';
+
+const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
+const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
+const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
+const FINAL_STAGE = process.env.PGAS_LIVE_DRIVE_FINAL_STAGE ?? 'complete';
+const MAX_TRIGGERS = Number(process.env.PGAS_LIVE_DRIVE_MAX_TRIGGERS ?? '12');
+const DEADLINE = Date.now() + Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '540000');
+const UPLOADS_DIR = process.env.PGAS_LIVE_DRIVE_UPLOADS_DIR ?? '';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const extractionScript = parseExtractionScript(process.env.PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT ?? '');
+
+interface DriveState {
+  mode: string | null;
+  terminal: boolean;
+  roundCount: number;
+  world: Record<string, unknown>;
+  actions: string[];
+  terminalActions: Array<{ name: string; payload_excerpt: string }>;
+}
+
+interface ExtractionScript {
+  resultPath: string;
+  sourceReadyPath: string;
+  stage: string;
+  sentinel: string;
+}
+
+interface ExtractionAttempt {
+  attempted: boolean;
+  uploadAccepted: boolean;
+  uploadedFileId: string | null;
+  fileRef: Record<string, unknown> | null;
+  expectedCharCount: number;
+  sentinelNotInRawUpload: boolean;
+}
+
+async function main(): Promise<void> {
+  // Opt-in unified native-tools author driver: mirrors the rendered scaffold's
+  // src/server.ts gating. Default (PGAS_AUTHOR_DRIVER unset) boots the engine's
+  // legacy JSON author path exactly as before; the dynamic import keeps the
+  // default path byte-identical even against a scaffold without the module.
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
+  const server = await createPgasServer({
+    programs: [{ name: '${slug}', entry: create${pascal}ProgramEntry() }],
+    devMode: true,
+    ...(UPLOADS_DIR.length > 0 ? { storage: { uploadsDir: UPLOADS_DIR } } : {}),
+    ...(drivers ? { drivers } : {}),
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  const created = await client.sessions.create({
+    program: '${slug}',
+    domain_context: { query: INITIAL_TEXT },
+  });
+  const sessionId = created.sessionId;
+
+  let payloadText = INITIAL_TEXT;
+  let triggers = 0;
+  let extraction = noExtractionAttempt();
+  let state = await readState(client, sessionId);
+  while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
+    if (!extraction.attempted && state.mode === extractionScript.stage) {
+      extraction = await uploadDeflatedDocxFixture(client, sessionId, extractionScript);
+      if (extraction.fileRef) {
+        const before = state.roundCount;
+        try {
+          await triggerWithDeadline(client, sessionId, {
+            channel: 'document_upload',
+            payload: { 'inputs.document_intake.file_refs': [extraction.fileRef] },
+          });
+        } catch (error) {
+          if (/terminal/iu.test(String(error))) break;
+          throw error;
+        }
+        triggers += 1;
+        state = await waitForRoundOrUploadLanding(client, sessionId, before, extraction.uploadedFileId);
+        continue;
+      }
+    }
+
+    const before = state.roundCount;
+    try {
+      await triggerWithDeadline(client, sessionId, { channel: ENTRY_CHANNEL, payload: payloadText });
+    } catch (error) {
+      if (/terminal/iu.test(String(error))) break;
+      if (isTriggerInFlightTimeout(error)) {
+        const latest = await safeReadState(client, sessionId, state);
+        writeDriveReport({
+          session_id: sessionId,
+          state: latest,
+          triggers,
+          drivers,
+          extraction,
+          timeout_kind: 'trigger_in_flight',
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+        });
+        process.exit(1);
+      }
+      throw error;
+    }
+    triggers += 1;
+    payloadText = 'Continue to the next stage of the workflow.';
+    state = await waitForRound(client, sessionId, before);
+  }
+
+  state = await readState(client, sessionId);
+  writeDriveReport({ session_id: sessionId, state, triggers, drivers, extraction });
+  process.exit(0);
+}
+
+async function uploadDeflatedDocxFixture(
+  client: PgasClient,
+  sessionId: string,
+  script: ExtractionScript,
+): Promise<ExtractionAttempt> {
+  const fixture = buildDeflatedDocxFixture(script.sentinel);
+  if (zipCompressionKind(fixture.bytes) !== 'docx_deflate') {
+    throw new Error('extraction fixture was not DEFLATE-compressed');
+  }
+  const raw = Buffer.from(fixture.bytes);
+  const sentinelBytes = Buffer.from(script.sentinel, 'utf8');
+  const sentinelNotInRawUpload = !raw.includes(sentinelBytes) && !raw.toString('base64').includes(script.sentinel);
+  const form = new FormData();
+  form.append('files', new Blob([fixture.bytes], { type: DOCX_MIME }), \`pgas-extraction-live-drive-\${Date.now()}.docx\`);
+  const uploaded = await client.files.upload(sessionId, form);
+  const files = isRecord(uploaded) && Array.isArray(uploaded.files)
+    ? uploaded.files.filter(isRecord)
+    : [];
+  const fileRef = files[0] ?? null;
+  const fileId = fileRef ? stringValue(fileRef.fileId) : null;
+  return {
+    attempted: true,
+    uploadAccepted: fileId !== null,
+    uploadedFileId: fileId,
+    fileRef,
+    expectedCharCount: fixture.expectedCharCount,
+    sentinelNotInRawUpload,
+  };
+}
+
+function buildDeflatedDocxFixture(sentinel: string): { bytes: Uint8Array; expectedCharCount: number } {
+  const title = 'PGAS DOCX Extraction Live Drive';
+  const sectionTitle = 'Source';
+  const body = [
+    \`Nonce: \${sentinel}\`,
+    'This DEFLATE-compressed DOCX fixture is authored inside the live-drive runner.',
+    'The generated program must inflate OOXML and extract this exact body text.',
+  ];
+  const expectedText = [title, sectionTitle, ...body].join('\\n');
+  const storeDocx = renderStructuredDocxDocument({
+    title,
+    sections: [{ title: sectionTitle, body }],
+  });
+  return {
+    bytes: rezipDeflate(storeDocx),
+    expectedCharCount: expectedText.length,
+  };
+}
+
+function rezipDeflate(storeDocxBytes: Uint8Array): Uint8Array {
+  const entries = parseStoreZipEntries(storeDocxBytes);
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const nameBytes = new TextEncoder().encode(entry.name);
+    const compressed = asUint8Array(deflateRawSync(entry.data));
+    const crc = crc32(entry.data);
+    const local = concat([
+      u32(0x04034b50), u16(20), u16(0), u16(8), u16(0), u16(0), u32(crc),
+      u32(compressed.length), u32(entry.data.length), u16(nameBytes.length), u16(0), nameBytes, compressed,
+    ]);
+    chunks.push(local);
+    central.push(concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(8), u16(0), u16(0), u32(crc),
+      u32(compressed.length), u32(entry.data.length), u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(offset), nameBytes,
+    ]));
+    offset += local.length;
+  }
+  const centralOffset = offset;
+  const centralBytes = concat(central);
+  const end = concat([
+    u32(0x06054b50), u16(0), u16(0), u16(central.length), u16(central.length),
+    u32(centralBytes.length), u32(centralOffset), u16(0),
+  ]);
+  return concat([...chunks, centralBytes, end]);
+}
+
+function parseStoreZipEntries(bytes: Uint8Array): Array<{ name: string; data: Uint8Array }> {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const entries: Array<{ name: string; data: Uint8Array }> = [];
+  let offset = 0;
+  while (offset + 4 <= bytes.length && dv.getUint32(offset, true) === 0x04034b50) {
+    const method = dv.getUint16(offset + 8, true);
+    const compressedSize = dv.getUint32(offset + 18, true);
+    const nameLength = dv.getUint16(offset + 26, true);
+    const extraLength = dv.getUint16(offset + 28, true);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (method !== 0 || dataEnd > bytes.length) {
+      throw new Error('expected a valid STORE zip entry');
+    }
+    entries.push({
+      name: new TextDecoder().decode(bytes.subarray(nameStart, nameStart + nameLength)),
+      data: bytes.subarray(dataStart, dataEnd),
+    });
+    offset = dataEnd;
+  }
+  return entries;
+}
+
+function zipCompressionKind(bytes: Uint8Array): string {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  let sawEntry = false;
+  let sawDeflate = false;
+  while (offset + 4 <= bytes.length && dv.getUint32(offset, true) === 0x04034b50) {
+    sawEntry = true;
+    const method = dv.getUint16(offset + 8, true);
+    const compressedSize = dv.getUint32(offset + 18, true);
+    const nameLength = dv.getUint16(offset + 26, true);
+    const extraLength = dv.getUint16(offset + 28, true);
+    if (method === 8) {
+      sawDeflate = true;
+    } else if (method !== 0) {
+      return 'docx_unknown';
+    }
+    const dataEnd = offset + 30 + nameLength + extraLength + compressedSize;
+    if (dataEnd > bytes.length) {
+      return 'docx_unknown';
+    }
+    offset = dataEnd;
+  }
+  if (!sawEntry) return 'docx_unknown';
+  return sawDeflate ? 'docx_deflate' : 'docx_store';
+}
+
+function crc32(data: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of data) {
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 0xff]!;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+const CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+  }
+  return value >>> 0;
+});
+
+function concat(chunks: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+function u16(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff);
+}
+
+function u32(value: number): Uint8Array {
+  return Uint8Array.of(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+}
+
+function asUint8Array(value: Uint8Array): Uint8Array {
+  return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+}
+
+async function triggerWithDeadline(
+  client: PgasClient,
+  sessionId: string,
+  payload: { channel: string; payload: unknown },
+): Promise<void> {
+  const remaining = DEADLINE - Date.now();
+  if (remaining <= 0) {
+    throw new Error('trigger_in_flight_timeout: deadline reached before trigger');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.sessions.trigger(sessionId, payload),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('trigger_in_flight_timeout: trigger exceeded live-drive deadline')), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTriggerInFlightTimeout(error: unknown): boolean {
+  return /trigger_in_flight_timeout/u.test(error instanceof Error ? error.message : String(error));
+}
+
+async function waitForRound(client: PgasClient, sessionId: string, before: number): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function waitForRoundOrUploadLanding(
+  client: PgasClient,
+  sessionId: string,
+  before: number,
+  fileId: string | null,
+): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && !refsLanded(latest.world, fileId) && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function safeReadState(client: PgasClient, sessionId: string, fallback: DriveState): Promise<DriveState> {
+  try {
+    return await readState(client, sessionId);
+  } catch {
+    return fallback;
+  }
+}
+
+async function readState(client: PgasClient, sessionId: string): Promise<DriveState> {
+  const [envelope, worldResponse, roundsResponse] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+    client.sessions.rounds(sessionId),
+  ]);
+  const rounds = Array.isArray(roundsResponse.rounds) ? roundsResponse.rounds : [];
+  const status = typeof envelope.status === 'string' ? envelope.status : '';
+  const stateRecord = envelope.state as Record<string, unknown> | undefined;
+  const mode = firstString(envelope.mode, stateRecord?.mode);
+  const terminalActions = rounds.flatMap((round) => terminalActionOf(round));
+  return {
+    mode,
+    terminal: Boolean(stateRecord?.terminal ?? envelope.terminal) || status.toLowerCase() === 'completed',
+    roundCount: rounds.length,
+    world: worldResponse.domain as Record<string, unknown>,
+    actions: terminalActions.map((action) => action.name),
+    terminalActions,
+  };
+}
+
+function parseExtractionScript(raw: string): ExtractionScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT is required for extraction live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    sourceReadyPath: stringField(parsed, 'sourceReadyPath'),
+    stage: stringField(parsed, 'stage'),
+    sentinel: stringField(parsed, 'sentinel'),
+  };
+  if (!script.resultPath || !script.sourceReadyPath || !script.stage || !script.sentinel) {
+    throw new Error('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT is missing required resultPath/sourceReadyPath/stage/sentinel');
+  }
+  return script;
+}
+
+function writeDriveReport(input: {
+  session_id: string;
+  state: DriveState;
+  triggers: number;
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  extraction: ExtractionAttempt;
+  timeout_kind?: string;
+  error?: string;
+}): void {
+  const report = {
+    final_mode: input.state.mode,
+    terminal: input.state.terminal,
+    rounds: input.state.roundCount,
+    triggers: input.triggers,
+    actions: input.state.actions,
+    terminal_actions: input.state.terminalActions,
+    world: input.state.world,
+    session_id: input.session_id,
+    author_driver: input.drivers ? 'unified' : 'default',
+    extraction: extractionReportFromWorld(input.state.world, extractionScript, input.extraction),
+    ...(input.timeout_kind ? { timeout_kind: input.timeout_kind } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  };
+  writeReport(report);
+  process.stdout.write(JSON.stringify({ extraction: report.extraction }) + '\\n');
+}
+
+function extractionReportFromWorld(
+  world: Record<string, unknown>,
+  script: ExtractionScript,
+  extraction: ExtractionAttempt,
+): Record<string, unknown> {
+  const source = recordFromWorldPath(world, script.resultPath);
+  const fullText = typeof source.full_text === 'string' ? source.full_text : '';
+  return {
+    source_status: stringValue(source.status),
+    char_count: numberValue(source.char_count) ?? 0,
+    expected_char_count: extraction.expectedCharCount,
+    source_ready: valueAtWorldPath(world, script.sourceReadyPath) === true,
+    full_text_excerpt: fullText.slice(0, 4_000),
+    sentinel_present: fullText.includes(script.sentinel),
+    uploaded_file_id: extraction.uploadedFileId,
+    refs_landed: refsLanded(world, extraction.uploadedFileId),
+    upload_accepted: extraction.uploadAccepted,
+    extraction_kind: stringValue(source.extraction_kind),
+    sentinel_not_in_raw_upload: extraction.sentinelNotInRawUpload,
+  };
+}
+
+function refsLanded(world: Record<string, unknown>, fileId: string | null): boolean {
+  if (!fileId) {
+    return false;
+  }
+  if (valueAtWorldPath(world, 'inputs.document_intake.file_refs.0.fileId') === fileId) {
+    return true;
+  }
+  const directRefs = valueAtWorldPath(world, 'inputs.document_intake.file_refs');
+  if (Array.isArray(directRefs) && directRefs.some((ref) => isRecord(ref) && ref.fileId === fileId)) {
+    return true;
+  }
+  const root = valueAtWorldPath(world, 'inputs.document_intake');
+  return isRecord(root) &&
+    Array.isArray(root.file_refs) &&
+    root.file_refs.some((ref) => isRecord(ref) && ref.fileId === fileId);
+}
+
+function recordFromWorldPath(world: Record<string, unknown>, path: string): Record<string, unknown> {
+  const direct = valueAtWorldPath(world, path);
+  const record = isRecord(direct) ? { ...direct } : {};
+  const prefix = path + '.';
+  for (const [key, value] of Object.entries(world)) {
+    if (!key.startsWith(prefix)) continue;
+    const field = key.slice(prefix.length);
+    if (field.length > 0 && !field.includes('.')) {
+      record[field] = value;
+    }
+  }
+  return record;
+}
+
+function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(world, path)) {
+    return world[path];
+  }
+  let cursor: unknown = world;
+  for (const part of path.split('.')) {
+    if (!isRecord(cursor) || !Object.prototype.hasOwnProperty.call(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function noExtractionAttempt(): ExtractionAttempt {
+  return {
+    attempted: false,
+    uploadAccepted: false,
+    uploadedFileId: null,
+    fileRef: null,
+    expectedCharCount: 0,
+    sentinelNotInRawUpload: false,
+  };
 }
 
 function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
@@ -2533,6 +3270,7 @@ interface DriveReport {
   delegation?: unknown;
   upload?: unknown;
   export?: unknown;
+  extraction?: unknown;
   timeout_kind?: unknown;
   error?: unknown;
 }
@@ -2619,6 +3357,23 @@ function parseUploadReport(value: unknown): GeneratedLiveDriveUploadReport | nul
   };
 }
 
+function parseExtractionReport(value: unknown): GeneratedLiveDriveExtractionReport | null {
+  if (!isRecord(value)) return null;
+  return {
+    source_status: nullableString(value.source_status),
+    char_count: numberOrZero(value.char_count),
+    expected_char_count: numberOrZero(value.expected_char_count),
+    source_ready: value.source_ready === true,
+    full_text_excerpt: stringOrEmpty(value.full_text_excerpt),
+    sentinel_present: value.sentinel_present === true,
+    uploaded_file_id: nullableString(value.uploaded_file_id),
+    refs_landed: value.refs_landed === true,
+    upload_accepted: value.upload_accepted === true,
+    extraction_kind: nullableString(value.extraction_kind),
+    sentinel_not_in_raw_upload: value.sentinel_not_in_raw_upload === true,
+  };
+}
+
 function parseExportReport(value: unknown): GeneratedLiveDriveExportReport | null {
   if (!isRecord(value)) return null;
   const artifactRecords = parseExportArtifactRecords(value.artifact_records);
@@ -2698,6 +3453,25 @@ function noUploadScriptVerdict(providerHits: number): GeneratedLiveDriveUploadVe
     provider_hits_ok: providerHits >= 1,
     no_stub_markers: true,
     notes: providerHits >= 1 ? ['upload_script_absent'] : ['upload_script_absent', 'provider_hits_below_minimum'],
+  };
+}
+
+function noExtractionScriptVerdict(providerHits: number): GeneratedLiveDriveExtractionVerdict {
+  return {
+    extraction_engaged: false,
+    upload_accepted: false,
+    refs_landed: false,
+    content_extracted: false,
+    sentinel_present: false,
+    extraction_exact: false,
+    source_ready: false,
+    parent_complete: false,
+    provider_hits_ok: providerHits >= 1,
+    no_stub_markers: true,
+    extraction_kind_docx_deflate: false,
+    sentinel_not_in_raw_upload: false,
+    reason: 'extraction_script_absent',
+    notes: providerHits >= 1 ? ['extraction_script_absent'] : ['extraction_script_absent', 'provider_hits_below_minimum'],
   };
 }
 

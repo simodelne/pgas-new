@@ -46,6 +46,10 @@ export interface ExportSurfaces {
   diff?: boolean;
 }
 
+export interface DocumentExtractionSurfaces {
+  docx?: boolean;
+}
+
 export interface ExportStageDescriptor {
   stage: string;
   kind: 'export_docx' | 'export_html';
@@ -80,6 +84,7 @@ export interface SynthesisContext {
   documents?: DocumentsDescriptor;
   export_descriptors?: ExportStageDescriptor[];
   export_surfaces?: ExportSurfaces;
+  document_extraction_surfaces?: DocumentExtractionSurfaces;
   interaction?: {
     confirmation_loops: Array<{
       collection: string;
@@ -161,6 +166,7 @@ export interface SynthesizedArtifact {
   smoke_test_ts: string;
   capability_gaps?: CapabilityGap[];
   export_surfaces?: ExportSurfaces;
+  document_extraction_surfaces?: DocumentExtractionSurfaces;
   export_descriptors?: ExportStageDescriptor[];
   child_artifacts?: Array<Omit<SynthesizedArtifact, 'created_at' | 'child_artifacts'> & {
     slug: string;
