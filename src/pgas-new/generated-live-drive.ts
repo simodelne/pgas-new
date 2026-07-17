@@ -123,6 +123,7 @@ export interface GeneratedLiveDriveOptions {
   confirmationScript?: GeneratedLiveDriveConfirmationScript;
   delegationScript?: GeneratedLiveDriveDelegationScript;
   uploadScript?: GeneratedLiveDriveUploadScript;
+  exportScript?: GeneratedLiveDriveExportScript;
 }
 
 export interface DriveTerminalAction {
@@ -156,6 +157,9 @@ export interface GeneratedLiveDriveResult {
   upload: GeneratedLiveDriveUploadReport | null;
   upload_verdict: GeneratedLiveDriveUploadVerdict;
   upload_engaged: boolean;
+  export: GeneratedLiveDriveExportReport | null;
+  export_verdict: GeneratedLiveDriveExportVerdict;
+  export_engaged: boolean;
   runner_exit_code: number | null;
   runner_output_excerpt: string;
   runner_error?: string;
@@ -203,6 +207,12 @@ export interface GeneratedLiveDriveUploadScript {
   expectedCharCount: number;
 }
 
+export interface GeneratedLiveDriveExportScript {
+  resultPath: string;
+  stage: string;
+  nonce: string;
+}
+
 export interface GeneratedLiveDriveDelegationReport {
   child_program: string;
   result_status: string | null;
@@ -225,6 +235,26 @@ export interface GeneratedLiveDriveUploadReport {
   uploaded_file_id: string | null;
   refs_landed: boolean;
   upload_accepted: boolean;
+}
+
+export interface GeneratedLiveDriveExportArtifactRecord {
+  artifactType: string;
+  payloadRef: string;
+  artifactId?: string;
+  sourceSessionId?: string;
+  [key: string]: unknown;
+}
+
+export interface GeneratedLiveDriveExportReport {
+  artifact_records: GeneratedLiveDriveExportArtifactRecord[];
+  artifact_record: GeneratedLiveDriveExportArtifactRecord | null;
+  payload_ref: string | null;
+  docx_base64: string | null;
+  docx_bytes: number;
+  nonce_present: boolean;
+  default_absent: boolean;
+  zip_store_ooxml: boolean;
+  extracted_text_sample: string;
 }
 
 export interface GeneratedLiveDriveStatusItem {
@@ -282,6 +312,17 @@ export interface GeneratedLiveDriveUploadVerdict {
   notes: string[];
 }
 
+export interface GeneratedLiveDriveExportVerdict {
+  export_engaged: boolean;
+  artifact_record_harvested: boolean;
+  payload_decoded: boolean;
+  nonce_present: boolean;
+  default_absent: boolean;
+  zip_store_ooxml: boolean;
+  reason: string | null;
+  notes: string[];
+}
+
 export interface GeneratedLiveDriveDelegationAssessmentInput {
   report: GeneratedLiveDriveDelegationReport | null;
   parentSessionId: string | null;
@@ -302,6 +343,12 @@ export interface GeneratedLiveDriveUploadAssessmentInput {
   stubFindings?: readonly string[];
   /** the upload host stage; its items_json may be legitimately empty when it only ingests source. */
   hostStage?: string;
+}
+
+export interface GeneratedLiveDriveExportAssessmentInput {
+  report: GeneratedLiveDriveExportReport | null;
+  expectedPayloadRef: string;
+  nonce: string;
 }
 
 export function buildUploadLiveDriveFixtureText(sentinel: string): string {
@@ -586,6 +633,66 @@ export function assessUploadEngagement(
   };
 }
 
+export function assessExportEngagement(
+  input: GeneratedLiveDriveExportAssessmentInput,
+): GeneratedLiveDriveExportVerdict {
+  const notes: string[] = [];
+  const report = input.report;
+
+  if (!report) {
+    notes.push('export_report_absent');
+  }
+
+  const artifactRecordHarvested = (report?.artifact_records ?? []).some((record) =>
+    record.artifactType === 'docx_export' && record.payloadRef === input.expectedPayloadRef);
+  if (!artifactRecordHarvested) {
+    notes.push('artifact_record_absent');
+  }
+
+  const base64 = report?.docx_base64;
+  const payloadDecoded = typeof base64 === 'string' &&
+    base64.length > 0 &&
+    isStrictBase64(base64) &&
+    Buffer.from(base64, 'base64').length > 0;
+  if (!payloadDecoded) {
+    notes.push(typeof base64 === 'string' && base64.length === 0 ? 'docx_base64_empty' : 'docx_base64_invalid');
+  }
+
+  const parsedDocx = payloadDecoded ? parseStoreOoxmlDocument(Buffer.from(base64 as string, 'base64')) : null;
+  const zipStoreOoxml = parsedDocx !== null;
+  if (!zipStoreOoxml) {
+    notes.push('docx_zip_invalid');
+  }
+
+  const docXml = parsedDocx?.documentXml ?? '';
+  const noncePresent = zipStoreOoxml && input.nonce.length > 0 && docXml.includes(input.nonce);
+  if (!noncePresent) {
+    notes.push('nonce_absent');
+  }
+
+  const defaultAbsent = zipStoreOoxml && !docXml.includes('Client authorized signatory');
+  if (!defaultAbsent) {
+    notes.push('default_export_text_present');
+  }
+
+  const exportEngaged = artifactRecordHarvested &&
+    payloadDecoded &&
+    noncePresent &&
+    defaultAbsent &&
+    zipStoreOoxml;
+
+  return {
+    export_engaged: exportEngaged,
+    artifact_record_harvested: artifactRecordHarvested,
+    payload_decoded: payloadDecoded,
+    nonce_present: noncePresent,
+    default_absent: defaultAbsent,
+    zip_store_ooxml: zipStoreOoxml,
+    reason: exportEngaged ? null : notes[0] ?? 'export_engagement_failed',
+    notes,
+  };
+}
+
 export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptions): Promise<GeneratedLiveDriveResult> {
   const workDir = join(options.targetDir, '.pgas-new-live-drive');
   rmSync(workDir, { recursive: true, force: true });
@@ -605,6 +712,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       options.confirmationScript,
       options.delegationScript,
       options.uploadScript,
+      options.exportScript,
     ));
 
     const runner = await runNodeScript(runnerPath, {
@@ -641,6 +749,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
               PGAS_LIVE_DRIVE_UPLOADS_DIR: join(workDir, 'uploads'),
             }
           : {}),
+        ...(options.exportScript
+          ? { PGAS_LIVE_DRIVE_EXPORT_SCRIPT: JSON.stringify(options.exportScript) }
+          : {}),
       },
     });
 
@@ -652,6 +763,7 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
     const parentSessionId = typeof report?.session_id === 'string' ? report.session_id : null;
     const delegation = parseDelegationReport(report?.delegation);
     const upload = parseUploadReport(report?.upload);
+    const exportReport = parseExportReport(report?.export);
     const delegationVerdict = options.delegationScript
       ? assessDelegationEngagement({
           report: delegation,
@@ -677,6 +789,13 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
           hostStage: options.uploadScript.stage,
         })
       : noUploadScriptVerdict(providerHits);
+    const exportVerdict = options.exportScript
+      ? assessExportEngagement({
+          report: exportReport,
+          expectedPayloadRef: options.exportScript.resultPath,
+          nonce: options.exportScript.nonce,
+        })
+      : noExportScriptVerdict();
     return {
       final_mode: finalMode,
       terminal: report?.terminal === true,
@@ -699,6 +818,9 @@ export async function driveGeneratedProgramLive(options: GeneratedLiveDriveOptio
       upload,
       upload_verdict: uploadVerdict,
       upload_engaged: uploadVerdict.upload_engaged,
+      export: exportReport,
+      export_verdict: exportVerdict,
+      export_engaged: exportVerdict.export_engaged,
       runner_exit_code: runner.exitCode,
       runner_output_excerpt: runner.output.slice(-4_000),
       ...(typeof report?.error === 'string' ? { runner_error: report.error } : {}),
@@ -723,9 +845,13 @@ export function renderLiveDriveRunnerSource(
   confirmationScript?: GeneratedLiveDriveConfirmationScript,
   delegationScript?: GeneratedLiveDriveDelegationScript,
   uploadScript?: GeneratedLiveDriveUploadScript,
+  exportScript?: GeneratedLiveDriveExportScript,
 ): string {
   if (uploadScript) {
     return renderUploadLiveDriveRunnerSource(slug);
+  }
+  if (exportScript) {
+    return renderExportLiveDriveRunnerSource(slug);
   }
   if (delegationScript) {
     return renderDelegationLiveDriveRunnerSource(slug, delegationScript.childProgram);
@@ -1639,6 +1765,387 @@ main().catch((error: unknown) => {
 `;
 }
 
+export function renderExportLiveDriveRunnerSource(slug: string): string {
+  const pascal = toPascalCase(slug);
+  return `import { writeFileSync } from 'node:fs';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { create${pascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+
+const REPORT_PATH = process.env.PGAS_LIVE_DRIVE_REPORT ?? '';
+const ENTRY_CHANNEL = process.env.PGAS_LIVE_DRIVE_ENTRY_CHANNEL ?? 'user_text';
+const INITIAL_TEXT = process.env.PGAS_LIVE_DRIVE_INITIAL_TEXT ?? 'start generated live drive';
+const FINAL_STAGE = process.env.PGAS_LIVE_DRIVE_FINAL_STAGE ?? 'complete';
+const MAX_TRIGGERS = Number(process.env.PGAS_LIVE_DRIVE_MAX_TRIGGERS ?? '12');
+const DEADLINE = Date.now() + Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '540000');
+const exportScript = parseExportScript(process.env.PGAS_LIVE_DRIVE_EXPORT_SCRIPT ?? '');
+
+interface DriveState {
+  mode: string | null;
+  terminal: boolean;
+  roundCount: number;
+  world: Record<string, unknown>;
+  actions: string[];
+  terminalActions: Array<{ name: string; payload_excerpt: string }>;
+}
+
+interface ExportScript {
+  resultPath: string;
+  stage: string;
+  nonce: string;
+}
+
+async function main(): Promise<void> {
+  // Opt-in unified native-tools author driver: mirrors the rendered scaffold's
+  // src/server.ts gating. Default (PGAS_AUTHOR_DRIVER unset) boots the engine's
+  // legacy JSON author path exactly as before; the dynamic import keeps the
+  // default path byte-identical even against a scaffold without the module.
+  let drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  if ((process.env.PGAS_AUTHOR_DRIVER ?? '').trim().toLowerCase() === 'unified') {
+    const authorDriver = await import('../src/author-driver.js');
+    drivers = authorDriver.resolveAuthorDrivers();
+  }
+  const server = await createPgasServer({
+    programs: [{ name: '${slug}', entry: create${pascal}ProgramEntry() }],
+    devMode: true,
+    ...(drivers ? { drivers } : {}),
+  });
+  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+  const created = await client.sessions.create({
+    program: '${slug}',
+    domain_context: { query: INITIAL_TEXT },
+  });
+  const sessionId = created.sessionId;
+
+  let payloadText = INITIAL_TEXT;
+  let triggers = 0;
+  let state = await readState(client, sessionId);
+  while (state.mode !== FINAL_STAGE && !state.terminal && triggers < MAX_TRIGGERS && Date.now() < DEADLINE) {
+    const before = state.roundCount;
+    try {
+      await triggerWithDeadline(client, sessionId, { channel: ENTRY_CHANNEL, payload: payloadText });
+    } catch (error) {
+      if (/terminal/iu.test(String(error))) break;
+      if (isTriggerInFlightTimeout(error)) {
+        const latest = await safeReadState(client, sessionId, state);
+        writeDriveReport({
+          session_id: sessionId,
+          state: latest,
+          triggers,
+          drivers,
+          timeout_kind: 'trigger_in_flight',
+          error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+        });
+        process.exit(1);
+      }
+      throw error;
+    }
+    triggers += 1;
+    payloadText = 'Continue to the next stage of the workflow.';
+    state = await waitForRound(client, sessionId, before);
+  }
+
+  state = await readState(client, sessionId);
+  const exportReport = await exportReportFromArtifacts(client, sessionId, exportScript);
+  writeDriveReport({ session_id: sessionId, state, triggers, drivers, exportReport });
+  process.exit(0);
+}
+
+async function triggerWithDeadline(
+  client: PgasClient,
+  sessionId: string,
+  payload: { channel: string; payload: unknown },
+): Promise<void> {
+  const remaining = DEADLINE - Date.now();
+  if (remaining <= 0) {
+    throw new Error('trigger_in_flight_timeout: deadline reached before trigger');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      client.sessions.trigger(sessionId, payload),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('trigger_in_flight_timeout: trigger exceeded live-drive deadline')), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function isTriggerInFlightTimeout(error: unknown): boolean {
+  return /trigger_in_flight_timeout/u.test(error instanceof Error ? error.message : String(error));
+}
+
+async function waitForRound(client: PgasClient, sessionId: string, before: number): Promise<DriveState> {
+  let latest = await readState(client, sessionId);
+  while (latest.roundCount <= before && !latest.terminal && Date.now() < DEADLINE) {
+    await sleep(1_000);
+    latest = await readState(client, sessionId);
+  }
+  return latest;
+}
+
+async function safeReadState(client: PgasClient, sessionId: string, fallback: DriveState): Promise<DriveState> {
+  try {
+    return await readState(client, sessionId);
+  } catch {
+    return fallback;
+  }
+}
+
+async function readState(client: PgasClient, sessionId: string): Promise<DriveState> {
+  const [envelope, worldResponse, roundsResponse] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+    client.sessions.rounds(sessionId),
+  ]);
+  const rounds = Array.isArray(roundsResponse.rounds) ? roundsResponse.rounds : [];
+  const status = typeof envelope.status === 'string' ? envelope.status : '';
+  const stateRecord = envelope.state as Record<string, unknown> | undefined;
+  const mode = firstString(envelope.mode, stateRecord?.mode);
+  const terminalActions = rounds.flatMap((round) => terminalActionOf(round));
+  return {
+    mode,
+    terminal: Boolean(stateRecord?.terminal ?? envelope.terminal) || status.toLowerCase() === 'completed',
+    roundCount: rounds.length,
+    world: worldResponse.domain as Record<string, unknown>,
+    actions: terminalActions.map((action) => action.name),
+    terminalActions,
+  };
+}
+
+function parseExportScript(raw: string): ExportScript {
+  if (raw.trim().length === 0) {
+    throw new Error('PGAS_LIVE_DRIVE_EXPORT_SCRIPT is required for export live drive');
+  }
+  const parsed = JSON.parse(raw) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error('PGAS_LIVE_DRIVE_EXPORT_SCRIPT must be an object');
+  }
+  const script = {
+    resultPath: stringField(parsed, 'resultPath'),
+    stage: stringField(parsed, 'stage'),
+    nonce: stringField(parsed, 'nonce'),
+  };
+  if (!script.resultPath || !script.stage || !script.nonce) {
+    throw new Error('PGAS_LIVE_DRIVE_EXPORT_SCRIPT is missing required resultPath/stage/nonce');
+  }
+  return script;
+}
+
+async function exportReportFromArtifacts(
+  client: PgasClient,
+  sessionId: string,
+  script: ExportScript,
+): Promise<Record<string, unknown>> {
+  let artifactsRaw: unknown = [];
+  let artifact_error: string | undefined;
+  try {
+    artifactsRaw = await client.sessions.systemArtifacts({ program: '${slug}', artifactType: 'docx_export' });
+  } catch (error) {
+    artifact_error = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  }
+  const artifact_records = artifactRecords(artifactsRaw);
+  const artifact_record = artifact_records.find((record) =>
+    record.artifactType === 'docx_export' && record.payloadRef === script.resultPath) ?? null;
+
+  const worldResponse = await client.sessions.world(sessionId);
+  const world = isRecord(worldResponse.domain) ? worldResponse.domain : {};
+  const payloadRef = typeof artifact_record?.payloadRef === 'string' ? artifact_record.payloadRef : script.resultPath;
+  const payload = recordFromWorldPath(world, payloadRef);
+  const result = resultFromPayload(payload);
+  const docx_base64 = typeof result.docx_base64 === 'string' && result.docx_base64.length > 0
+    ? result.docx_base64
+    : null;
+  const bytes = docx_base64 ? Buffer.from(docx_base64, 'base64') : Buffer.alloc(0);
+  const documentXml = docx_base64 ? extractStoreZipEntryText(bytes, 'word/document.xml') : null;
+
+  return {
+    artifact_records,
+    artifact_record,
+    payload_ref: payloadRef,
+    docx_base64,
+    docx_bytes: bytes.length,
+    nonce_present: documentXml !== null && documentXml.includes(script.nonce),
+    default_absent: documentXml !== null && !documentXml.includes('Client authorized signatory'),
+    zip_store_ooxml: documentXml !== null,
+    extracted_text_sample: documentXml?.slice(0, 4_000) ?? '',
+    ...(artifact_error ? { artifact_error } : {}),
+  };
+}
+
+function artifactRecords(raw: unknown): Array<Record<string, unknown>> {
+  const container = isRecord(raw) && Array.isArray(raw.artifacts) ? raw.artifacts : Array.isArray(raw) ? raw : [];
+  return container.filter(isRecord);
+}
+
+function resultFromPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const resultJson = typeof payload.result_json === 'string' ? parseJsonValue(payload.result_json) : undefined;
+  if (isRecord(resultJson)) {
+    return { ...payload, ...resultJson };
+  }
+  return payload;
+}
+
+function recordFromWorldPath(world: Record<string, unknown>, path: string): Record<string, unknown> {
+  const direct = valueAtWorldPath(world, path);
+  const record = isRecord(direct) ? { ...direct } : {};
+  const prefix = path + '.';
+  for (const [key, value] of Object.entries(world)) {
+    if (!key.startsWith(prefix)) continue;
+    const field = key.slice(prefix.length);
+    if (field.length > 0 && !field.includes('.')) {
+      record[field] = value;
+    }
+  }
+  return record;
+}
+
+function valueAtWorldPath(world: Record<string, unknown>, path: string): unknown {
+  if (Object.prototype.hasOwnProperty.call(world, path)) {
+    return world[path];
+  }
+  let cursor: unknown = world;
+  for (const part of path.split('.')) {
+    if (!isRecord(cursor) || !Object.prototype.hasOwnProperty.call(cursor, part)) {
+      return undefined;
+    }
+    cursor = cursor[part];
+  }
+  return cursor;
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractStoreZipEntryText(bytes: Uint8Array, entryName: string): string | null {
+  const buffer = Buffer.from(bytes);
+  if (buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) {
+    return null;
+  }
+
+  const entries = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 4 <= buffer.length) {
+    const signature = buffer.readUInt32LE(offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) {
+      break;
+    }
+    if (signature !== 0x04034b50 || offset + 30 > buffer.length) {
+      return null;
+    }
+    const method = buffer.readUInt16LE(offset + 8);
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const uncompressedSize = buffer.readUInt32LE(offset + 22);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    if (method !== 0 || compressedSize !== uncompressedSize) {
+      return null;
+    }
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (nameStart + nameLength > buffer.length || dataEnd > buffer.length) {
+      return null;
+    }
+    const name = buffer.subarray(nameStart, nameStart + nameLength).toString('utf8');
+    entries.set(name, buffer.subarray(dataStart, dataEnd));
+    offset = dataEnd;
+  }
+
+  const contentTypes = entries.get('[Content_Types].xml')?.toString('utf8') ?? '';
+  if (!contentTypes.includes('wordprocessingml.document.main+xml')) {
+    return null;
+  }
+  return entries.get(entryName)?.toString('utf8') ?? null;
+}
+
+function writeDriveReport(input: {
+  session_id: string;
+  state: DriveState;
+  triggers: number;
+  drivers: Parameters<typeof createPgasServer>[0]['drivers'];
+  exportReport?: Record<string, unknown>;
+  timeout_kind?: string;
+  error?: string;
+}): void {
+  const report = {
+    final_mode: input.state.mode,
+    terminal: input.state.terminal,
+    rounds: input.state.roundCount,
+    triggers: input.triggers,
+    actions: input.state.actions,
+    terminal_actions: input.state.terminalActions,
+    world: input.state.world,
+    session_id: input.session_id,
+    author_driver: input.drivers ? 'unified' : 'default',
+    export: input.exportReport ?? null,
+    ...(input.timeout_kind ? { timeout_kind: input.timeout_kind } : {}),
+    ...(input.error ? { error: input.error } : {}),
+  };
+  writeReport(report);
+  process.stdout.write(JSON.stringify({ export: report.export }) + '\\n');
+}
+
+function terminalActionOf(round: unknown): Array<{ name: string; payload_excerpt: string }> {
+  if (!round || typeof round !== 'object' || Array.isArray(round)) return [];
+  const result = (round as { result?: unknown }).result;
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return [];
+  const terminal = (result as { terminal?: unknown }).terminal;
+  if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return [];
+  const name = (terminal as { name?: unknown }).name;
+  if (typeof name !== 'string' || name.length === 0) return [];
+  const payload = (terminal as { payload?: unknown }).payload;
+  return [{ name, payload_excerpt: JSON.stringify(payload ?? null).slice(0, 4_000) }];
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function stringField(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function writeReport(report: Record<string, unknown>): void {
+  if (REPORT_PATH.length > 0) {
+    writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error('[live-drive-runner] unhandledRejection:', msg);
+  try { writeReport({ error: 'unhandledRejection: ' + msg }); } catch {}
+  process.exit(1);
+});
+main().catch((error: unknown) => {
+  const msg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error('[live-drive-runner] CRASH:', msg);
+  writeReport({ error: msg });
+  process.exit(1);
+});
+`;
+}
+
 function renderConfirmationLiveDriveRunnerSource(slug: string): string {
   const pascal = toPascalCase(slug);
   return `import { writeFileSync } from 'node:fs';
@@ -2025,6 +2532,7 @@ interface DriveReport {
   status_history?: unknown;
   delegation?: unknown;
   upload?: unknown;
+  export?: unknown;
   timeout_kind?: unknown;
   error?: unknown;
 }
@@ -2111,6 +2619,44 @@ function parseUploadReport(value: unknown): GeneratedLiveDriveUploadReport | nul
   };
 }
 
+function parseExportReport(value: unknown): GeneratedLiveDriveExportReport | null {
+  if (!isRecord(value)) return null;
+  const artifactRecords = parseExportArtifactRecords(value.artifact_records);
+  const artifactRecord = parseExportArtifactRecord(value.artifact_record);
+  return {
+    artifact_records: artifactRecords,
+    artifact_record: artifactRecord,
+    payload_ref: nullableString(value.payload_ref),
+    docx_base64: nullableString(value.docx_base64),
+    docx_bytes: numberOrZero(value.docx_bytes),
+    nonce_present: value.nonce_present === true,
+    default_absent: value.default_absent === true,
+    zip_store_ooxml: value.zip_store_ooxml === true,
+    extracted_text_sample: stringOrEmpty(value.extracted_text_sample),
+  };
+}
+
+function parseExportArtifactRecords(value: unknown): GeneratedLiveDriveExportArtifactRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const record = parseExportArtifactRecord(entry);
+    return record ? [record] : [];
+  });
+}
+
+function parseExportArtifactRecord(value: unknown): GeneratedLiveDriveExportArtifactRecord | null {
+  if (!isRecord(value) || typeof value.artifactType !== 'string' || typeof value.payloadRef !== 'string') {
+    return null;
+  }
+  return {
+    ...value,
+    artifactType: value.artifactType,
+    payloadRef: value.payloadRef,
+    ...(typeof value.artifactId === 'string' ? { artifactId: value.artifactId } : {}),
+    ...(typeof value.sourceSessionId === 'string' ? { sourceSessionId: value.sourceSessionId } : {}),
+  };
+}
+
 function noConfirmationScriptChoreography(providerHits: number): GeneratedLiveDriveChoreographyVerdict {
   return {
     decision_table_respected: true,
@@ -2155,6 +2701,19 @@ function noUploadScriptVerdict(providerHits: number): GeneratedLiveDriveUploadVe
   };
 }
 
+function noExportScriptVerdict(): GeneratedLiveDriveExportVerdict {
+  return {
+    export_engaged: false,
+    artifact_record_harvested: false,
+    payload_decoded: false,
+    nonce_present: false,
+    default_absent: false,
+    zip_store_ooxml: false,
+    reason: 'export_script_absent',
+    notes: ['export_script_absent'],
+  };
+}
+
 function generatedStageOutputStubFindings(world: Record<string, unknown>): string[] {
   const findings: string[] = [];
   for (const [key, value] of Object.entries(world)) {
@@ -2166,6 +2725,62 @@ function generatedStageOutputStubFindings(world: Record<string, unknown>): strin
     }
   }
   return findings;
+}
+
+interface ParsedStoreOoxmlDocument {
+  documentXml: string;
+}
+
+function isStrictBase64(value: string): boolean {
+  return value.length % 4 === 0 &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value) &&
+    Buffer.from(value, 'base64').toString('base64') === value;
+}
+
+function parseStoreOoxmlDocument(bytes: Uint8Array): ParsedStoreOoxmlDocument | null {
+  const buffer = Buffer.from(bytes);
+  if (buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) {
+    return null;
+  }
+
+  const entries = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 4 <= buffer.length) {
+    const signature = buffer.readUInt32LE(offset);
+    if (signature === 0x02014b50 || signature === 0x06054b50) {
+      break;
+    }
+    if (signature !== 0x04034b50 || offset + 30 > buffer.length) {
+      return null;
+    }
+
+    const compressionMethod = buffer.readUInt16LE(offset + 8);
+    const compressedSize = buffer.readUInt32LE(offset + 18);
+    const uncompressedSize = buffer.readUInt32LE(offset + 22);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    if (compressionMethod !== 0 || compressedSize !== uncompressedSize) {
+      return null;
+    }
+
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (nameStart + nameLength > buffer.length || dataEnd > buffer.length) {
+      return null;
+    }
+
+    const name = buffer.subarray(nameStart, nameStart + nameLength).toString('utf8');
+    entries.set(name, buffer.subarray(dataStart, dataEnd));
+    offset = dataEnd;
+  }
+
+  const contentTypes = entries.get('[Content_Types].xml')?.toString('utf8') ?? '';
+  const documentXml = entries.get('word/document.xml')?.toString('utf8');
+  if (!documentXml || !contentTypes.includes('wordprocessingml.document.main+xml')) {
+    return null;
+  }
+  return { documentXml };
 }
 
 function descriptorStatusField(descriptor: ConfirmationLoopDescriptorForScript): string | undefined {

@@ -7,6 +7,7 @@ import {
   deriveConfirmationScript,
   renderLiveDriveRunnerSource,
   type GeneratedLiveDriveDelegationReport,
+  type GeneratedLiveDriveExportScript,
   type GeneratedLiveDriveStatusHistoryEntry,
   type GeneratedLiveDriveUploadReport,
 } from '../../src/pgas-new/generated-live-drive.js';
@@ -181,6 +182,22 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).toContain('client.files.upload(sessionId, form)');
     expect(source).toContain("channel: 'document_upload'");
     expect(source).toContain('uploadReportFromWorld');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
+  });
+
+  it('renders export artifact retrieval only when an export script is present', () => {
+    const exportScript: GeneratedLiveDriveExportScript = {
+      resultPath: 'export_document.output',
+      stage: 'export_document',
+      nonce: 'PGAS-EXPORT-NONCE-unit',
+    };
+    const source = renderLiveDriveRunnerSource('docx-export-live', undefined, undefined, undefined, exportScript);
+
+    expect(source).toContain('PGAS_LIVE_DRIVE_EXPORT_SCRIPT');
+    expect(source).toContain("client.sessions.systemArtifacts({ program: 'docx-export-live', artifactType: 'docx_export' })");
+    expect(source).toContain('exportReportFromArtifacts');
+    expect(source).toContain('extractStoreZipEntryText');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
   });
 });

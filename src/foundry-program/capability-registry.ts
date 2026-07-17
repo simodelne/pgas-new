@@ -95,10 +95,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'export_docx_plain',
-    status: 'scaffolds_with_gap',
-    evidence: 'deterministic DOCX export surface is scaffolded through a foundry-emitted domain-state→sections export stage and bundled standalone OOXML render module.',
-    since_version: '3.22.0',
-    gap_note: 'hermetic-proven (PR-E1 falsifier + PR-E2 emitter); awaiting end-to-end live-drive proof (PR-E3).',
+    status: 'synthesizes',
+    evidence: 'PROVEN end-to-end by the export live-drive against a real provider (qwen36-27b): a generated program drove to complete (4 rounds), the provider composed a memo that flowed through domain state into the foundry-emitted deterministic export stage, which rendered a real OOXML docx harvested as a first-class SessionArtifactRecord via ProgramEntry.artifactPolicy (payloadRef export_document.output). The retrieved+unzipped word/document.xml contained the per-run nonce VERBATIM with the hard-coded fee-proposal default ABSENT and valid STORE OOXML — fail-closed export_engaged verdict all-green (artifact_record_harvested + payload_decoded + nonce_present + default_absent + zip_store_ooxml, all unfakeable). Track-change (w:ins/w:del) remains host-blocked (export_docx_trackchange / simoneos#1738).',
+    since_version: '3.26.0',
   },
   {
     capability: 'export_docx_trackchange',
