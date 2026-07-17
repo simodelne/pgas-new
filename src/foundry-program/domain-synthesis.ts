@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createContext, Script } from 'node:vm';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { createProviderHandles } from '@simodelne/pgas-server/plugin.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { SynthesizedArtifact } from './synthesizer-store.js';
+import type { ExportStageDescriptor, SynthesizedArtifact } from './synthesizer-store.js';
 import { resynthesizeWithReasoningContracts } from './synthesizer.js';
 import {
   synthesizeReasoningContract,
@@ -16,6 +17,9 @@ import {
 
 const SYNTHESIS_VERSION = 'foundry-domain-synthesis-v6';
 const CODEX_CLI_ESCALATION_DRIVER = 'codex-cli';
+const EXPORT_DOCX_IMPORT = '../export/docx.js';
+const EXPORT_HTML_IMPORT = '../export/html.js';
+const EXPORT_TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../templates/pgas-new/consumer');
 const STAGE_BODY_SYSTEM_PREAMBLE = [
   'Return only TypeScript source code. Do not use markdown fences.',
   'Do not include comments.',
@@ -54,6 +58,7 @@ interface StageClassification {
   archetype: string;
   rationale?: string;
   adapter_kind?: string;
+  export_kind?: string;
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
@@ -172,9 +177,14 @@ export async function synthesizeDomainLogic(
     });
     const cachePath = join(cacheDir, `${cacheKey}.json`);
     const repoIntegration = integrationForClassification(classification, integrations);
+    const exportDescriptor = exportDescriptorForStage(workingArtifact, stage, classification);
     const domainSpec = domainSpecForStage(workingArtifact, stage);
     const verificationOptions = {
       stage,
+      ...(exportDescriptor ? {
+        allowedIntegrationImport: exportImportForDescriptor(exportDescriptor),
+        exportKind: exportDescriptor.kind,
+      } : {}),
       ...(repoIntegration ? {
         allowedIntegrationImport: repoIntegration.import,
         integrationName: repoIntegration.name,
@@ -184,7 +194,7 @@ export async function synthesizeDomainLogic(
       ...(domainSpec ? { domainSpec } : {}),
       reasoningContracts,
     };
-    const cached = readCache(cachePath);
+    const cached = exportDescriptor ? undefined : readCache(cachePath);
     if (cached) {
       let behaviorFields = behaviorAuditFields(cached);
       if (classification.adapter_kind === 'repo_integration' && repoIntegration?.kind === 'http_api') {
@@ -218,7 +228,24 @@ export async function synthesizeDomainLogic(
     let fallbackUsed = false;
     let escalationDriver: typeof CODEX_CLI_ESCALATION_DRIVER | undefined;
     let escalationAttemptsUsed = 0;
-    if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
+    if (exportDescriptor) {
+      attemptsUsed = 1;
+      const body = exportDescriptor.kind === 'export_docx'
+        ? renderDocxExportStageBody(stage, exportDescriptor)
+        : renderHtmlExportStageBody(stage, exportDescriptor);
+      const verification = await verifyStageBody(body, classification.archetype, verificationOptions);
+      if (verification.ok) {
+        accepted = {
+          body,
+          body_hash: sha256(body),
+          behavioral_gate: verification.behavioral_gate,
+          behavioral_fixture: verification.behavioral_fixture,
+          real_call_verified: verification.real_call_verified,
+        };
+      } else {
+        lastError = verification.error;
+      }
+    } else if (classification.adapter_kind === 'repo_integration' && repoIntegration) {
       attemptsUsed = 1;
       const body = renderRepoIntegrationStageBody(stage, repoIntegration);
       const verification = await verifyStageBody(body, classification.archetype, verificationOptions);
@@ -371,6 +398,7 @@ function verifyStageBody(
     integrationName?: string;
     integrationMethod?: string;
     integration?: WiringIntegration;
+    exportKind?: ExportStageDescriptor['kind'];
     domainSpec?: StageDomainSpec;
     reasoningContracts?: Record<string, ReasoningStageContract>;
   },
@@ -425,12 +453,14 @@ function typecheckStageBody(
   body: string,
   options: { allowedIntegrationImport?: string },
 ): string | undefined {
-  if (options.allowedIntegrationImport) {
+  if (options.allowedIntegrationImport && !isExportImport(options.allowedIntegrationImport)) {
     return undefined;
   }
 
   const stageFile = '/virtual/pgas/stages/stage.ts';
   const contractsFile = '/virtual/pgas/contracts.ts';
+  const docxFile = '/virtual/pgas/export/docx.ts';
+  const htmlFile = '/virtual/pgas/export/html.ts';
   const compilerOptions: ts.CompilerOptions = {
     noEmit: true,
     strict: true,
@@ -465,6 +495,10 @@ export interface StageOutput {
   digest: string;
   adapter_kind?: 'in_memory_mock' | 'repo_integration';
 }
+
+declare const Buffer: {
+  from(data: Uint8Array): { toString(encoding: 'base64'): string };
+};
 `;
 
   const baseHost = ts.createCompilerHost(compilerOptions, true);
@@ -473,10 +507,14 @@ export interface StageOutput {
     fileExists: (fileName) =>
       fileName === stageFile ||
       fileName === contractsFile ||
+      fileName === docxFile ||
+      fileName === htmlFile ||
       baseHost.fileExists(fileName),
     readFile: (fileName) => {
       if (fileName === stageFile) return body;
       if (fileName === contractsFile) return contractsSource;
+      if (fileName === docxFile) return docxDeclarationSource();
+      if (fileName === htmlFile) return htmlDeclarationSource();
       return baseHost.readFile(fileName);
     },
     getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
@@ -486,12 +524,32 @@ export interface StageOutput {
       if (fileName === contractsFile) {
         return ts.createSourceFile(fileName, contractsSource, languageVersion, true, ts.ScriptKind.TS);
       }
+      if (fileName === docxFile) {
+        return ts.createSourceFile(fileName, docxDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
+      }
+      if (fileName === htmlFile) {
+        return ts.createSourceFile(fileName, htmlDeclarationSource(), languageVersion, true, ts.ScriptKind.TS);
+      }
       return baseHost.getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile);
     },
     resolveModuleNames: (moduleNames) => moduleNames.map((moduleName) => {
       if (moduleName === '../contracts.js') {
         return {
           resolvedFileName: contractsFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      if (moduleName === EXPORT_DOCX_IMPORT) {
+        return {
+          resolvedFileName: docxFile,
+          extension: ts.Extension.Ts,
+          isExternalLibraryImport: false,
+        };
+      }
+      if (moduleName === EXPORT_HTML_IMPORT) {
+        return {
+          resolvedFileName: htmlFile,
           extension: ts.Extension.Ts,
           isExternalLibraryImport: false,
         };
@@ -508,6 +566,22 @@ export interface StageOutput {
   return diagnostics.length > 0
     ? diagnostics.map((diagnostic) => formatDiagnostic(diagnostic)).join('\n')
     : undefined;
+}
+
+function docxDeclarationSource(): string {
+  return `export interface ProgramDocxInput {
+  title?: string;
+  clientName?: string;
+  serviceType?: string;
+  sections?: Array<{ title: string; body: string | string[] }>;
+}
+export function renderStructuredDocxDocument(input: ProgramDocxInput): Uint8Array;
+`;
+}
+
+function htmlDeclarationSource(): string {
+  return `export function renderHtmlDocument(body: string): string;
+`;
 }
 
 function formatDiagnostic(diagnostic: ts.Diagnostic): string {
@@ -958,9 +1032,43 @@ function integrationForClassification(
     : undefined;
 }
 
+function exportDescriptorForStage(
+  artifact: SynthesizedArtifact,
+  stage: string,
+  classification: StageClassification,
+): ExportStageDescriptor | undefined {
+  const descriptor = artifact.export_descriptors?.find((item) => item.stage === stage);
+  if (descriptor) {
+    return descriptor;
+  }
+  if (classification.export_kind === 'export_docx' || classification.export_kind === 'export_html') {
+    return {
+      stage,
+      kind: classification.export_kind,
+      title: `${stage} export`,
+      artifactType: classification.export_kind === 'export_docx' ? 'docx_export' : 'html_export',
+      payloadRef: `${stage}.output`,
+    };
+  }
+  return undefined;
+}
+
+function exportImportForDescriptor(descriptor: ExportStageDescriptor): string {
+  return descriptor.kind === 'export_docx' ? EXPORT_DOCX_IMPORT : EXPORT_HTML_IMPORT;
+}
+
+function isExportImport(value: string): boolean {
+  return value === EXPORT_DOCX_IMPORT || value === EXPORT_HTML_IMPORT;
+}
+
+function exportKindForImport(value: string): ExportStageDescriptor['kind'] {
+  return value === EXPORT_HTML_IMPORT ? 'export_html' : 'export_docx';
+}
+
 function auditFieldsFor(classification: StageClassification): Record<string, unknown> {
   return {
     ...(classification.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+    ...(classification.export_kind ? { export_kind: classification.export_kind } : {}),
     ...(classification.integration_name ? { integration_name: classification.integration_name } : {}),
     ...(classification.integration_import ? { integration_import: classification.integration_import } : {}),
     ...(classification.integration_method ? { integration_method: classification.integration_method } : {}),
@@ -992,6 +1100,7 @@ async function runBehavioralGate(
     integrationName?: string;
     integrationMethod?: string;
     integration?: WiringIntegration;
+    exportKind?: ExportStageDescriptor['kind'];
     domainSpec?: StageDomainSpec;
     reasoningContracts?: Record<string, ReasoningStageContract>;
   },
@@ -1000,6 +1109,12 @@ async function runBehavioralGate(
   | { ok: false; error: string }
 > {
   if (options.allowedIntegrationImport) {
+    if (isExportImport(options.allowedIntegrationImport)) {
+      return runExportBehavioralGate(body, archetype, {
+        ...options,
+        exportKind: options.exportKind ?? exportKindForImport(options.allowedIntegrationImport),
+      });
+    }
     if (options.integration?.kind === 'http_api') {
       return runRepoIntegrationLoopbackGate(body, archetype, {
         ...options,
@@ -1031,6 +1146,56 @@ async function runBehavioralGate(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, error: `behavioral gate failed for stage ${options.stage}: ${message}` };
+  }
+}
+
+async function runExportBehavioralGate(
+  body: string,
+  archetype: 'pure-compute' | 'external-adapter',
+  options: {
+    stage: string;
+    exportKind: ExportStageDescriptor['kind'];
+    domainSpec?: StageDomainSpec;
+    reasoningContracts?: Record<string, ReasoningStageContract>;
+  },
+): Promise<
+  | { ok: true; behavioral_gate: string; behavioral_fixture: StageBehaviorFixture; real_call_verified?: true }
+  | { ok: false; error: string }
+> {
+  try {
+    const importPath = options.exportKind === 'export_docx' ? EXPORT_DOCX_IMPORT : EXPORT_HTML_IMPORT;
+    const runStage = loadRunStageForBehavior(body, {
+      modules: {
+        [importPath]: loadExportTemplateModule(importPath),
+      },
+    });
+    const fixture = behaviorFixtureFor(options.stage, archetype, options.domainSpec, options.reasoningContracts);
+    const output = await withBehaviorTimeout(
+      Promise.resolve(runStage(fixture.input, fixture.runtime)),
+      `export behavioral gate failed for stage ${options.stage}: runStage timed out`,
+    );
+    const behaviorError = assertBehavioralOutput(output, options.stage, archetype, options.domainSpec);
+    if (behaviorError) {
+      return {
+        ok: false,
+        error: formatBehavioralGateFailure(options.stage, behaviorError, fixture.audit),
+      };
+    }
+    const exportError = assertExportBehavioralOutput(output, options.exportKind);
+    if (exportError) {
+      return { ok: false, error: `export behavioral gate failed for stage ${options.stage}: ${exportError}` };
+    }
+    return {
+      ok: true,
+      behavioral_gate: options.exportKind === 'export_docx' ? 'docx_export_render' : 'html_export_render',
+      behavioral_fixture: {
+        ...fixture.audit,
+        expected_items_templates: options.exportKind === 'export_docx' ? ['docx_export:<sha256>'] : ['html_export:<sha256>'],
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `export behavioral gate failed for stage ${options.stage}: ${message}` };
   }
 }
 
@@ -1110,7 +1275,10 @@ async function runRepoIntegrationLoopbackGate(
 
 function loadRunStageForBehavior(
   body: string,
-  options: { env?: Record<string, string | undefined> } = {},
+  options: {
+    env?: Record<string, string | undefined>;
+    modules?: Record<string, Record<string, unknown>>;
+  } = {},
 ): (input: unknown, runtime: unknown) => Promise<unknown> | unknown {
   const transpiled = ts.transpileModule(body, {
     compilerOptions: {
@@ -1124,8 +1292,18 @@ function loadRunStageForBehavior(
   const context = createContext({
     exports: exportsObject,
     module: moduleObject,
+    Buffer,
+    crypto: globalThis.crypto,
     fetch,
     process: { env: options.env ?? process.env },
+    require: (specifier: string) => {
+      const moduleExports = options.modules?.[specifier];
+      if (!moduleExports) {
+        throw new Error(`behavioral gate module not available: ${specifier}`);
+      }
+      return moduleExports;
+    },
+    TextEncoder,
     URL,
   });
   new Script(transpiled.outputText, { filename: 'stage.behavior.cjs' }).runInContext(context, {
@@ -1137,6 +1315,64 @@ function loadRunStageForBehavior(
     throw new Error('runStage export was not callable');
   }
   return runStage as (input: unknown, runtime: unknown) => Promise<unknown> | unknown;
+}
+
+function assertExportBehavioralOutput(output: unknown, exportKind: ExportStageDescriptor['kind']): string | undefined {
+  const result = parseOutputResult(output);
+  const sha256Value = result.sha256;
+  if (typeof sha256Value !== 'string' || !/^[a-f0-9]{64}$/u.test(sha256Value)) {
+    return 'result_json.sha256 must be a lowercase SHA-256 hex string';
+  }
+  if (typeof result.section_count !== 'number' || result.section_count <= 0) {
+    return 'result_json.section_count must be a positive number';
+  }
+  if (exportKind === 'export_docx') {
+    if (typeof result.docx_base64 !== 'string' || result.docx_base64.length === 0) {
+      return 'result_json.docx_base64 must be a non-empty string';
+    }
+    const bytes = Buffer.from(result.docx_base64, 'base64');
+    if (bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) {
+      return 'decoded docx_base64 must start with a ZIP local-file header';
+    }
+    if (result.docx_bytes !== bytes.length) {
+      return 'result_json.docx_bytes must equal decoded byte length';
+    }
+    const expected = createHash('sha256').update(bytes).digest('hex');
+    return sha256Value === expected ? undefined : 'result_json.sha256 must hash decoded docx bytes';
+  }
+  if (typeof result.html !== 'string' || !result.html.startsWith('<!doctype html>')) {
+    return 'result_json.html must contain a rendered HTML document';
+  }
+  const htmlBytes = new TextEncoder().encode(result.html);
+  if (result.html_bytes !== htmlBytes.length) {
+    return 'result_json.html_bytes must equal encoded HTML byte length';
+  }
+  const expected = createHash('sha256').update(htmlBytes).digest('hex');
+  return sha256Value === expected ? undefined : 'result_json.sha256 must hash rendered HTML bytes';
+}
+
+function loadExportTemplateModule(importPath: string): Record<string, unknown> {
+  const template = importPath === EXPORT_DOCX_IMPORT ? 'export-docx.ts.tmpl' : 'export-html.ts.tmpl';
+  const source = readFileSync(join(EXPORT_TEMPLATE_ROOT, template), 'utf8').replaceAll('{{NAME}}', 'Behavior Export');
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      strict: true,
+    },
+  });
+  const exportsObject: Record<string, unknown> = {};
+  const moduleObject = { exports: exportsObject };
+  const context = createContext({
+    exports: exportsObject,
+    module: moduleObject,
+    TextEncoder,
+    Uint8Array,
+  });
+  new Script(transpiled.outputText, { filename: `${template}.behavior.cjs` }).runInContext(context, {
+    timeout: 1_000,
+  });
+  return moduleObject.exports as Record<string, unknown>;
 }
 
 function behaviorFixtureFor(
@@ -1929,6 +2165,181 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
     digest: '',
     adapter_kind: 'repo_integration',
   };
+}
+`;
+}
+
+function renderDocxExportStageBody(stage: string, descriptor: ExportStageDescriptor): string {
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+import { renderStructuredDocxDocument } from '../export/docx.js';
+
+declare const Buffer: {
+  from(data: Uint8Array): { toString(encoding: 'base64'): string };
+};
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const sections = sectionsFromDomain(input.domain, input.stage);
+  const bytes = renderStructuredDocxDocument({
+    title: ${tsString(descriptor.title)},
+    sections,
+  });
+  const sha256 = await sha256Hex(bytes);
+  const result = {
+    stage: input.stage,
+    docx_base64: Buffer.from(bytes).toString('base64'),
+    docx_bytes: bytes.length,
+    sha256,
+    section_count: sections.length,
+  };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify(['docx_export:' + result.sha256]),
+    digest: '',
+  };
+}
+${exportSectionHelpers(stage)}
+${sha256Helper()}
+`;
+}
+
+function renderHtmlExportStageBody(stage: string, descriptor: ExportStageDescriptor): string {
+  return `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+import { renderHtmlDocument } from '../export/html.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const sections = sectionsFromDomain(input.domain, input.stage);
+  const html = renderHtmlDocument(sectionsToHtml(${tsString(descriptor.title)}, sections));
+  const bytes = new TextEncoder().encode(html);
+  const sha256 = await sha256Hex(bytes);
+  const result = {
+    stage: input.stage,
+    html,
+    html_bytes: bytes.length,
+    sha256,
+    section_count: sections.length,
+  };
+  return {
+    result_json: JSON.stringify(result),
+    items_json: JSON.stringify(['html_export:' + result.sha256]),
+    digest: '',
+  };
+}
+${exportSectionHelpers(stage)}
+
+function sectionsToHtml(title: string, sections: ExportSection[]): string {
+  return [
+    '<section><h1>' + escapeHtml(title) + '</h1></section>',
+    ...sections.map((section) => '<section><h2>' + escapeHtml(section.title) + '</h2>' + toParagraphs(section.body).map((line) => '<p>' + escapeHtml(line) + '</p>').join('') + '</section>'),
+  ].join('\\n');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+${sha256Helper()}
+`;
+}
+
+function exportSectionHelpers(stage: string): string {
+  return `
+interface ExportSection {
+  title: string;
+  body: string | string[];
+}
+
+function sectionsFromDomain(domain: Record<string, unknown>, stage: string): ExportSection[] {
+  const sections: ExportSection[] = [];
+  for (const key of Object.keys(domain).sort()) {
+    if (key.startsWith(stage + '.')) {
+      continue;
+    }
+    const value = domain[key];
+    const section = sectionForDomainValue(key, value);
+    if (section) {
+      sections.push(section);
+    }
+  }
+  return sections.length > 0
+    ? sections
+    : [{ title: humanizePath(${tsString(stage)}), body: 'No accumulated domain state was available for export.' }];
+}
+
+function sectionForDomainValue(path: string, value: unknown): ExportSection | undefined {
+  if (isStageOutput(value)) {
+    const parsed = parseJsonValue(value.result_json);
+    return {
+      title: humanizePath(path),
+      body: stableStringify(parsed ?? { result_json: value.result_json }),
+    };
+  }
+  if (path.endsWith('.result_json') && typeof value === 'string') {
+    const parsed = parseJsonValue(value);
+    return {
+      title: humanizePath(path),
+      body: stableStringify(parsed ?? value),
+    };
+  }
+  if (path.startsWith('work.') && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
+    return {
+      title: humanizePath(path),
+      body: String(value),
+    };
+  }
+  return undefined;
+}
+
+function isStageOutput(value: unknown): value is { result_json: string; items_json?: string; digest?: string } {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && typeof (value as { result_json?: unknown }).result_json === 'string';
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableStringify).join(', ') + ']';
+  }
+  const record = value as Record<string, unknown>;
+  return '{' + Object.keys(record).sort().map((key) => JSON.stringify(key) + ': ' + stableStringify(record[key])).join(', ') + '}';
+}
+
+function humanizePath(path: string): string {
+  const words = path
+    .replace(/\\.output(?:\\.result_json)?$/u, '')
+    .replace(/\\.result_json$/u, '')
+    .split(/[._-]+/u)
+    .filter(Boolean);
+  const label = words.map((word) => word.slice(0, 1).toUpperCase() + word.slice(1)).join(' ');
+  return label.length > 0 ? label : 'Program State';
+}
+
+function toParagraphs(body: string | string[]): string[] {
+  return Array.isArray(body) ? body : body.split(/\\n+/u);
+}
+`;
+}
+
+function sha256Helper(): string {
+  return `
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const view = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const digest = await crypto.subtle.digest('SHA-256', view);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 `;
 }

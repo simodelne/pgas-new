@@ -40,6 +40,20 @@ export interface DocumentsDescriptor {
   connector_slug?: string;
 }
 
+export interface ExportSurfaces {
+  docx?: boolean;
+  html?: boolean;
+  diff?: boolean;
+}
+
+export interface ExportStageDescriptor {
+  stage: string;
+  kind: 'export_docx' | 'export_html';
+  title: string;
+  artifactType: 'docx_export' | 'html_export';
+  payloadRef: string;
+}
+
 export interface SynthesisContext {
   program_slug: string;
   program_name: string;
@@ -64,6 +78,8 @@ export interface SynthesisContext {
   }>;
   delegation: DelegationDescriptor;
   documents?: DocumentsDescriptor;
+  export_descriptors?: ExportStageDescriptor[];
+  export_surfaces?: ExportSurfaces;
   interaction?: {
     confirmation_loops: Array<{
       collection: string;
@@ -144,6 +160,8 @@ export interface SynthesizedArtifact {
   tools_ts: string;
   smoke_test_ts: string;
   capability_gaps?: CapabilityGap[];
+  export_surfaces?: ExportSurfaces;
+  export_descriptors?: ExportStageDescriptor[];
   child_artifacts?: Array<Omit<SynthesizedArtifact, 'created_at' | 'child_artifacts'> & {
     slug: string;
     name: string;

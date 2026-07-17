@@ -88,17 +88,17 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'export_html',
-    status: 'refuses',
-    evidence: 'no synthesis of an HTML export/render artifact path.',
+    status: 'scaffolds_with_gap',
+    evidence: 'deterministic HTML export surface is scaffolded through a foundry-emitted export stage and bundled standalone render module.',
     since_version: '3.22.0',
-    gap_note: 'uplift PR-10 (export boundaries).',
+    gap_note: 'hermetic-proven (PR-E1 falsifier + PR-E2 emitter); awaiting end-to-end live-drive proof (PR-E3).',
   },
   {
     capability: 'export_docx_plain',
-    status: 'refuses',
-    evidence: 'no synthesis wiring into a DOCX export path (no domain-state→sections export stage; render emitted for existing-repo only).',
+    status: 'scaffolds_with_gap',
+    evidence: 'deterministic DOCX export surface is scaffolded through a foundry-emitted domain-state→sections export stage and bundled standalone OOXML render module.',
     since_version: '3.22.0',
-    gap_note: 'uplift PR-10 (export boundaries). Plain-DOCX byte generation is PORTABLE pure-compute — export-docx.ts.tmpl emits a real OOXML ZIP with no host, LLM, or network (the PR-E1 route-level falsifier proves the render + engine domain-injection seam). Refuses pending the synthesis emitter (PR-E2: standalone bundling + domain-state→sections export stage → scaffolds_with_gap) and end-to-end live-drive (PR-E3 → synthesizes). Only track-change (w:ins/w:del) is genuinely host-blocked (see export_docx_trackchange / simoneos#1738).',
+    gap_note: 'hermetic-proven (PR-E1 falsifier + PR-E2 emitter); awaiting end-to-end live-drive proof (PR-E3).',
   },
   {
     capability: 'export_docx_trackchange',

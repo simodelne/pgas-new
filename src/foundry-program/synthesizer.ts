@@ -4,11 +4,11 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
-import { loadSpecWithPatterns, reconstructArray, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
+import { loadSpecWithPatterns, reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
 import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
-import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentsDescriptor, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
-import { CapabilityRefusalError, assertSynthesizableCapabilities } from './capability-registry.js';
+import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
+import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
 import { parseAndNormalizeStagesJson } from './json-normalize.js';
 import {
@@ -29,6 +29,8 @@ interface Stage {
   slug: string;
   is_bootstrap?: boolean;
   is_terminal?: boolean;
+  kind?: string;
+  export_kind?: string;
   domain_spec?: StageDomainSpec;
 }
 
@@ -160,6 +162,8 @@ export interface SynthesizedSpec {
   smoke_test_ts: string;
   stage_sources?: Record<string, string>;
   capability_gaps?: CapabilityGap[];
+  export_surfaces?: ExportSurfaces;
+  export_descriptors?: ExportStageDescriptor[];
   child_artifacts?: SynthesizedChildArtifact[];
   stage_classification: ClassifiedStage[];
   body_stage_slugs: string[];
@@ -187,6 +191,7 @@ interface TransitionAction {
   guardField?: string;
   archetype: StageArchetype;
   adapter_kind?: 'in_memory_mock' | 'repo_integration';
+  export_kind?: 'export_docx' | 'export_html';
   integration_name?: string;
   integration_import?: string;
   integration_method?: string;
@@ -301,7 +306,11 @@ export function synthesizeProgramSpecFromDomain(
   // document upload, rich frontend, DOCX/track-changes). No detectors fire for
   // today's linear / external-adapter programs, so this is a no-op for them and
   // golden byte-identity is preserved.
-  assertSynthesizableCapabilities({ purpose, stages, delegation, documents, completion });
+  const capabilityInput = { purpose, stages, delegation, documents, completion };
+  const requestedCapabilities = detectRequestedCapabilities(capabilityInput);
+  assertSynthesizableCapabilities(capabilityInput);
+  const exportDescriptors = exportDescriptorsFor(stages, requestedCapabilities, name);
+  const exportSurfaces = exportSurfacesFor(exportDescriptors, requestedCapabilities);
 
   assertStages(stages);
   assertTransitions(transitions);
@@ -314,12 +323,15 @@ export function synthesizeProgramSpecFromDomain(
       collection_lifecycle: collectionLifecycle,
     };
   }
-  const stageClassification = bindRepoIntegrations(
-    classifyStagesForDomain({
-    ...domain,
-    'intake.stages_json': JSON.stringify(stages),
-    }),
-    options,
+  const stageClassification = applyExportDescriptorsToClassifications(
+    bindRepoIntegrations(
+      classifyStagesForDomain({
+        ...domain,
+        'intake.stages_json': JSON.stringify(stages),
+      }),
+      options,
+    ),
+    exportDescriptors,
   );
   const stageClassificationBySlug = new Map(stageClassification.map((stage) => [stage.slug, stage]));
   if (confirmationLoops.length > 0) {
@@ -381,6 +393,12 @@ export function synthesizeProgramSpecFromDomain(
   const firstWorkMode = transitionActions.find((transition) => transition.source === firstMode)?.target ?? intermediateModes[0];
   const childArtifacts = synthesizeDelegationChildArtifacts(slug, name, delegationChildren);
   const capabilityGaps = capabilityGapsForDelegationChildren(delegationChildren);
+  const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors);
+  const registrationPolicies = {
+    ...(delegationChildren.length > 0 ? { delegationPolicy: delegationPolicyForChildren(delegationChildren) } : {}),
+    ...(artifactPolicy ? { artifactPolicy } : {}),
+  };
+  const hasRegistrationPolicies = Object.keys(registrationPolicies).length > 0;
 
   const renderedSkeleton = renderTemplate(readFileSync(SKELETON_PATH, 'utf8'), {
     NAME: name,
@@ -647,11 +665,11 @@ export function synthesizeProgramSpecFromDomain(
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
-    ...(delegationChildren.length > 0 ? {
-      registration_ts: renderRegistrationSource(toPascalCase(slug), {
-        delegationPolicy: delegationPolicyForChildren(delegationChildren),
-      }),
+    ...(hasRegistrationPolicies ? {
+      registration_ts: renderRegistrationSource(toPascalCase(slug), registrationPolicies),
     } : {}),
+    ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
+    ...(exportDescriptors.length > 0 ? { export_descriptors: exportDescriptors } : {}),
     ...(childArtifacts.length > 0 ? { child_artifacts: childArtifacts } : {}),
     stage_classification: stageClassification,
     body_stage_slugs: bodyStageSlugs,
@@ -664,6 +682,8 @@ export function synthesizeProgramSpecFromDomain(
       transitions,
       delegation,
       ...(documents ? { documents } : {}),
+      ...(hasExportSurfaces(exportSurfaces) ? { export_surfaces: exportSurfaces } : {}),
+      ...(exportDescriptors.length > 0 ? { export_descriptors: exportDescriptors } : {}),
       ...(interaction ? { interaction } : {}),
       completion,
     },
@@ -2006,6 +2026,7 @@ function decorateTransitionActions(
       ...action,
       archetype: classification?.archetype ?? 'pure-compute',
       ...(classification?.adapter_kind ? { adapter_kind: classification.adapter_kind } : {}),
+      ...(classification?.export_kind ? { export_kind: classification.export_kind } : {}),
       ...(classification?.integration_name ? { integration_name: classification.integration_name } : {}),
       ...(classification?.integration_import ? { integration_import: classification.integration_import } : {}),
       ...(classification?.integration_method ? { integration_method: classification.integration_method } : {}),
@@ -2013,6 +2034,124 @@ function decorateTransitionActions(
       ...(classification?.audit_note ? { audit_note: classification.audit_note } : {}),
     };
   });
+}
+
+function exportDescriptorsFor(
+  stages: Stage[],
+  demands: ReadonlyArray<{ capability: string }>,
+  programName: string,
+): ExportStageDescriptor[] {
+  const descriptors: ExportStageDescriptor[] = [];
+  const usedStages = new Set<string>();
+  const addDescriptor = (stage: string, kind: ExportStageDescriptor['kind']): void => {
+    if (usedStages.has(stage)) {
+      return;
+    }
+    usedStages.add(stage);
+    const docx = kind === 'export_docx';
+    descriptors.push({
+      stage,
+      kind,
+      title: docx ? `${programName} DOCX Export` : `${programName} HTML Export`,
+      artifactType: docx ? 'docx_export' : 'html_export',
+      payloadRef: `${stage}.output`,
+    });
+  };
+
+  for (const stage of stages) {
+    const kind = explicitStageExportKind(stage);
+    if (kind && !stage.is_bootstrap && !stage.is_terminal) {
+      addDescriptor(stage.slug, kind);
+    }
+  }
+
+  const demandedKinds = new Set<ExportStageDescriptor['kind']>();
+  if (demands.some((demand) => demand.capability === 'export_docx_plain')) {
+    demandedKinds.add('export_docx');
+  }
+  if (demands.some((demand) => demand.capability === 'export_html')) {
+    demandedKinds.add('export_html');
+  }
+
+  for (const kind of demandedKinds) {
+    if (descriptors.some((descriptor) => descriptor.kind === kind)) {
+      continue;
+    }
+    const stage = chooseExportStageForDemand(stages, kind, usedStages);
+    if (stage) {
+      addDescriptor(stage.slug, kind);
+    }
+  }
+
+  const stageOrder = new Map(stages.map((stage, index) => [stage.slug, index]));
+  return descriptors.sort((left, right) => (stageOrder.get(left.stage) ?? 0) - (stageOrder.get(right.stage) ?? 0));
+}
+
+function exportSurfacesFor(
+  descriptors: readonly ExportStageDescriptor[],
+  demands: ReadonlyArray<{ capability: string }>,
+): ExportSurfaces {
+  const surfaces: ExportSurfaces = {
+    ...(descriptors.some((descriptor) => descriptor.kind === 'export_docx') || demands.some((demand) => demand.capability === 'export_docx_plain')
+      ? { docx: true }
+      : {}),
+    ...(descriptors.some((descriptor) => descriptor.kind === 'export_html') || demands.some((demand) => demand.capability === 'export_html')
+      ? { html: true }
+      : {}),
+  };
+  return surfaces;
+}
+
+function hasExportSurfaces(surfaces: ExportSurfaces): boolean {
+  return surfaces.docx === true || surfaces.html === true || surfaces.diff === true;
+}
+
+function applyExportDescriptorsToClassifications(
+  stages: ClassifiedStage[],
+  descriptors: readonly ExportStageDescriptor[],
+): ClassifiedStage[] {
+  const byStage = new Map(descriptors.map((descriptor) => [descriptor.stage, descriptor]));
+  return stages.map((stage) => {
+    const descriptor = byStage.get(stage.slug);
+    if (!descriptor) {
+      return stage;
+    }
+    return {
+      slug: stage.slug,
+      archetype: 'pure-compute',
+      export_kind: descriptor.kind,
+      rationale: `pure compute export: ${stage.slug} is bound to ${descriptor.kind} descriptor ${descriptor.payloadRef}.`,
+    };
+  });
+}
+
+function explicitStageExportKind(stage: Stage): ExportStageDescriptor['kind'] | undefined {
+  const raw = [stage.kind, stage.export_kind]
+    .find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)
+    ?.trim()
+    .toLowerCase();
+  if (raw === 'export_docx' || raw === 'docx_export') return 'export_docx';
+  if (raw === 'export_html' || raw === 'html_export') return 'export_html';
+  return undefined;
+}
+
+function chooseExportStageForDemand(
+  stages: Stage[],
+  kind: ExportStageDescriptor['kind'],
+  usedStages: ReadonlySet<string>,
+): Stage | undefined {
+  const candidates = stages.filter((stage) => !stage.is_bootstrap && !stage.is_terminal && !usedStages.has(stage.slug));
+  const wanted = kind === 'export_docx' ? /(?:docx|word|export|render|assemble|format)/u : /(?:html|export|render|assemble|format)/u;
+  return candidates.find((stage) => wanted.test(exportStageHaystack(stage))) ?? candidates.at(-1);
+}
+
+function exportStageHaystack(stage: Stage): string {
+  return [
+    stage.slug,
+    stage.kind,
+    stage.export_kind,
+    stage.domain_spec ? JSON.stringify(stage.domain_spec) : '',
+  ].filter((value): value is string => typeof value === 'string').join(' ').toLowerCase();
 }
 
 function bindRepoIntegrations(
@@ -3536,6 +3675,7 @@ export const stageReasoningContracts = ${JSON.stringify(Object.fromEntries(reaso
         output_path: action.archetype === 'llm-reasoning' ? `${action.source}.result_json` : `${action.source}.output`,
         guard_path: action.guardField,
         adapter_kind: action.adapter_kind,
+        export_kind: action.export_kind,
         integration_name: action.integration_name,
         integration_import: action.integration_import,
         integration_method: action.integration_method,
@@ -4834,11 +4974,29 @@ function delegationResultPolicyForChild(child: DelegationChildDescriptor): {
   };
 }
 
+function artifactPolicyForExportDescriptors(descriptors: readonly ExportStageDescriptor[]): ProgramArtifactPolicy | undefined {
+  if (descriptors.length === 0) {
+    return undefined;
+  }
+  return {
+    rules: descriptors.map((descriptor) => ({
+      artifactType: descriptor.artifactType,
+      title: descriptor.title,
+      summary: descriptor.kind === 'export_docx'
+        ? 'Deterministically rendered DOCX artifact; payload bytes are base64 in domain state.'
+        : 'Deterministically rendered HTML artifact; payload is in domain state.',
+      payloadRef: descriptor.payloadRef,
+      whenAllPaths: [`${descriptor.payloadRef}.result_json`],
+    })),
+  };
+}
+
 function renderRegistrationSource(
   pascalName: string,
   policies: {
     delegationPolicy?: { allowedTargetPrograms: string[]; inputEnrichment: Array<{ source: string; target: string }> };
     delegationResultPolicy?: { fields: Array<{ path: string; key: string }> };
+    artifactPolicy?: ProgramArtifactPolicy;
   } = {},
 ): string {
   const policyEntries = [
@@ -4847,6 +5005,9 @@ function renderRegistrationSource(
       : '',
     policies.delegationResultPolicy
       ? `    delegationResultPolicy: ${renderTsValue(policies.delegationResultPolicy)},`
+      : '',
+    policies.artifactPolicy
+      ? `    artifactPolicy: ${renderTsValue(policies.artifactPolicy)},`
       : '',
   ].filter(Boolean).join('\n');
   return `import {

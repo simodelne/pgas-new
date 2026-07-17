@@ -6,6 +6,7 @@ import {
   createExistingRepoArtifactPlan,
   createStandaloneArtifactPlan,
   type ArtifactPlan,
+  type GeneratedArtifactPlanOptions,
   type PlannedArtifact,
   type ProgramIdentity,
 } from './artifact-plan.js';
@@ -33,6 +34,7 @@ export interface RenderStandaloneOptions extends ProgramIdentity {
   synthesizedToolsTs?: string;
   synthesizedSmokeTestTs?: string;
   synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
+  synthesizedExportSurfaces?: GeneratedArtifactPlanOptions['exportSurfaces'];
 }
 
 export interface RenderExistingRepoOptions extends ProgramIdentity {
@@ -72,6 +74,7 @@ interface SynthesizedSources {
   stageSources?: Record<string, string>;
   toolsTs?: string;
   smokeTestTs?: string;
+  exportSurfaces?: GeneratedArtifactPlanOptions['exportSurfaces'];
   capabilityGaps: CapabilityGapInput[];
   childArtifacts: SynthesizedChildSources[];
 }
@@ -141,6 +144,7 @@ export function renderStandaloneScaffold(options: RenderStandaloneOptions): Rend
       stageSlugs: Object.keys(synthesizedSources.stageSources ?? {}),
       includeSmokeTest: typeof synthesizedSources.smokeTestTs === 'string',
       capabilityGaps: synthesizedSources.capabilityGaps,
+      exportSurfaces: synthesizedSources.exportSurfaces,
     },
   );
   const plan = withSynthesizedChildArtifacts(basePlan, synthesizedSources.childArtifacts);
@@ -360,6 +364,9 @@ function templateForExistingUserFacingArtifact(artifact: PlannedArtifact, slug: 
   if (path.endsWith(`/${slug}/export/docx.ts`)) {
     return spec('consumer/export-docx.ts.tmpl', ['NAME']);
   }
+  if (path.endsWith(`/${slug}/export/diff.ts`)) {
+    return spec('consumer/export-diff.ts.tmpl', []);
+  }
   if (path === `tests/${slug}-deterministic.test.ts`) {
     return spec('consumer/deterministic.test.ts.tmpl', ['CAMEL_NAME', 'SLUG']);
   }
@@ -437,6 +444,15 @@ function templateForStandalonePath(path: string, slug: string): TemplateSpec | u
   }
   if (path === `src/programs/${slug}/tools.ts`) {
     return STANDALONE_TEMPLATE_BY_PATH['src/programs/{{SLUG}}/tools.ts'];
+  }
+  if (path === `src/programs/${slug}/export/html.ts`) {
+    return spec('consumer/export-html.ts.tmpl', ['NAME']);
+  }
+  if (path === `src/programs/${slug}/export/docx.ts`) {
+    return spec('consumer/export-docx.ts.tmpl', ['NAME']);
+  }
+  if (path === `src/programs/${slug}/export/diff.ts`) {
+    return spec('consumer/export-diff.ts.tmpl', []);
   }
 
   return STANDALONE_TEMPLATE_BY_PATH[path];
@@ -930,6 +946,7 @@ function synthesizedSourcesFor(options: {
   synthesizedStageSources?: Record<string, string>;
   synthesizedToolsTs?: string;
   synthesizedSmokeTestTs?: string;
+  synthesizedExportSurfaces?: GeneratedArtifactPlanOptions['exportSurfaces'];
   synthesizedCapabilityGaps?: CapabilityGapInput[];
   synthesizedChildArtifacts?: SynthesizedChildSourceInput[];
 }): SynthesizedSources {
@@ -942,6 +959,7 @@ function synthesizedSourcesFor(options: {
     stageSources: options.synthesizedStageSources,
     toolsTs: options.synthesizedToolsTs,
     smokeTestTs: options.synthesizedSmokeTestTs,
+    exportSurfaces: options.synthesizedExportSurfaces,
     capabilityGaps: options.synthesizedCapabilityGaps ?? [],
     childArtifacts: (options.synthesizedChildArtifacts ?? []).map((child) => ({
       slug: child.slug,

@@ -85,6 +85,7 @@ describe('artifact planner', () => {
       'programs/review/frontend.spec.yml',
       'programs/review/export/html.ts',
       'programs/review/export/docx.ts',
+      'programs/review/export/diff.ts',
       'programs/review/handlers.ts',
       'programs/review/handlers/index.ts',
       'programs/review/handlers/_resolver.ts',
