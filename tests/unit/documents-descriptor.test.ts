@@ -98,7 +98,7 @@ describe('documents descriptor validation', () => {
     expectValidationThrow(validDocuments({ upload_types: ['image/png'] }), /upload_types must be a subset of the engine upload allow-list/u);
   });
 
-  it('routes self-contained binary extraction to an honest capability refusal', () => {
+  it('routes self-contained PDF extraction to an honest capability refusal', () => {
     let thrown: unknown;
     try {
       assertDocumentsDescriptor(validDocuments({ upload_types: ['application/pdf'] }), validationContext);
@@ -108,10 +108,23 @@ describe('documents descriptor validation', () => {
     expect(thrown).toBeInstanceOf(CapabilityRefusalError);
     const err = thrown as CapabilityRefusalError;
     expect(err.refused.map((demand) => demand.capability)).toContain('document_upload_intake');
-    expect(err.message).toContain('DOCX/PDF extraction is a host connector — use extraction: host_connector (PR-U5); self-contained is text/markdown only');
+    expect(err.message).toContain('PDF extraction is a host connector');
+    expect(err.message).toContain('self-contained DOCX is supported');
   });
 
-  it('allows binary upload types only with host_connector extraction', () => {
+  it('allows self-contained DOCX extraction', () => {
+    expect(() =>
+      assertDocumentsDescriptor(
+        validDocuments({
+          upload_types: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+          extraction: 'self_contained',
+        }),
+        validationContext,
+      ),
+    ).not.toThrow();
+  });
+
+  it('allows binary upload types with host_connector extraction', () => {
     expect(() =>
       assertDocumentsDescriptor(
         validDocuments({

@@ -390,7 +390,11 @@ export const handlers: Record<string, ToolHandler> = {
       tools_ts: synthesized.tools_ts,
       smoke_test_ts: synthesized.smoke_test_ts,
       export_surfaces: synthesized.export_surfaces,
+      document_extraction_surfaces: synthesized.document_extraction_surfaces,
       export_descriptors: synthesized.export_descriptors,
+      capability_gaps: synthesized.capability_gaps,
+      registration_ts: synthesized.registration_ts,
+      child_artifacts: synthesized.child_artifacts,
       stage_classification: synthesized.stage_classification,
       body_stage_slugs: synthesized.body_stage_slugs,
       synthesis_context: synthesized.synthesis_context,
@@ -689,6 +693,7 @@ export const handlers: Record<string, ToolHandler> = {
           synthesizedStageSources: stageSources,
           synthesizedToolsTs: synthesized.tools_ts,
           synthesizedSmokeTestTs: synthesized.smoke_test_ts,
+          synthesizedDocumentExtractionSurfaces: synthesized.document_extraction_surfaces,
         })
       : renderStandaloneScaffold({
           ...program,
@@ -702,6 +707,7 @@ export const handlers: Record<string, ToolHandler> = {
           synthesizedToolsTs: synthesized.tools_ts,
           synthesizedSmokeTestTs: synthesized.smoke_test_ts,
           synthesizedExportSurfaces: synthesized.export_surfaces,
+          synthesizedDocumentExtractionSurfaces: synthesized.document_extraction_surfaces,
           synthesizedCapabilityGaps: synthesized.capability_gaps,
           synthesizedChildArtifacts: synthesized.child_artifacts,
         });
@@ -1311,10 +1317,12 @@ function planArtifactsFromPayload(payload: Record<string, unknown>) {
     ? createExistingRepoArtifactPlan(program, parseWiringManifestDomainField(domain), {
         stageSlugs: existingRepoStageSlugs(synthesized),
         requestedArtifactPaths: requestedArtifactPathsFromDomain(domain),
+        documentExtractionSurfaces: synthesized.document_extraction_surfaces,
       })
     : createStandaloneArtifactPlan(program, {
         stageSlugs: synthesized.body_stage_slugs,
         exportSurfaces: synthesized.export_surfaces,
+        documentExtractionSurfaces: synthesized.document_extraction_surfaces,
       });
 
   return plan.artifacts;
