@@ -80,6 +80,20 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
     since_version: '3.25.0',
   },
   {
+    capability: 'document_extraction_docx',
+    status: 'refuses',
+    evidence: 'PR-U5-F adds the hermetic route-level falsifier and reference DOCX extractor fixture; the foundry emitter and live-drive proof have not landed in this PR.',
+    since_version: '3.27.0',
+    gap_note: 'hermetic mechanism proven by extraction falsifier PR-U5-F; deterministic DOCX extractor emitter is PR-U5-E, live flip PR-U5-L',
+  },
+  {
+    capability: 'document_extraction_pdf',
+    status: 'refuses',
+    evidence: 'General PDF text extraction requires host-side font/CMap semantics; PR-U5-F includes only a minimal-PDF negative control and no portable PDF extractor.',
+    since_version: '3.27.0',
+    gap_note: 'host-connector track; typed connector + mock + capability_gap in PR-U5-E; extraction itself permanently host-side; scanned/OCR permanently out of scope',
+  },
+  {
     capability: 'rich_frontend',
     status: 'refuses',
     evidence: 'only basic widget projection is emitted; no editable-view / approval-widget / alternatives / progress frontend spec.',
@@ -175,6 +189,16 @@ const USER_APPROVAL =
 // phrase; none fire on plain linear/external-adapter programs.
 const TEXT_DETECTORS: readonly TextDetector[] = [
   {
+    capability: 'document_extraction_docx',
+    pattern: /\b(?:(?:extract|parse|read|ingest|import)\w*[^.]{0,45}(?:\.?docx\b|word (?:documents?|docs?|files?))|(?:\.?docx\b|word (?:documents?|docs?|files?))[^.]{0,45}\b(?:extract\w*|extraction|parse\w*|read\w*|ingest\w*|body text|text|clauses?|sections?|provisions?|terms)\b)/i,
+    label: 'DOCX/Word document extraction',
+  },
+  {
+    capability: 'document_extraction_pdf',
+    pattern: /\b(?:(?:extract|parse|read|ingest|import)\w*[^.]{0,45}pdf\b|pdf\b[^.]{0,45}\b(?:extract\w*|extraction|parse\w*|read\w*|ingest\w*|body text|text|clauses?|sections?|provisions?|terms)\b)/i,
+    label: 'PDF document extraction',
+  },
+  {
     capability: 'delegation_research_agent',
     pattern: /\b(?:research agent|spawn\w*[^.]{0,25}research|research (?:fan[- ]?out|children|axes)|delegate\w*[^.]{0,25}research)\b/i,
     label: 'research-agent delegation / fan-out',
@@ -225,6 +249,10 @@ function collectStringLeaves(value: unknown, out: string[], depth = 0): void {
   } else if (typeof value === 'object') {
     for (const item of Object.values(value)) collectStringLeaves(item, out, depth + 1);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -297,10 +325,52 @@ function detectDocumentsCapabilities(documents: unknown): CapabilityDemand[] {
     const record = documents as Record<string, unknown>;
     if (record.enabled === false) return [];
   }
-  return [{
+  const demands: CapabilityDemand[] = [{
     capability: 'document_upload_intake',
     evidence: 'intake.documents_json declares a documents upload descriptor',
   }];
+  for (const descriptor of documentDescriptorRecords(documents)) {
+    const uploadTypes = normalizedUploadTypeSignals(descriptor.upload_types);
+    if (uploadTypes.some(isDocxUploadType)) {
+      demands.push({
+        capability: 'document_extraction_docx',
+        evidence: 'intake.documents_json declares DOCX upload text extraction',
+      });
+    }
+    if (uploadTypes.some(isPdfUploadType)) {
+      demands.push({
+        capability: 'document_extraction_pdf',
+        evidence: 'intake.documents_json declares PDF upload text extraction',
+      });
+    }
+  }
+  return demands;
+}
+
+function documentDescriptorRecords(documents: unknown): Record<string, unknown>[] {
+  if (Array.isArray(documents)) {
+    return documents.filter(isRecord);
+  }
+  return isRecord(documents) ? [documents] : [];
+}
+
+function normalizedUploadTypeSignals(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0);
+}
+
+function isDocxUploadType(value: string): boolean {
+  return value === 'docx' ||
+    value === '.docx' ||
+    value === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    /\bwordprocessingml\.document\b/i.test(value);
+}
+
+function isPdfUploadType(value: string): boolean {
+  return value === 'pdf' || value === '.pdf' || value === 'application/pdf';
 }
 
 export function detectRequestedCapabilities(input: CapabilityDetectionInput): CapabilityDemand[] {

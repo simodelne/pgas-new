@@ -47,6 +47,8 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // exact bytes — char_count match + run-nonce sentinel present, fail-closed) — so synthesizes.
     expect(capabilityStatus('document_upload_intake')).toBe('synthesizes');
     for (const cap of [
+      'document_extraction_docx',
+      'document_extraction_pdf',
       'rich_frontend',
       'export_docx_trackchange',
     ]) {
@@ -195,6 +197,30 @@ describe('adversarial detection (Codex #167 review)', () => {
       .toContain('export_docx_plain');
     expect(caps({ completion: { outputs: ['a .docx export of the final memo'] } })).toContain('export_docx_plain');
   });
+
+  it('detects DOCX/PDF extraction as explicit refused extraction capabilities', () => {
+    expect(caps({ purpose: 'Extract body text from an uploaded DOCX contract and count characters.' }))
+      .toContain('document_extraction_docx');
+    expect(caps({ purpose: 'Ingest an uploaded PDF agreement and extract its clauses.' }))
+      .toContain('document_extraction_pdf');
+    const structured = caps({
+      documents: {
+        stage: 'ingest_source',
+        upload_types: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/pdf'],
+        extraction: 'self_contained',
+        target: { root: 'work.source' },
+      },
+    });
+    expect(structured).toContain('document_upload_intake');
+    expect(structured).toContain('document_extraction_docx');
+    expect(structured).toContain('document_extraction_pdf');
+  });
+
+  it('does NOT classify DOCX export as DOCX extraction', () => {
+    const result = caps({ purpose: 'Render a final DOCX export that the user can download.' });
+    expect(result).toContain('export_docx_plain');
+    expect(result).not.toContain('document_extraction_docx');
+  });
 });
 
 describe('honest refusal safe-stop', () => {
@@ -225,6 +251,21 @@ describe('honest refusal safe-stop', () => {
     expect(err.refused.map((d) => d.capability)).not.toContain('per_item_confirmation');
     expect(err.message).toContain('capability_refusal');
     expect(err.message).toContain('uplift'); // gap_note routed into the message
+  });
+
+  it('refuses a DOCX extraction demand until the emitter/live ladder lands', () => {
+    let thrown: unknown;
+    try {
+      assertSynthesizableCapabilities({
+        purpose: 'Extract body text from an uploaded DOCX contract and store the exact character count.',
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CapabilityRefusalError);
+    const err = thrown as CapabilityRefusalError;
+    expect(err.refused.map((demand) => demand.capability)).toContain('document_extraction_docx');
+    expect(err.message).toMatch(/PR-U5-F|PR-U5-E|PR-U5-L|DOCX/i);
   });
 
   it('treats an unknown capability id conservatively as a refusal', () => {
