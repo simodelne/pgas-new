@@ -7,6 +7,7 @@ import {
   deriveConfirmationScript,
   renderLiveDriveRunnerSource,
   type GeneratedLiveDriveDelegationReport,
+  type GeneratedLiveDriveExtractionScript,
   type GeneratedLiveDriveExportScript,
   type GeneratedLiveDriveStatusHistoryEntry,
   type GeneratedLiveDriveUploadReport,
@@ -151,6 +152,7 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).not.toContain('PGAS_LIVE_DRIVE_CONFIRMATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT');
   });
 
   it('renders delegation evidence collection from the landed result, not child session routes', () => {
@@ -198,6 +200,25 @@ describe('generated live-drive choreography helpers', () => {
     expect(source).toContain('exportReportFromArtifacts');
     expect(source).toContain('extractStoreZipEntryText');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_UPLOAD_SCRIPT');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
+  });
+
+  it('renders docx extraction orchestration only when an extraction script is present', () => {
+    const extractionScript: GeneratedLiveDriveExtractionScript = {
+      resultPath: 'work.source',
+      sourceReadyPath: 'work.source_ready',
+      stage: 'ingest_source',
+      sentinel: 'PGAS-EXTRACTION-NONCE-unit',
+    };
+    const source = renderLiveDriveRunnerSource('docx-extraction-live', undefined, undefined, undefined, undefined, extractionScript);
+
+    expect(source).toContain('PGAS_LIVE_DRIVE_EXTRACTION_SCRIPT');
+    expect(source).toContain("import { deflateRawSync } from 'node:zlib';");
+    expect(source).toContain('renderStructuredDocxDocument');
+    expect(source).toContain('client.files.upload(sessionId, form)');
+    expect(source).toContain("channel: 'document_upload'");
+    expect(source).toContain('extractionReportFromWorld');
+    expect(source).not.toContain('PGAS_LIVE_DRIVE_EXPORT_SCRIPT');
     expect(source).not.toContain('PGAS_LIVE_DRIVE_DELEGATION_SCRIPT');
   });
 });

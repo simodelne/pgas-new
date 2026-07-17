@@ -27,6 +27,8 @@ describe('document extraction synthesis (PR-U5-E)', () => {
     expect(artifact.handlers_ts).toContain("Buffer.from(document.content_base64, 'base64')");
     expect(artifact.handlers_ts).toContain('blocked_extraction_failed');
     expect(artifact.handlers_ts).toContain('extractDocxText(bytes)');
+    expect(artifact.handlers_ts).toContain('extraction_kind: docxExtractionKind(bytes)');
+    expect(artifact.handlers_ts).toContain("return sawDeflate ? 'docx_deflate' : 'docx_store';");
 
     const standalonePlan = createStandaloneArtifactPlan(
       { slug: 'docx-extraction-demo', name: 'DOCX Extraction Demo' },
