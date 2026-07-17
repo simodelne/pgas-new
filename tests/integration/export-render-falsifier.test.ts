@@ -162,11 +162,11 @@ describe('export render route-level falsifier (PR-10 / PR-E1)', () => {
       return { refused };
     });
 
-    // ── F-7: registry honesty — E2 emits hermetic scaffolds; live-drive proof is still pending ──
+    // ── F-7: registry honesty — E3 live-drive proven, export_docx_plain is now synthesizes ──
     await recordFalsifier('F-7', failures, async () => {
       const plain = capabilityEntry('export_docx_plain');
-      expect(plain?.status, 'export_docx_plain status at PR-E2 (emitter hermetic-proven; live-drive pending)').toBe('scaffolds_with_gap');
-      expect(plain?.gap_note ?? '').toMatch(/PR-E3|live-drive/i);
+      expect(plain?.status, 'export_docx_plain status at PR-E3 (live-drive proven on qwen)').toBe('synthesizes');
+      expect(plain?.evidence ?? '').toMatch(/live-drive|nonce|export_engaged/i);
       const track = capabilityEntry('export_docx_trackchange');
       expect(track?.status).toBe('refuses');
       expect(track?.gap_note ?? '').toMatch(/1738/);
