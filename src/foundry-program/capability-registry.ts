@@ -81,10 +81,9 @@ export const FOUNDRY_CAPABILITY_REGISTRY: readonly CapabilityEntry[] = [
   },
   {
     capability: 'document_extraction_docx',
-    status: 'scaffolds_with_gap',
-    evidence: 'PR-U5-E emits a deterministic zero-npm DOCX extractor template (matching the U5-F reference) and wires self-contained DOCX uploads through request.documents content_base64 into extractDocxText; live-drive proof remains PR-U5-L.',
+    status: 'synthesizes',
+    evidence: 'PROVEN end-to-end by the docx extraction live-drive against a real provider (qwen36-27b): a generated program drove to complete (5 rounds, 7 provider hits), received a real DEFLATE-compressed .docx upload through the real files route, and the foundry-emitted zero-npm `node:zlib` extractor INFLATED the OOXML and parsed the body text — char_count exact (258==258) with the per-run nonce present in work.source.full_text. Fail-closed extraction_engaged verdict all-green: extraction_kind=docx_deflate AND sentinel_not_in_raw_upload=true (the nonce is provably absent from the raw upload bytes + base64 — recoverable only by genuine inflate + <w:t> parse; strictly stronger than the #187 byte-visible text kill). PDF extraction remains a host connector (document_extraction_pdf); scanned/OCR permanently out of scope.',
     since_version: '3.27.0',
-    gap_note: 'hermetic-proven (U5-F falsifier + U5-E emitter); awaiting live-drive flip PR-U5-L',
   },
   {
     capability: 'document_extraction_pdf',
