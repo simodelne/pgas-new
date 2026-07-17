@@ -11,7 +11,9 @@ const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'] as const;
 const REGISTRATION_STRATEGIES = ['curator_request'] as const;
 const REQUIRED_VERIFICATION_COMMANDS = ['install', 'typecheck', 'test'] as const;
 const INTEGRATION_KINDS = ['http_api', 'db', 'sdk', 'module'] as const;
+const AVAILABLE_PROGRAM_PROVIDES = ['delegation_research_agent'] as const;
 const INTEGRATION_NAME = /^[a-z][a-z0-9_-]*$/u;
+const DOTTED_PATH = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)+$/u;
 const EXPORTED_SYMBOL = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/u;
 const BANNED_INTEGRATION_IMPORTS = new Set([
@@ -34,6 +36,7 @@ const BANNED_INTEGRATION_IMPORTS = new Set([
 ]);
 
 export type WiringIntegrationKind = (typeof INTEGRATION_KINDS)[number];
+export type WiringAvailableProgramProvides = (typeof AVAILABLE_PROGRAM_PROVIDES)[number];
 
 export interface WiringIntegration {
   name: string;
@@ -42,6 +45,14 @@ export interface WiringIntegration {
   factory?: string;
   methods: string[];
   config_env: string[];
+}
+
+export interface WiringAvailableProgram {
+  slug: string;
+  target_spec: string;
+  provides: WiringAvailableProgramProvides;
+  payload_map?: Record<string, string>;
+  result_path?: string;
 }
 
 export interface WiringManifest {
@@ -70,6 +81,7 @@ export interface WiringManifest {
     github_repo: string;
   };
   integrations?: WiringIntegration[];
+  available_programs?: WiringAvailableProgram[];
 }
 
 export interface WiringManifestResult {
@@ -109,6 +121,7 @@ export function parseWiringManifest(source: string): WiringManifestResult {
   const verification = requireObject(parsed, 'verification', errors);
   const curator = requireObject(parsed, 'curator', errors);
   validateIntegrations(parsed.integrations, errors);
+  validateAvailablePrograms(parsed.available_programs, errors);
 
   requireString(repo, 'kind', errors, 'repo.kind');
   requireString(repo, 'package_manager', errors, 'repo.package_manager');
@@ -248,6 +261,57 @@ function validateIntegrations(value: unknown, errors: string[]): void {
           errors.push(`${label}.config_env[${envIndex}] must be an env var name, not a value`);
         }
       });
+    }
+  });
+}
+
+function validateAvailablePrograms(value: unknown, errors: string[]): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Array.isArray(value)) {
+    errors.push('available_programs must be an array when present');
+    return;
+  }
+
+  value.forEach((availableProgram, index) => {
+    const label = `available_programs[${index}]`;
+    if (!isRecord(availableProgram)) {
+      errors.push(`${label} must be an object`);
+      return;
+    }
+
+    const slug = availableProgram.slug;
+    if (typeof slug !== 'string' || !INTEGRATION_NAME.test(slug)) {
+      errors.push(`${label}.slug must be a non-empty logical identifier`);
+    }
+
+    const targetSpec = availableProgram.target_spec;
+    if (typeof targetSpec !== 'string' || targetSpec.trim().length === 0) {
+      errors.push(`${label}.target_spec must be a non-empty string`);
+    }
+
+    const provides = availableProgram.provides;
+    if (typeof provides !== 'string' || !(AVAILABLE_PROGRAM_PROVIDES as readonly string[]).includes(provides)) {
+      errors.push(`${label}.provides must be one of: ${AVAILABLE_PROGRAM_PROVIDES.join(', ')}`);
+    }
+
+    const payloadMap = availableProgram.payload_map;
+    if (payloadMap !== undefined) {
+      if (!isRecord(payloadMap)) {
+        errors.push(`${label}.payload_map must be an object when present`);
+      } else {
+        for (const [key, mapValue] of Object.entries(payloadMap)) {
+          if (typeof mapValue !== 'string' || mapValue.trim().length === 0) {
+            errors.push(`${label}.payload_map.${key} must be a non-empty string`);
+          }
+        }
+      }
+    }
+
+    const resultPath = availableProgram.result_path;
+    if (resultPath !== undefined && (typeof resultPath !== 'string' || !DOTTED_PATH.test(resultPath))) {
+      errors.push(`${label}.result_path must be a non-empty dotted path`);
     }
   });
 }

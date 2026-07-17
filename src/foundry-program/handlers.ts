@@ -34,7 +34,7 @@ import {
 } from './json-normalize.js';
 import { synthesizeDomainLogic, type StageBodyGenerator } from './domain-synthesis.js';
 import type { ReasoningContractGenerator } from './reasoning-contract.js';
-import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain } from './synthesizer.js';
+import { refreshStaleTransitionsForStages, synthesizeProgramSpecFromDomain, type SynthesizeProgramSpecOptions } from './synthesizer.js';
 import { putSynthesizedArtifact, requireSynthesizedArtifact, type SynthesisContext, type SynthesizedArtifact } from './synthesizer-store.js';
 
 const defaultStages = [
@@ -1465,18 +1465,16 @@ function parseJsonArray(value: string, label: string): unknown[] {
   return parsed;
 }
 
-function synthesisOptionsFromDomain(domain: Record<string, unknown>): {
-  targetKind: 'standalone_repo' | 'existing_repo';
-  integrations: WiringManifest['integrations'];
-} {
+function synthesisOptionsFromDomain(domain: Record<string, unknown>): SynthesizeProgramSpecOptions {
   const targetKind = optionalStringDomainField(domain, 'repo.target_kind') ?? optionalStringDomainField(domain, 'repo.kind');
   if (targetKind !== 'existing_repo') {
-    return { targetKind: 'standalone_repo', integrations: [] };
+    return { targetKind: 'standalone_repo', integrations: [], availablePrograms: [] };
   }
   const manifest = parseWiringManifestDomainField(domain);
   return {
     targetKind: 'existing_repo',
     integrations: manifest.integrations ?? [],
+    availablePrograms: manifest.available_programs ?? [],
   };
 }
 

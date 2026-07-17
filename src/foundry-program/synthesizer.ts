@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
 import { loadSpecWithPatterns, reconstructArray, type ProgramArtifactPolicy, type ReactionHandler, type ReactionResult } from '@simodelne/pgas-server/plugin.js';
 import { renderTemplate } from '../pgas-new/template-renderer.js';
-import type { WiringIntegration } from '../pgas-new/wiring-manifest.js';
+import type { WiringAvailableProgram, WiringIntegration } from '../pgas-new/wiring-manifest.js';
 import type { CapabilityGap, DelegationChildDescriptor, DelegationDescriptor, DocumentExtractionSurfaces, DocumentsDescriptor, ExportStageDescriptor, ExportSurfaces, SynthesisContext, SynthesizedArtifact } from './synthesizer-store.js';
 import { CapabilityRefusalError, assertSynthesizableCapabilities, detectRequestedCapabilities } from './capability-registry.js';
 import { assertConfirmationPairingTerminals } from './composite-checks.js';
@@ -180,6 +180,7 @@ export interface SynthesizedChildArtifact extends Omit<SynthesizedSpec, 'child_a
 export interface SynthesizeProgramSpecOptions {
   targetKind?: 'standalone_repo' | 'existing_repo';
   integrations?: WiringIntegration[];
+  availablePrograms?: WiringAvailableProgram[];
   reasoningContracts?: Record<string, ReasoningStageContract>;
 }
 

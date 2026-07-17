@@ -17,6 +17,7 @@ export interface DelegationChildDescriptor {
   id: string;
   stage: string;
   target_spec?: string;
+  registered_name?: string;
   synthesize_child?: DelegationChildSynthesizeDescriptor;
   payload_map: Record<string, string>;
   result_path: string;
