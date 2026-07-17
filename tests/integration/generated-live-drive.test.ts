@@ -26,6 +26,7 @@ import {
   driveGeneratedProgramLive,
   type GeneratedLiveDriveConfirmationScript,
   type GeneratedLiveDriveDelegationScript,
+  type GeneratedLiveDriveExportScript,
   type GeneratedLiveDriveUploadScript,
 } from '../../src/pgas-new/generated-live-drive.js';
 import { renderStandaloneScaffold, type RenderStandaloneOptions } from '../../src/pgas-new/template-renderer.js';
@@ -42,6 +43,9 @@ const CONFIRMATION_SLUG = 'work-unit-flow-live';
 const DELEGATION_SLUG = 'delegation-parent-live';
 const RESEARCH_AGENT_DELEGATION_SLUG = 'delegation-research-agent-live';
 const UPLOAD_SLUG = 'document-upload-live';
+const EXPORT_SLUG = 'docx-export-live';
+const EXPORT_REASONING_STAGE = 'compose_export';
+const EXPORT_STAGE = 'export_document';
 const DELEGATION_LIVE_DRIVE_TIMEOUT_MS = Number(process.env.PGAS_LIVE_DRIVE_TIMEOUT_MS ?? '1800000');
 const DELEGATION_LIVE_TEST_TIMEOUT_MS = Math.max(LIVE_TIMEOUT_MS, DELEGATION_LIVE_DRIVE_TIMEOUT_MS + 60_000);
 
@@ -279,6 +283,52 @@ const uploadDomain = {
   'intake.completion_json': JSON.stringify({
     final_stage: 'complete',
     guard_field: 'work.source_ready',
+  }),
+};
+
+const exportDomain = {
+  'program.slug': EXPORT_SLUG,
+  'program.name': 'DOCX Export Live',
+  'program.target_dir': '/tmp/docx-export-live',
+  'program.design_path': 'design',
+  'intake.purpose': 'Compose a short client-ready memo from the user request, then render a DOCX export artifact.',
+  'intake.entry_channel': 'user_text',
+  'intake.stages_json': JSON.stringify([
+    { slug: 'intake', is_bootstrap: true },
+    { slug: EXPORT_REASONING_STAGE },
+    {
+      slug: EXPORT_STAGE,
+      kind: 'export_docx',
+      domain_spec: {
+        reads: [`${EXPORT_REASONING_STAGE}.result_json`, `${EXPORT_REASONING_STAGE}.items_json`],
+        produces: {
+          result_json: {
+            stage: 'string',
+            docx_base64: 'string',
+            docx_bytes: 'number',
+            sha256: 'string',
+            section_count: 'number',
+          },
+          items_json: ['docx_export:<sha256>'],
+        },
+        rules: ['Render accumulated stage state into a deterministic DOCX export.'],
+        invariants: ['Do not call an LLM or provider while rendering export bytes.'],
+      },
+    },
+    { slug: 'complete', is_terminal: true },
+  ]),
+  'intake.transitions_json': JSON.stringify([
+    { from: 'intake', to: EXPORT_REASONING_STAGE, trigger: 'started', guard_field: 'intake.started' },
+    { from: EXPORT_REASONING_STAGE, to: EXPORT_STAGE, trigger: 'composed', guard_field: `${EXPORT_REASONING_STAGE}.done` },
+    { from: EXPORT_STAGE, to: 'complete', trigger: 'exported', guard_field: `${EXPORT_STAGE}.ready` },
+  ]),
+  'intake.delegation_json': JSON.stringify({
+    [EXPORT_REASONING_STAGE]: { kind: 'llm-reasoning' },
+  }),
+  'intake.completion_json': JSON.stringify({
+    final_stage: 'complete',
+    guard_field: `${EXPORT_STAGE}.ready`,
+    outputs: ['a .docx export of the composed memo'],
   }),
 };
 
@@ -580,6 +630,42 @@ describe('generated program live drive gate', () => {
     expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
   });
 
+  liveIt('drives a generated docx export program through real provider + artifact retrieval', { timeout: LIVE_TIMEOUT_MS }, async () => {
+    const env = requireLiveDriveEnv();
+    const { targetDir, exportScript } = await liveSynthesizeAndRenderExport(env);
+
+    const drive = await driveGeneratedProgramLive({
+      targetDir,
+      slug: EXPORT_SLUG,
+      providerBaseUrl: env.baseUrl,
+      model: env.model,
+      initialText: [
+        'Compose a concise client-ready memo for a DOCX export.',
+        `Include this exact run nonce verbatim in the memo body: ${exportScript.nonce}`,
+        'The memo should be specific to an enterprise compliance dashboard proposal.',
+      ].join(' '),
+      finalStage: 'complete',
+      maxTriggers: 12,
+      driveTimeoutMs: 900_000,
+      exportScript,
+    });
+
+    emitEvidence(drive);
+    process.stdout.write(`[live-drive] export=${JSON.stringify(drive.export)}\n`);
+    process.stdout.write(`[live-drive] export_verdict=${JSON.stringify(drive.export_verdict)}\n`);
+
+    expect(drive.runner_error, `drive runner error (output tail: ${drive.runner_output_excerpt})`).toBeUndefined();
+    expect(drive.export_engaged).toBe(true);
+    expect(drive.export_verdict.export_engaged).toBe(true);
+    expect(drive.final_mode).toBe('complete');
+    expect(drive.export?.artifact_record?.artifactType).toBe('docx_export');
+    expect(drive.export?.artifact_record?.payloadRef).toBe(exportScript.resultPath);
+    expect(drive.export?.nonce_present).toBe(true);
+    expect(drive.export?.default_absent).toBe(true);
+    expect(drive.export?.zip_store_ooxml).toBe(true);
+    expect(drive.provider_hits).toBeGreaterThanOrEqual(1);
+  });
+
   liveIt('drives a generated delegation degrade path with a real provider', { timeout: DELEGATION_LIVE_TEST_TIMEOUT_MS }, async () => {
     const env = requireLiveDriveEnv();
     const { targetDir, delegationScript } = liveSynthesizeAndRenderDelegation(1);
@@ -707,6 +793,50 @@ async function liveSynthesizeAndRenderUpload(env: LiveDriveEnv): Promise<{
       stage: documents!.stage,
       sentinel,
       expectedCharCount: Buffer.byteLength(buildUploadLiveDriveFixtureText(sentinel), 'utf8'),
+    },
+  };
+}
+
+async function liveSynthesizeAndRenderExport(env: LiveDriveEnv): Promise<{
+  targetDir: string;
+  exportScript: GeneratedLiveDriveExportScript;
+}> {
+  const cacheDir = trackedTempRoot('pgas-new-live-drive-export-cache-');
+  const targetDir = trackedTempRoot('pgas-new-live-drive-export-render-');
+  const artifact = await withRequiredLlmContract(() =>
+    synthesizeDomainLogic(artifactFromDomain(exportDomain), {
+      cacheDir,
+      providerUrl: env.baseUrl,
+      model: env.model,
+    }));
+  const exportDescriptor = artifact.synthesis_context?.export_descriptors?.find((descriptor) =>
+    descriptor.stage === EXPORT_STAGE && descriptor.kind === 'export_docx');
+  expect(exportDescriptor, 'docx export descriptor').toBeTruthy();
+  expect(artifact.registration_ts, 'export artifactPolicy registration source').toBeTruthy();
+  expect(artifact.export_surfaces?.docx, 'standalone docx export surface').toBe(true);
+
+  renderStandaloneScaffold({
+    slug: EXPORT_SLUG,
+    name: 'DOCX Export Live',
+    outDir: targetDir,
+    synthesizedSpecYaml: artifact.spec_yaml,
+    synthesizedRegistrationTs: artifact.registration_ts,
+    synthesizedContractsTs: artifact.contracts_ts,
+    synthesizedHandlersTs: artifact.handlers_ts,
+    synthesizedHandlersIndexTs: artifact.handlers_index_ts,
+    synthesizedStageSources: artifact.stage_sources,
+    synthesizedToolsTs: artifact.tools_ts,
+    synthesizedSmokeTestTs: artifact.smoke_test_ts,
+    synthesizedExportSurfaces: artifact.export_surfaces,
+  });
+  linkRootNodeModules(targetDir);
+
+  return {
+    targetDir,
+    exportScript: {
+      resultPath: exportDescriptor!.payloadRef,
+      stage: exportDescriptor!.stage,
+      nonce: `PGAS-EXPORT-NONCE-${randomUUID()}`,
     },
   };
 }
