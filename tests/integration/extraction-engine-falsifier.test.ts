@@ -175,15 +175,15 @@ describe('extraction route-level engine falsifier (PR-U5-F)', () => {
     await recordFalsifier('X-8', failures, async () => {
       const docx = capabilityEntry('document_extraction_docx');
       const pdf = capabilityEntry('document_extraction_pdf');
-      expect(docx?.status).toBe('scaffolds_with_gap');
-      expect(docx?.gap_note ?? '').toMatch(/U5-F|U5-E|PR-U5-L|live-drive/i);
+      expect(docx?.status).toBe('synthesizes');
+      expect(docx?.evidence ?? '').toMatch(/live-drive|nonce|deflate|extraction_engaged/i);
       expect(pdf?.status).toBe('scaffolds_with_gap');
       expect(pdf?.gap_note ?? '').toMatch(/typed connector|host-side|OCR|scanned/i);
 
       const assessment = assertSynthesizableCapabilities({
         purpose: 'Extract body text from an uploaded DOCX contract and count the characters.',
       });
-      expect(assessment.scaffolds_with_gap.map((demand) => demand.capability)).toContain('document_extraction_docx');
+      expect(assessment.synthesizes.map((demand) => demand.capability)).toContain('document_extraction_docx');
       expect(assessment.refuses).toEqual([]);
       const artifact = synthesizeProgramSpecFromDomain(synthesizedDocxExtractionDomain());
       expect(artifact.handlers_ts).toContain("import { extractDocxText } from './extract/docx.js'");

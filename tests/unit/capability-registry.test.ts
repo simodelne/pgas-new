@@ -46,7 +46,7 @@ describe('foundry capability registry (#166 PR-1)', () => {
     // Self-contained text upload live-drive green on qwen (program read the uploaded file's
     // exact bytes — char_count match + run-nonce sentinel present, fail-closed) — so synthesizes.
     expect(capabilityStatus('document_upload_intake')).toBe('synthesizes');
-    expect(capabilityStatus('document_extraction_docx')).toBe('scaffolds_with_gap');
+    expect(capabilityStatus('document_extraction_docx')).toBe('synthesizes');
     expect(capabilityStatus('document_extraction_pdf')).toBe('scaffolds_with_gap');
     for (const cap of [
       'rich_frontend',
@@ -258,9 +258,9 @@ describe('honest refusal safe-stop', () => {
       purpose: 'Extract body text from an uploaded DOCX contract and store the exact character count.',
     });
 
-    expect(assessment.scaffolds_with_gap.map((demand) => demand.capability)).toContain('document_extraction_docx');
+    expect(assessment.synthesizes.map((demand) => demand.capability)).toContain('document_extraction_docx');
     expect(assessment.refuses).toEqual([]);
-    expect(capabilityStatus('document_extraction_docx')).toBe('scaffolds_with_gap');
+    expect(capabilityStatus('document_extraction_docx')).toBe('synthesizes');
   });
 
   it('treats an unknown capability id conservatively as a refusal', () => {
