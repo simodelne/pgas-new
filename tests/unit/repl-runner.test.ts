@@ -262,6 +262,67 @@ describe('runRepl', () => {
     }
   });
 
+  // dx-repl-quit-sync: `/quit` (an ALWAYS_AVAILABLE_COMMANDS alias of `/exit`)
+  // typed DURING an in-flight round — with NO prior `/abort` — must (1) send the
+  // engine `abort` control for the running session before resolving, (2) suppress
+  // the late round_complete result so it never renders after goodbye, and
+  // (3) resolve the exit promise as a clean `user_exit`/exitCode 0. This locks in
+  // the synchronization contract of finish()'s in-flight-abort branch: the abort
+  // is awaited before resolveExit, and the state.abortRequested guard discards the
+  // late result. Prior to this test the `/quit` alias was entirely uncovered and
+  // no test exercised quit-during-round without a preceding `/abort`.
+  it('sends the engine abort and suppresses the late result when /quit lands mid-round', async () => {
+    let releaseSse!: () => void;
+    const fake = createFakePgasFetch({
+      beforeRoundComplete: () => new Promise<void>((resolve) => {
+        releaseSse = resolve;
+      }),
+      sseEvents: [
+        { event: 'step', data: { step: 'authorship' } },
+        {
+          event: 'round_complete',
+          data: { result: { name: 'record_user_note', payload: { message: 'late quit result' } } },
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', fake.fetch);
+    const stdin = new PassThrough();
+    const stdout = captureStream();
+
+    try {
+      const repl = runRepl({ stdin, stdout, baseUrl: 'http://pgas.test', slug: 'pgas-new', token: 'test-token' });
+      await stdout.waitFor('Connected');
+      stdin.write('start work\n');
+      await fake.waitForRequest('/sessions/session-1/trigger/stream');
+      // No `/abort` first: quit directly while the round is still streaming.
+      stdin.write('/quit\n');
+      // finish() must issue the abort control before it resolves the exit promise.
+      await fake.waitForRequest('/controls/pgas-new/abort');
+      // Release the gated round_complete so the in-flight loop unwinds; the
+      // state.abortRequested guard must discard it (never rendered).
+      releaseSse();
+      stdin.end();
+
+      const result = await repl;
+
+      expect(result).toMatchObject({ reason: 'user_exit', sessionId: 'session-1', exitCode: 0 });
+      expect(fake.requests).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            method: 'POST',
+            path: '/controls/pgas-new/abort',
+            body: { sessionId: 'session-1', channel: 'http' },
+          }),
+        ]),
+      );
+      expect(stdout.text()).not.toContain('late quit result');
+      expect(stdout.text()).toContain('goodbye');
+    } finally {
+      releaseSse?.();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('exits cleanly when the cached session is rejected mid-round', async () => {
     const fake = createFakePgasFetch({
       sseEvents: [],
