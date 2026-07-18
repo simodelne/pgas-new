@@ -5010,26 +5010,66 @@ function resolveDelegationChildrenAgainstManifest(
 
   let changed = false;
   const children = delegation.children.map((child) => {
-    const entry = availablePrograms.find((candidate) =>
+    const researchEntry = availablePrograms.find((candidate) =>
       candidate.provides === 'delegation_research_agent' &&
       child.synthesize_child?.kind === 'research_agent' &&
       researchChildBackend(child) === 'host_connector');
-    if (!entry) {
-      return child;
+    if (researchEntry) {
+      changed = true;
+      const { synthesize_child: _deleted, ...rewritten } = child;
+      return {
+        ...rewritten,
+        target_spec: researchEntry.target_spec,
+        registered_name: researchEntry.slug,
+        payload_map: researchEntry.payload_map ?? child.payload_map,
+        result_path: researchEntry.result_path ?? child.result_path,
+      };
     }
 
-    changed = true;
-    const { synthesize_child: _deleted, ...rewritten } = child;
-    return {
-      ...rewritten,
-      target_spec: entry.target_spec,
-      registered_name: entry.slug,
-      payload_map: entry.payload_map ?? child.payload_map,
-      result_path: entry.result_path ?? child.result_path,
-    };
+    // Slice A: reuse of the existing simoneos document-ingest / review agents.
+    // These children are target_spec-only from the notebook (nothing to
+    // synthesize — the agent already exists), so we validate-and-stamp: match a
+    // manifest entry by its document-ingest / review provides tag whose
+    // target_spec or slug names the author's target_spec, then stamp
+    // registered_name (for the allowedTargetPrograms both-names fix) and
+    // normalize target_spec to the manifest's canonical spec name.
+    const reuseEntry = reusableAgentEntryForChild(child, availablePrograms);
+    if (reuseEntry) {
+      changed = true;
+      return {
+        ...child,
+        target_spec: reuseEntry.target_spec,
+        registered_name: reuseEntry.slug,
+        payload_map: reuseEntry.payload_map ?? child.payload_map,
+        result_path: reuseEntry.result_path ?? child.result_path,
+      };
+    }
+
+    return child;
   });
 
   return changed ? { ...delegation, children } : delegation;
+}
+
+const REUSABLE_AGENT_PROVIDES: readonly WiringAvailableProgram['provides'][] = [
+  'delegation_document_ingest',
+  'delegation_review',
+];
+
+function reusableAgentEntryForChild(
+  child: DelegationChildDescriptor,
+  availablePrograms: WiringAvailableProgram[],
+): WiringAvailableProgram | undefined {
+  // Only a target_spec-only child (author declares no synthesize_child) can be
+  // wired to an already-registered agent; a synthesize_child demand is the
+  // research path handled above.
+  const requestedTarget = child.target_spec?.trim();
+  if (!requestedTarget || child.synthesize_child !== undefined) {
+    return undefined;
+  }
+  return availablePrograms.find((candidate) =>
+    REUSABLE_AGENT_PROVIDES.includes(candidate.provides) &&
+    (candidate.target_spec === requestedTarget || candidate.slug === requestedTarget));
 }
 
 function childResultStage(child: DelegationChildDescriptor): 'research' | 'work' {

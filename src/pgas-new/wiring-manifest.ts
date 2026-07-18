@@ -11,7 +11,11 @@ const PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn'] as const;
 const REGISTRATION_STRATEGIES = ['curator_request'] as const;
 const REQUIRED_VERIFICATION_COMMANDS = ['install', 'typecheck', 'test'] as const;
 const INTEGRATION_KINDS = ['http_api', 'db', 'sdk', 'module'] as const;
-const AVAILABLE_PROGRAM_PROVIDES = ['delegation_research_agent'] as const;
+const AVAILABLE_PROGRAM_PROVIDES = [
+  'delegation_research_agent',
+  'delegation_document_ingest',
+  'delegation_review',
+] as const;
 const INTEGRATION_NAME = /^[a-z][a-z0-9_-]*$/u;
 const DOTTED_PATH = /^[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)+$/u;
 const EXPORTED_SYMBOL = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
