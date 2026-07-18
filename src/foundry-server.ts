@@ -1,3 +1,4 @@
+import { isRecord } from './util/guards.js';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -191,10 +192,6 @@ function setDefaultEnv(name: string, value: string): void {
   if ((process.env[name] ?? '').trim().length === 0) {
     process.env[name] = value;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function shouldUseUnifiedOpenAiDriver(): boolean {

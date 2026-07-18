@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -803,10 +804,6 @@ function readLiveSessionFields(envelope: Record<string, unknown>): {
       ?? numberField(liveState.currentRoundNumber)
       ?? 0,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function stringField(value: unknown): string | undefined {

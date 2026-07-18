@@ -17,6 +17,7 @@
  * (hit count + request/response excerpts) — a canned-fallback pass cannot
  * masquerade as live.
  */
+import { isRecord } from '../util/guards.js';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -3597,10 +3598,6 @@ function numberOrZero(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function errorMessage(error: unknown): string {

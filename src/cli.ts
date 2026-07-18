@@ -1,5 +1,6 @@
 process.env.PGAS_OPENAI_TOOL_CHOICE ??= 'required';
 
+import { isRecord } from './util/guards.js';
 import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -560,10 +561,6 @@ function tokenExpiryLine(token: string): string {
   return exp === undefined
     ? 'token expiry unknown'
     : `token expires at ${new Date(exp * 1000).toISOString()}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function promptLine(io: CliIo, question: string): Promise<string> {
