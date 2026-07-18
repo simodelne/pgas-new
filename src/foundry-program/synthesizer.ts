@@ -5095,6 +5095,12 @@ const REUSABLE_AGENT_PROVIDES: readonly WiringAvailableProgram['provides'][] = [
   'delegation_review',
 ];
 
+// Canonical delegated-input roots a payload_map target may land under (child inputs.<target>).
+// request.*/domain_context.* cover synthesized workers + shared context; answers.* and
+// document_intake.* let manifest-reuse payload_maps hit the real SimoneOS agents' input
+// contracts (Legal Research answers.research_question, Review Service document_intake.work_product).
+const DELEGATION_PAYLOAD_TARGET_ROOTS = ['request.', 'domain_context.', 'answers.', 'document_intake.'] as const;
+
 function reusableAgentEntryForChild(
   child: DelegationChildDescriptor,
   availablePrograms: WiringAvailableProgram[],
@@ -7797,6 +7803,17 @@ export function assertDelegationChildrenDescriptor(
   const seenResultPaths = new Set<string>();
   const seenTargetSpecs = new Set<string>();
 
+  // A later child's payload_map may source from an earlier child's landed result
+  // (delegation result-chaining — e.g. review-service consuming the document-ingest
+  // output as its document_intake.work_product). Pre-declare every child's result_path
+  // (and its `.result` payload sub-path) so those sources validate.
+  for (const rawChild of children) {
+    if (isRecord(rawChild) && typeof rawChild.result_path === 'string') {
+      schemaPaths.add(rawChild.result_path);
+      schemaPaths.add(`${rawChild.result_path}.result`);
+    }
+  }
+
   for (const [i, rawChild] of children.entries()) {
     const child = requiredRecord(rawChild, `delegation.children[${i}]`);
     assertDelegationV1Scope(delegation, child);
@@ -7886,8 +7903,16 @@ export function assertDelegationChildrenDescriptor(
     const payloadMap = requiredRecord(child.payload_map, `delegation.children[${i}].payload_map`);
     for (const [target, source] of Object.entries(payloadMap)) {
       const targetPath = requiredString(target, `delegation.children[${i}].payload_map target`);
-      if (!targetPath.startsWith('request.') && !targetPath.startsWith('domain_context.')) {
-        throw new Error(`delegation.children[${i}].payload_map target ${targetPath} must start with request. or domain_context.`);
+      // Delegation payload targets land at the child's inputs.<target>. Allow the
+      // canonical delegated-input roots used by SimoneOS agents: request.* (document
+      // ingest / synthesized workers), domain_context.* (shared context), answers.*
+      // (legal research question inputs), and document_intake.* (review-service work
+      // product). This lets manifest-reuse payload_maps target each agent's real input
+      // contract instead of a generic request.topic.
+      if (!DELEGATION_PAYLOAD_TARGET_ROOTS.some((root) => targetPath.startsWith(root))) {
+        throw new Error(
+          `delegation.children[${i}].payload_map target ${targetPath} must start with one of: ${DELEGATION_PAYLOAD_TARGET_ROOTS.join(', ')}`,
+        );
       }
       const sourcePath = requiredString(source, `delegation.children[${i}].payload_map.${targetPath}`);
       if (!delegationSchemaPathDeclared(sourcePath, schemaPaths)) {

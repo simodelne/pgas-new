@@ -325,14 +325,14 @@ describe('delegation children descriptor validation', () => {
     );
   });
 
-  it('requires payload_map sources to be schema-declared parent paths and targets to be seeded namespaces', () => {
+  it('requires payload_map sources to be schema-declared parent paths and targets to use a canonical delegated-input root', () => {
     expectValidationThrow(
       withChild({ payload_map: { 'request.topic': 'missing.summary' } }),
       /payload_map source missing\.summary must be declared in the parent schema/u,
     );
     expectValidationThrow(
       withChild({ payload_map: { 'child_request.topic': 'intake.summary' } }),
-      /payload_map target child_request\.topic must start with request\. or domain_context\./u,
+      /payload_map target child_request\.topic must start with one of: request\., domain_context\., answers\., document_intake\./u,
     );
   });
 
