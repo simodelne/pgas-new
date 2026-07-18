@@ -1,6 +1,6 @@
 # PGAS-New Architecture
 
-Status: v3.22.0 released on `main`; engine pin `@simodelne/pgas-server@3.21.0`.
+Status: v3.23.0 released on `main`; engine pin `@simodelne/pgas-server@3.21.0`.
 
 ## Changelog
 
