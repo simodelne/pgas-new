@@ -82,7 +82,6 @@ describe('artifact planner', () => {
       'programs/review/specs.yml',
       'programs/review/registration.ts',
       'programs/review/projection.ts',
-      'programs/review/frontend.spec.yml',
       'programs/review/export/html.ts',
       'programs/review/export/docx.ts',
       'programs/review/export/diff.ts',
@@ -107,7 +106,6 @@ describe('artifact planner', () => {
       requestedArtifactPaths: [
         '.pgas/wiring.yml',
         'projection.ts',
-        'frontend.spec.yml',
         'specs.yml',
         'contracts.ts',
         'export/html.ts',
@@ -128,7 +126,6 @@ describe('artifact planner', () => {
     const unresolvedRequestedPaths = [
       '.pgas/wiring.yml',
       'projection.ts',
-      'frontend.spec.yml',
       'specs.yml',
       'contracts.ts',
       'export/html.ts',
@@ -141,7 +138,6 @@ describe('artifact planner', () => {
     ];
     const resolvedProgramPaths = [
       'programs/review/projection.ts',
-      'programs/review/frontend.spec.yml',
       'programs/review/specs.yml',
       'programs/review/contracts.ts',
       'programs/review/export/html.ts',
@@ -183,7 +179,6 @@ describe('artifact planner', () => {
     expect(paths).toEqual(
       expect.arrayContaining([
         'programs/minutes-drafter/projection.ts',
-        'programs/minutes-drafter/frontend.spec.yml',
         'programs/minutes-drafter/stages/transcript_review.ts',
         'programs/minutes-drafter/stages/section_drafting.ts',
         'programs/minutes-drafter/stages/final_review.ts',

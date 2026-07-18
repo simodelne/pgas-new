@@ -190,7 +190,7 @@ describe('foundry branch_write', () => {
       'intake.purpose': 'Draft fee proposals through scoped assembly and partner review.',
       'intake.entry_channel': 'user_text',
       'inputs.user_decision.instruction': [
-        'Preserve projection.ts, frontend.spec.yml, export/html.ts, export/docx.ts, specs.yml, contracts.ts.',
+        'Preserve projection.ts, export/html.ts, export/docx.ts, specs.yml, contracts.ts.',
         'Also preserve stages/scope_definition.ts, handlers.ts, handlers/index.ts, handlers/_resolver.ts, tools.ts, and .pgas/wiring.yml.',
       ].join(' '),
       'intake.stages_json': JSON.stringify(stageList),
@@ -256,7 +256,6 @@ describe('foundry branch_write', () => {
       expect(plannedPaths.filter((path) => [
         '.pgas/wiring.yml',
         'projection.ts',
-        'frontend.spec.yml',
         'export/html.ts',
         'export/docx.ts',
         'specs.yml',

@@ -337,14 +337,15 @@ function existingRepoUserFacingArtifacts(programPath: string, manifest: WiringMa
     return [];
   }
 
+  // pgas-new graduates CORE PGAS programs only (no UI/backend — #166 scope). Emit the
+  // deterministic projection (a pure view-builder consumed by the generated tests), but
+  // NOT a frontend.spec.yml: the generic synthesis cannot author a valid, cataloged UI
+  // surface, and a boilerplate one trips the consumer's closed-world widget-catalog gate.
+  // A consumer that wants a React surface adds it out-of-band + declares the widgets.
   return [
     artifact('projection', `${programPath}/projection.ts`, 'Expose the attached program state as a user-facing SimoneOS projection.', 'branch_write', [
       'typecheck',
       'frontend-projection',
-    ]),
-    artifact('frontend', `${programPath}/frontend.spec.yml`, 'Declare the user-facing SimoneOS frontend surface for the attached program.', 'branch_write', [
-      'frontend-spec',
-      'typecheck',
     ]),
   ];
 }
