@@ -2,8 +2,6 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -19,6 +17,7 @@ import {
   synthesizeProgramSpecFromDomain,
 } from '../../src/foundry-program/synthesizer.js';
 import { CapabilityRefusalError } from '../../src/foundry-program/capability-registry.js';
+import { startRouteHarness } from './foundry-test-utils.js';
 
 const PARENT_PROGRAM = 'multi-child-falsifier-parent';
 const INGEST_PROGRAM = 'SimoneOS Document Ingest';
@@ -165,39 +164,28 @@ interface TwoChildEvidence {
 
 async function runTwoChildScenario(): Promise<TwoChildEvidence> {
   const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-multi-child-falsifier-'));
-  const server = await createPgasServer({
+  const { client, close } = await startRouteHarness({
     programs: [
       { name: PARENT_PROGRAM, entry: createParentEntry(tempDir) },
       { name: INGEST_PROGRAM, entry: createChildEntry(tempDir, 'ingest') },
       { name: REVIEW_PROGRAM, entry: createChildEntry(tempDir, 'review') },
     ],
-    drivers: {
-      authorHandle: scriptedAuthor([
-        // Bootstrap → dispatch.
-        scripted(effect('enter_dispatch', { topic: 'multi-child-topic' })),
-        // Child 1 (ingest): request → child accepts → child finishes → parent advances.
-        scripted(effect('request_ingest', { request: { intent: 'ingest' } }, 'ingest_call')),
-        scripted(effect('accept_request', { accepted: true }, 'child_output')),
-        scripted(effect('finish_work', { result: 'ingest-exported-result' }, 'child_output')),
-        scripted(effect('advance_ingest', {})),
-        // Child 2 (review): request → child accepts → child finishes → parent completes.
-        scripted(effect('request_review', { request: { intent: 'review' } }, 'review_call')),
-        scripted(effect('accept_request', { accepted: true }, 'child_output')),
-        scripted(effect('finish_work', { result: 'review-exported-result' }, 'child_output')),
-        scripted(effect('complete_parent', {})),
-      ]),
-      observerHandle: {
-        modelId: 'multi-child-falsifier-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
-    telemetry: { enabled: false },
-    port: 0,
+    authorHandle: scriptedAuthor([
+      // Bootstrap → dispatch.
+      scripted(effect('enter_dispatch', { topic: 'multi-child-topic' })),
+      // Child 1 (ingest): request → child accepts → child finishes → parent advances.
+      scripted(effect('request_ingest', { request: { intent: 'ingest' } }, 'ingest_call')),
+      scripted(effect('accept_request', { accepted: true }, 'child_output')),
+      scripted(effect('finish_work', { result: 'ingest-exported-result' }, 'child_output')),
+      scripted(effect('advance_ingest', {})),
+      // Child 2 (review): request → child accepts → child finishes → parent completes.
+      scripted(effect('request_review', { request: { intent: 'review' } }, 'review_call')),
+      scripted(effect('accept_request', { accepted: true }, 'child_output')),
+      scripted(effect('finish_work', { result: 'review-exported-result' }, 'child_output')),
+      scripted(effect('complete_parent', {})),
+    ]),
+    observerModelId: 'multi-child-falsifier-observer',
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     const created = await client.sessions.create({ program: PARENT_PROGRAM });
     const parentSessionId = created.sessionId;
@@ -224,7 +212,7 @@ async function runTwoChildScenario(): Promise<TwoChildEvidence> {
       finalMode: modeOf(finalParent),
     };
   } finally {
-    await server.close();
+    await close();
     rmSync(tempDir, { force: true, recursive: true });
   }
 }

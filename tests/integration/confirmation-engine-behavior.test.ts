@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { appTransport, createPgasClient, PgasApiError, type PgasClient } from '@simodelne/pgas-server/client.js';
+import { PgasApiError, type PgasClient } from '@simodelne/pgas-server/client.js';
 import { createTestHarness } from '@simodelne/pgas-server/testing.js';
 import {
-  createPgasServer,
   reconstructArray,
   type ProgramEntry,
   type ReactionHandler,
   type Specification,
 } from '@simodelne/pgas-server/plugin.js';
+
+import { startRouteHarness } from './foundry-test-utils.js';
 
 describe('confirmation-loop engine behavior falsifier', () => {
   it('documents the real user_confirmation route contract and in-domain canonical decisions', async () => {
@@ -407,25 +408,14 @@ function effect(name: string, payload: Record<string, unknown>): Record<string, 
 async function withRouteSession<T>(
   run: (route: { client: PgasClient; sessionId: string }) => Promise<T>,
 ): Promise<T> {
-  const server = await createPgasServer({
+  const { client, close } = await startRouteHarness({
     programs: [{ name: 'confirmation-engine-falsifier-route', entry: createConfirmationEngineFalsifierEntry([]) }],
-    drivers: {
-      authorHandle: scriptedAuthor([
-        effect('propose_item', { message: 'please approve' }),
-        effect('noop', { message: 'route contract round continued without status write' }),
-      ]),
-      observerHandle: {
-        modelId: 'confirmation-engine-falsifier-route-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
-    telemetry: { enabled: false },
-    port: 0,
+    authorHandle: scriptedAuthor([
+      effect('propose_item', { message: 'please approve' }),
+      effect('noop', { message: 'route contract round continued without status write' }),
+    ]),
+    observerModelId: 'confirmation-engine-falsifier-route-observer',
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     const created = await client.sessions.create({ program: 'confirmation-engine-falsifier-route' });
     await client.sessions.trigger(created.sessionId, { channel: 'user_text', payload: 'start' });
@@ -433,7 +423,7 @@ async function withRouteSession<T>(
     expect((parked.state as { awaitingUserDecision?: { channelId?: string } }).awaitingUserDecision?.channelId).toBe('user_confirmation');
     return await run({ client, sessionId: created.sessionId });
   } finally {
-    await server.close();
+    await close();
   }
 }
 

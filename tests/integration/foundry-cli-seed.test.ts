@@ -1,8 +1,7 @@
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
-import { appTransport, createPgasClient } from '@simodelne/pgas-server/client.js';
 import { describe, expect, it } from 'vitest';
 import { createPgasNewFoundryProgramEntry } from '../../src/foundry-program/registration.js';
 import { createInitialStateSessionCreateFetch, createSessionWithInitialState } from '../../src/cli.js';
+import { startRouteHarness } from './foundry-test-utils.js';
 
 function effect(name: string, payload: Record<string, unknown>) {
   return {
@@ -91,28 +90,17 @@ describe('foundry CLI initial state seed', () => {
 
   it('routes slug/name/target_dir seeds to governed state before the first LLM round', async () => {
     const authorActions: string[] = [];
-    const server = await createPgasServer({
+    const { client, close } = await startRouteHarness({
       programs: [{ name: 'pgas-new', entry: createPgasNewFoundryProgramEntry() }],
-      drivers: {
-        authorHandle: {
-          modelId: 'pgas-new-cli-seed-test',
-          async complete() {
-            authorActions.push('choose_design_path');
-            return JSON.stringify(effect('choose_design_path', { choice: 'default' }));
-          },
-        },
-        observerHandle: {
-          modelId: 'pgas-new-cli-seed-observer',
-          async complete() {
-            return 'noop';
-          },
+      authorHandle: {
+        modelId: 'pgas-new-cli-seed-test',
+        async complete() {
+          authorActions.push('choose_design_path');
+          return JSON.stringify(effect('choose_design_path', { choice: 'default' }));
         },
       },
-      devMode: true,
-      telemetry: { enabled: false },
-      port: 0,
+      observerModelId: 'pgas-new-cli-seed-observer',
     });
-    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
 
     try {
       const created = await createSessionWithInitialState(client, {
@@ -140,7 +128,7 @@ describe('foundry CLI initial state seed', () => {
       expect(firstRound.result).toMatchObject({ name: 'choose_design_path' });
       expect(authorActions).toEqual(['choose_design_path']);
     } finally {
-      await server.close();
+      await close();
     }
   });
 });

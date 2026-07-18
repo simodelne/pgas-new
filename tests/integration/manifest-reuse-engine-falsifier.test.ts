@@ -3,8 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -15,6 +14,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
+import { startRouteHarness } from './foundry-test-utils.js';
 
 interface AgentScenario {
   parentProgram: string;
@@ -220,29 +220,18 @@ async function withManifestReuseServer<T>(
   const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-manifest-reuse-falsifier-'));
   const parentEntry = createParentEntry(tempDir, agent, options.allowedTargetPrograms);
   const childEntry = createChildEntry(tempDir, options.childSpecName);
-  const server = await createPgasServer({
+  const { client, close } = await startRouteHarness({
     programs: [
       { name: agent.parentProgram, entry: parentEntry },
       { name: options.childRegistryName, entry: childEntry },
     ],
-    drivers: {
-      authorHandle: scriptedAuthor(options.script),
-      observerHandle: {
-        modelId: 'manifest-reuse-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
-    telemetry: { enabled: false },
-    port: 0,
+    authorHandle: scriptedAuthor(options.script),
+    observerModelId: 'manifest-reuse-observer',
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     return await run({ client });
   } finally {
-    await server.close();
+    await close();
     rmSync(tempDir, { force: true, recursive: true });
   }
 }

@@ -5,8 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 
-import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -21,6 +20,7 @@ import {
 } from '../../src/foundry-program/capability-registry.js';
 import { synthesizeProgramSpecFromDomain } from '../../src/foundry-program/synthesizer.js';
 import { createStandaloneArtifactPlan } from '../../src/pgas-new/artifact-plan.js';
+import { startRouteHarness } from './foundry-test-utils.js';
 import { extractDocxText } from './fixtures/extract-docx.reference.js';
 import { renderStructuredDocxDocument } from './fixtures/export-docx-render.golden.js';
 
@@ -324,27 +324,16 @@ async function withExtractionServer<T>(
   const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-extraction-falsifier-'));
   const order: string[] = [];
   const entry = scenario.createEntry(tempDir);
-  const server = await createPgasServer({
+  const { client, close } = await startRouteHarness({
     programs: [{ name: scenario.programName, entry }],
-    drivers: {
-      authorHandle: scriptedAuthor(scenario.script, order),
-      observerHandle: {
-        modelId: 'extraction-falsifier-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
+    authorHandle: scriptedAuthor(scenario.script, order),
+    observerModelId: 'extraction-falsifier-observer',
     storage: { uploadsDir: path.join(tempDir, 'uploads') },
-    telemetry: { enabled: false },
-    port: 0,
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     return await run({ client, tempDir, state: scenario.state, order });
   } finally {
-    await server.close();
+    await close();
     rmSync(tempDir, { force: true, recursive: true });
   }
 }
