@@ -1,3 +1,4 @@
+import type { CapabilityGap } from '../foundry-program/synthesizer-store.js';
 import { FIXED_WIRING_MANIFEST_PATH, type PgasNewMode } from './model.js';
 import { isSafeRepoRelativePath, type WiringManifest } from './wiring-manifest.js';
 
@@ -65,7 +66,7 @@ export interface ArtifactPlan {
 export interface GeneratedArtifactPlanOptions {
   stageSlugs?: string[];
   includeSmokeTest?: boolean;
-  capabilityGaps?: readonly unknown[];
+  capabilityGaps?: readonly CapabilityGap[];
   requestedArtifactPaths?: string[];
   exportSurfaces?: {
     docx?: boolean;
