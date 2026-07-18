@@ -2,8 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -12,6 +11,8 @@ import {
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
 import { describe, expect, it } from 'vitest';
+
+import { startRouteHarness } from './foundry-test-utils.js';
 
 const PARENT_PROGRAM = 'delegation-falsifier-parent';
 const CHILD_PROGRAM = 'delegation-falsifier-child';
@@ -354,29 +355,18 @@ async function withDelegationServer<T>(
   const order: string[] = [];
   const parentEntry = createParentEntry(tempDir, scenario.parent, scenario.allowedTargets);
   const childEntry = createChildEntry(tempDir);
-  const server = await createPgasServer({
+  const { client, close } = await startRouteHarness({
     programs: [
       { name: PARENT_PROGRAM, entry: parentEntry },
       { name: CHILD_PROGRAM, entry: childEntry },
     ],
-    drivers: {
-      authorHandle: scriptedAuthor(scenario.script, order),
-      observerHandle: {
-        modelId: 'delegation-falsifier-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
-    telemetry: { enabled: false },
-    port: 0,
+    authorHandle: scriptedAuthor(scenario.script, order),
+    observerModelId: 'delegation-falsifier-observer',
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     return await run({ client, order });
   } finally {
-    await server.close();
+    await close();
     rmSync(tempDir, { force: true, recursive: true });
   }
 }

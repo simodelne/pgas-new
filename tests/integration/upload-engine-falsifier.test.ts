@@ -3,8 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -13,6 +12,8 @@ import {
   type ToolHandler,
 } from '@simodelne/pgas-server/plugin.js';
 import { describe, expect, it } from 'vitest';
+
+import { startRouteHarness } from './foundry-test-utils.js';
 
 const REQUIRED_PROGRAM = 'upload-falsifier-required';
 const NO_CHANNEL_PROGRAM = 'upload-falsifier-no-channel';
@@ -486,29 +487,16 @@ async function withUploadServer<T>(
   const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-upload-falsifier-'));
   const order: string[] = [];
   const entry = scenario.createEntry(tempDir);
-  const server = await createPgasServer({
-    programs: [
-      { name: scenario.programName, entry },
-    ],
-    drivers: {
-      authorHandle: scriptedAuthor(scenario.script, order),
-      observerHandle: {
-        modelId: 'upload-falsifier-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
+  const { client, close } = await startRouteHarness({
+    programs: [{ name: scenario.programName, entry }],
+    authorHandle: scriptedAuthor(scenario.script, order),
+    observerModelId: 'upload-falsifier-observer',
     storage: { uploadsDir: path.join(tempDir, 'uploads') },
-    telemetry: { enabled: false },
-    port: 0,
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     return await run({ client, tempDir, state: scenario.state, order });
   } finally {
-    await server.close();
+    await close();
     rmSync(tempDir, { force: true, recursive: true });
   }
 }

@@ -1,4 +1,76 @@
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import {
+  createPgasServer,
+  type PgasServer,
+  type PgasServerConfig,
+} from '@simodelne/pgas-server/create-server.js';
 import type { TestHarness, TestHarnessSnapshot } from '@simodelne/pgas-server/testing.js';
+
+// ─────────────────────────── route-level harness ───────────────────────────
+//
+// Every hermetic route-level falsifier boots the SAME server + client scaffold:
+// a `createPgasServer` with an injected scripted author handle + a noop observer,
+// `devMode: true`, telemetry off, `port: 0` (no socket — the tests drive
+// `server.app.fetch` through `appTransport`), then a `createPgasClient` over that
+// app with a `dev-token`, then `server.close()` on teardown. Only the registered
+// `programs`, the `authorHandle`, the observer's `modelId`, and (for upload/export/
+// extraction) the `storage.uploadsDir` differ. `startRouteHarness` centralises the
+// identical scaffold and takes those varying pieces as parameters. It deliberately
+// does NOT manage the per-test temp directory / spec-entry lifecycle (those vary in
+// creation and cleanup) — each caller keeps its own `mkdtempSync`/`rmSync`.
+
+/** The provider handle shape both `authorHandle` and `observerHandle` satisfy. */
+type CompletionHandle = { modelId?: string; complete(prompt: string): Promise<string> };
+
+export interface RouteHarness {
+  readonly server: PgasServer;
+  readonly client: PgasClient;
+  /** Graceful `server.close()`. Safe to call from a `finally`. */
+  close(): Promise<void>;
+}
+
+export interface RouteHarnessOptions {
+  /** Programs to register (`{ name, entry }` pairs). */
+  programs: PgasServerConfig['programs'];
+  /** The scripted author driver installed for hermetic completion. */
+  authorHandle: CompletionHandle;
+  /** `modelId` stamped on the noop observer handle. Default `'route-observer'`. */
+  observerModelId?: string;
+  /** Optional persistence/uploads config, e.g. `{ uploadsDir }`. */
+  storage?: PgasServerConfig['storage'];
+  /** Bearer token the client presents. Default `'dev-token'`. */
+  token?: string;
+}
+
+/**
+ * Boot the shared route-level harness (server + app-transport client) used by the
+ * hermetic falsifier integration tests. Returns the live `server`, a `client`
+ * bound to `server.app`, and a `close()` that shuts the server down.
+ */
+export async function startRouteHarness(options: RouteHarnessOptions): Promise<RouteHarness> {
+  const server = await createPgasServer({
+    programs: options.programs,
+    drivers: {
+      authorHandle: options.authorHandle,
+      observerHandle: {
+        modelId: options.observerModelId ?? 'route-observer',
+        async complete() {
+          return 'noop';
+        },
+      },
+    },
+    devMode: true,
+    ...(options.storage ? { storage: options.storage } : {}),
+    telemetry: { enabled: false },
+    port: 0,
+  });
+  const client = createPgasClient(appTransport(server.app, { token: options.token ?? 'dev-token' }));
+  return {
+    server,
+    client,
+    close: () => server.close(),
+  };
+}
 
 // Domain synthesis runs a full in-process TypeScript typecheck + behavioral
 // gate per stage (see domain-synthesis.ts:typecheckStageBody / runBehavioralGate),

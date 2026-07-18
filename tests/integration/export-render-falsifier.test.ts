@@ -4,8 +4,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
-import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { type PgasClient } from '@simodelne/pgas-server/client.js';
 import {
   createProgramAdapters,
   loadSpecWithPatterns,
@@ -19,6 +18,7 @@ import {
   CapabilityRefusalError,
   capabilityEntry,
 } from '../../src/foundry-program/capability-registry.js';
+import { startRouteHarness } from './foundry-test-utils.js';
 import { renderStructuredDocxDocument } from './fixtures/export-docx-render.golden.js';
 
 // PR-10 / PR-E1 — hand-authored HERMETIC falsifier for the DOCX export render seam.
@@ -248,27 +248,16 @@ async function withServer<T>(
   const tempDir = mkdtempSync(path.join(tmpdir(), 'pgas-export-falsifier-'));
   const order: string[] = [];
   const entry = scenario.createEntry(tempDir);
-  const server = await createPgasServer({
+  const { client, close } = await startRouteHarness({
     programs: [{ name: scenario.programName, entry }],
-    drivers: {
-      authorHandle: scriptedAuthor(scenario.script, order),
-      observerHandle: {
-        modelId: 'export-falsifier-observer',
-        async complete() {
-          return 'noop';
-        },
-      },
-    },
-    devMode: true,
+    authorHandle: scriptedAuthor(scenario.script, order),
+    observerModelId: 'export-falsifier-observer',
     storage: { uploadsDir: path.join(tempDir, 'uploads') },
-    telemetry: { enabled: false },
-    port: 0,
   });
-  const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
   try {
     return await run({ client, tempDir });
   } finally {
-    await server.close();
+    await close();
     rmSync(tempDir, { force: true, recursive: true });
   }
 }
