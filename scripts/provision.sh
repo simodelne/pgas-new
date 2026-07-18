@@ -9,7 +9,7 @@
 #
 # Defaults:
 #   --repo-dir        $HOME/pgas-new (or current dir if it's a pgas-new checkout)
-#   --ref             v3.1.0, or this checkout's current HEAD when run from a local checkout
+#   --ref             v3.22.0, or this checkout's current HEAD when run from a local checkout
 #   --base-url        http://localhost:8000/v1
 #   --model           qwen36-27b
 #
@@ -29,7 +29,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR_DEFAULT="${HOME}/pgas-new"
-REF_DEFAULT="v3.1.0"
+REF_DEFAULT="v3.22.0"
 BASE_URL_DEFAULT="http://localhost:8000/v1"
 MODEL_DEFAULT="qwen36-27b"
 
