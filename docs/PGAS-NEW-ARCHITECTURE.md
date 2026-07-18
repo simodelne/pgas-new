@@ -1,8 +1,12 @@
 # PGAS-New Architecture
 
-Status: v3.1 release candidate on `v3.1-auth-v2`; current release target v3.1.0.
+Status: v3.22.0 released on `main`; engine pin `@simodelne/pgas-server@3.21.0`.
 
 ## Changelog
+
+### Since v3.1.0 (current: v3.22.0, engine 3.21.0)
+
+- This doc tracks the foundry architecture, not every release; per-version history lives in the git tags / GitHub releases. Major additions since v3.1.0: real LLM-reasoning domain synthesis; `repo_targeting` + existing-repo attachment; per-item confirmation loops; child-session + research-agent delegation; document upload intake + deterministic DOCX/PDF text extraction; DOCX/HTML export (artifacts are first-class `SessionArtifactRecord`s); and manifest-driven connector reuse of existing repo programs.
 
 ### v3.1.0
 
@@ -27,7 +31,7 @@ The only remaining `--template` value is `pgas-new-foundry`, retained for the le
 
 ## PGAS Contract
 
-Generated consumers target `@simodelne/pgas-server@2.14.1` and use only these public imports:
+Generated consumers target `@simodelne/pgas-server@3.21.0` and use only these public imports:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
@@ -53,7 +57,7 @@ The state dictionary is the source of truth. Conversation history is not state.
 - `graduation`: static, live, and rebase verification status.
 - `curator_requests`: requests to the repo curator.
 
-## 10-Mode Workflow
+## 12-Mode Workflow
 
 | Mode | Purpose | Main Legal Actions | Exit Gate |
 | --- | --- | --- | --- |
@@ -61,8 +65,10 @@ The state dictionary is the source of truth. Conversation history is not state.
 | `repo_targeting` | Choose standalone or existing repo and load wiring manifest. | `select_repo_target`, `authorize_standalone_target`, `load_wiring_manifest`, `authorize_existing_repo_target`, `create_curator_request` | Target authorized, or route to curator. |
 | `architecture_design` | Synthesize the PGAS program spec from approved intake and service attachment points. | `synthesize_program_spec`, `design_architecture`, `web_research`, `record_user_note` | Deterministic synthesized spec is available in in-process transit. |
 | `scaffold_plan` | Produce first-class artifact plan from the synthesized spec before writes. | `plan_artifacts`, `approve_artifact_plan`, `create_curator_request` | Artifact plan approved through `user_confirmation`. |
+| `domain_synthesis` | Generate deterministic stage bodies (pure-compute / external-adapter / llm-reasoning archetypes) + contracts from the synthesized spec. | `synthesize_domain_logic`, `record_user_note` | Stage bodies + contracts synthesized and verified (`program.domain_synthesis_complete`). |
 | `branch_write` | Write only planned artifacts. | `write_scaffold_artifacts`, `git_status` | Artifacts written. |
-| `static_verify` | Install/typecheck/test deterministically and confirm live graduation intent. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification`, `run_parallel_static_checks` (opt-in), `confirm_live_provider_intent` | Static verification passed and live-provider intent confirmed. |
+| `static_verify` | Install/typecheck/test the generated scaffold deterministically. | `npm_install`, `npm_typecheck`, `npm_test`, `run_static_verification`, `run_parallel_static_checks` (opt-in) | Static verification passed. |
+| `smoke_verify` | Boot the generated scaffold on the engine route and prove a route-level smoke, then confirm live-provider intent. | `run_smoke_verification`, `confirm_live_provider_intent` | Smoke verification passed and live-provider intent confirmed. |
 | `live_verify` | Verify through the external API with a real provider. | `run_api_blackbox_verification`, `run_live_provider_verification` | Live verification passed. |
 | `rebase_verify` | Rebase on latest target repo state and rerun static verification. | `git_status`, `git_rebase_latest`, `run_rebase_static_verification` | Post-rebase verification passed. |
 | `pr_graduation` | Open the PR. | `open_pull_request` | Terminal graduation mode. |

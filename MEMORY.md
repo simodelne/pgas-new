@@ -45,7 +45,7 @@ emit YAML. Spec shape is testable; the deterministic step has regression coverag
 That defeats the design-contract tests and reintroduces structural drift.
 
 ### SI-4 — Architecture doc is the contract, not a description
-`docs/PGAS-NEW-ARCHITECTURE.md` is required reading every session. The 10-mode
+`docs/PGAS-NEW-ARCHITECTURE.md` is required reading every session. The 12-mode
 foundry-as-PGAS-program flow described there is the design contract — code
 must implement it. If a PR changes the implementation in a way that doesn't
 match the doc, the doc must change in the same PR (with a "Why" entry under
@@ -63,7 +63,9 @@ internals.
 
 
 
-## Current State - 2026-07-03 (v3.10.1)
+## Current State - 2026-07-18 (v3.22.0, engine `@simodelne/pgas-server` 3.21.0)
+
+> NOTE: the narrative below is a historical v3.10.1-era snapshot (2026-07-03). The foundry has since advanced through v3.22.0 — upload intake, deterministic DOCX/PDF text extraction, DOCX/HTML export, child-session/research-agent delegation, per-item confirmation loops, and manifest-driven connector reuse of existing repo programs. See the git tags / GitHub releases for current state.
 
 - Latest release **v3.10.1** — `main` @ `6acb0ba2`, annotated tag `v3.10.1` (== origin/main HEAD),
   GitHub release published. npm publish N/A (`package.json` is `private: true`). PATCH over v3.10.0.
@@ -92,7 +94,7 @@ internals.
 - Standalone AND attached-repo graduation are clean end-to-end and live-proven (attached: v3.9.0;
   standalone: v3.9.1; rebase-status normalization #112). Gates: typecheck clean · unit 432/5-skip
   · static 9/0.
-- Current server target: latest checked published `@simodelne/pgas-server` is `3.1.0`.
+- Current server target: latest checked published `@simodelne/pgas-server` is `3.21.0`.
 - **Merged-branch cleanup (2026-07-03, authorized, merged-only):** deleted 13 merged remote
   branches (chore/v3.9.0-3.10.0-bump, docs/llm-reasoning-synthesis-spec, feat/sota-facet-c-graduation,
   fix/issue-81/95/100, fix/standalone-graduation-106-107, fix/standalone-llm-stage-planning,

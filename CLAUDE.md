@@ -14,8 +14,9 @@
 **What pgas-new IS:** an interactive PGAS-program design foundry. It is itself
 a PGAS program. Its CLI starts a streaming REPL session against the foundry's
 own program spec; an LLM agent walks the user through phases
-(`intake_intelligence → architecture_design → scaffold_plan → branch_write →
-static_verify → live_verify → rebase_verify → pr_graduation`), synthesizes a
+(`intake_intelligence → repo_targeting → architecture_design → scaffold_plan →
+domain_synthesis → branch_write → static_verify → smoke_verify → live_verify →
+rebase_verify → pr_graduation`, plus `curator_request`), synthesizes a
 fresh PGAS spec from the user's intake, plans artifacts, writes them, runs the
 verification ladder, and graduates a PR. The full design contract lives in
 `docs/PGAS-NEW-ARCHITECTURE.md`.
@@ -39,7 +40,7 @@ v2.7.0 (Phase 1 of the v3 rebuild). It was previously at
 `templates/pgas-new/program/specs.yml.tmpl` — a misnamed location that
 conflated the foundry's runtime program with a user-output template; see
 `docs/POST-MORTEM-2026-06-22-design-phase-drift.md`. The spec declares the
-10 modes above. That spec IS the design contract. If you change the CLI
+12 modes above. That spec IS the design contract. If you change the CLI
 in a way that bypasses any of those modes, you are drifting away from the
 program's nature — stop and surface the change.
 
