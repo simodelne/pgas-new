@@ -112,8 +112,23 @@ function expectCapabilityRefusal(delegation: Record<string, unknown>, capability
   expect(thrown).toBeInstanceOf(CapabilityRefusalError);
   const err = thrown as CapabilityRefusalError;
   expect(err.refused.map((demand) => demand.capability)).toContain(capability);
-  expect(err.message).toContain('v1 delegation is single static/synthesized child');
+  expect(err.message).toContain('v1 delegation is N distinct static/synthesized children');
   expect(err.message).toContain(`${capability} stays refuses`);
+}
+
+function expectCapabilityRefusalMulti(
+  delegation: Record<string, unknown>,
+  context: typeof validationContext,
+  capability: string,
+): void {
+  let thrown: unknown;
+  try {
+    assertDelegationChildrenDescriptor(delegation, context);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(CapabilityRefusalError);
+  expect((thrown as CapabilityRefusalError).refused.map((demand) => demand.capability)).toContain(capability);
 }
 
 describe('delegation children descriptor validation', () => {
@@ -140,11 +155,136 @@ describe('delegation children descriptor validation', () => {
     ).not.toThrow();
   });
 
-  it('requires exactly one child descriptor', () => {
-    expectValidationThrow({ children: [] }, /delegation\.children must declare exactly one child/u);
-    expectValidationThrow(
-      { ...validDelegation(), children: [validChild(), validChild()] },
-      /delegation\.children must declare exactly one child/u,
+  it('requires at least one child descriptor', () => {
+    expectValidationThrow({ children: [] }, /delegation\.children must declare at least one child/u);
+  });
+
+  it('accepts N distinct static children and enforces cross-child uniqueness (Slice B)', () => {
+    // Two distinct STATIC target_spec children on distinct stages, distinct result_paths,
+    // distinct target_specs — the contract-draft-parity multi-child shape. Now in scope.
+    const twoStatic = {
+      ...validDelegation(),
+      children: [
+        {
+          id: 'ingest',
+          stage: 'dispatch_research',
+          target_spec: 'SimoneOS Document Ingest',
+          payload_map: { 'request.topic': 'intake.summary' },
+          result_path: 'dispatch_research.delegation.ingest.result',
+          max_delegated_rounds: 12,
+          optional: true,
+        },
+        {
+          id: 'review',
+          stage: 'settle_review',
+          target_spec: 'contract-review-service',
+          payload_map: { 'request.topic': 'intake.summary' },
+          result_path: 'settle_review.delegation.review.result',
+          max_delegated_rounds: 12,
+          optional: true,
+        },
+      ],
+    };
+    const multiStageContext = {
+      ...validationContext,
+      stages: [
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'dispatch_research' },
+        { slug: 'settle_review' },
+        { slug: 'complete', is_terminal: true },
+      ],
+    };
+    expect(() => assertDelegationChildrenDescriptor(twoStatic, multiStageContext)).not.toThrow();
+
+    const throwsMulti = (delegation: Record<string, unknown>, pattern: RegExp): void => {
+      expect(() => assertDelegationChildrenDescriptor(delegation, multiStageContext)).toThrow(pattern);
+    };
+    // Duplicate id across children is rejected.
+    throwsMulti(
+      {
+        ...twoStatic,
+        children: [twoStatic.children[0], { ...twoStatic.children[1], id: 'ingest' }],
+      },
+      /id must be unique across children/u,
+    );
+    // Two children sharing one delegation stage is rejected.
+    throwsMulti(
+      {
+        ...twoStatic,
+        children: [twoStatic.children[0], { ...twoStatic.children[1], stage: 'dispatch_research', result_path: 'dispatch_research.delegation.review.result' }],
+      },
+      /stage must be unique across children/u,
+    );
+    // Two children pointing at the same target_spec is rejected.
+    throwsMulti(
+      {
+        ...twoStatic,
+        children: [twoStatic.children[0], { ...twoStatic.children[1], target_spec: 'SimoneOS Document Ingest' }],
+      },
+      /target_spec must be distinct across children/u,
+    );
+    // Two children sharing a result_path (on the same stage) is rejected.
+    throwsMulti(
+      {
+        ...twoStatic,
+        children: [twoStatic.children[0], { ...twoStatic.children[1], result_path: 'dispatch_research.delegation.ingest.result', stage: 'dispatch_research' }],
+      },
+      /(result_path must be unique across children|stage must be unique across children)/u,
+    );
+  });
+
+  it('KILL TEST: over-scope modes still refuse even with multiple children (Slice B)', () => {
+    // A domain declaring 2 static children where ONE trips an over-scope mode must still refuse.
+    const twoChildrenOneFanOut = {
+      children: [
+        {
+          id: 'ingest',
+          stage: 'dispatch_research',
+          target_spec: 'SimoneOS Document Ingest',
+          payload_map: { 'request.topic': 'intake.summary' },
+          result_path: 'dispatch_research.delegation.ingest.result',
+          max_delegated_rounds: 12,
+          optional: true,
+        },
+        {
+          id: 'review',
+          stage: 'settle_review',
+          target_spec: 'contract-review-service',
+          fan_out: { axes: ['web', 'files'] },
+          payload_map: { 'request.topic': 'intake.summary' },
+          result_path: 'settle_review.delegation.review.result',
+          max_delegated_rounds: 12,
+          optional: true,
+        },
+      ],
+    };
+    const multiStageContext = {
+      ...validationContext,
+      stages: [
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'dispatch_research' },
+        { slug: 'settle_review' },
+        { slug: 'complete', is_terminal: true },
+      ],
+    };
+    let thrown: unknown;
+    try {
+      assertDelegationChildrenDescriptor(twoChildrenOneFanOut, multiStageContext);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(CapabilityRefusalError);
+    expect((thrown as CapabilityRefusalError).message).toContain('single-child fan-out');
+    // continue-mode and strict (non-optional) still refuse under multi-child too.
+    expectCapabilityRefusalMulti(
+      { ...twoChildrenOneFanOut, children: [twoChildrenOneFanOut.children[0], { ...twoChildrenOneFanOut.children[1], fan_out: undefined, delegation_mode: 'continue' }] },
+      multiStageContext,
+      'delegation_child_session',
+    );
+    expectCapabilityRefusalMulti(
+      { ...twoChildrenOneFanOut, children: [twoChildrenOneFanOut.children[0], { ...twoChildrenOneFanOut.children[1], fan_out: undefined, optional: false }] },
+      multiStageContext,
+      'delegation_child_session',
     );
   });
 
