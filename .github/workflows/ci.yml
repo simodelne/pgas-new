@@ -23,8 +23,3 @@ jobs:
 
       - name: Run pgas-new foundry gates
         run: env -u PGAS_OPENAI_BASE_URL -u PGAS_OPENAI_MODEL -u PGAS_LIVE_SYNTH -u PGAS_LIVE_GRADUATION -u PGAS_LIVE_REPO_TARGETING npm test
-
-  cheap-gates:
-    runs-on: [self-hosted, gpu-pod]
-    steps:
-      - run: echo "cheap-gates ok"
