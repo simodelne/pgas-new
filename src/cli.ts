@@ -567,13 +567,12 @@ function decodeJwtExp(token: string): number | undefined {
 
   try {
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
-    if (isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)) {
-      return decoded.exp;
-    }
+    return isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)
+      ? decoded.exp
+      : undefined;
   } catch {
     return undefined;
   }
-  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
