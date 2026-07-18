@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -994,10 +995,6 @@ function positiveIntegerEnv(name: string, fallback: number): number {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function unique<T>(values: T[]): T[] {

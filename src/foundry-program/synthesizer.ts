@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -7256,10 +7257,6 @@ export function assertPreconditionVocabularyAlignment(spec: unknown): void {
       }
     }
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function assertStages(stages: Stage[]): void {

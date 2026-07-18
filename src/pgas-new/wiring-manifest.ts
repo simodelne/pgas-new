@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, posix, sep } from 'node:path';
 import { load } from 'js-yaml';
@@ -387,8 +388,4 @@ export function isSafeRepoRelativePath(path: string): boolean {
   }
 
   return clean === normalized.replace(/\/+$/u, '');
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

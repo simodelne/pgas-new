@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -1775,10 +1776,6 @@ function itemsForResult(result: Record<string, unknown>): string[] {
   return entries.length > 0
     ? entries.map(([key, value]) => `${key}:${String(value)}`)
     : [`stage:${String(result.stage ?? 'unknown')}`];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function formatBehavioralGateFailure(stage: string, behaviorError: string, fixture: StageBehaviorFixture): string {

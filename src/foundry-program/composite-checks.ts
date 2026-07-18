@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import {
   createCompositeEffectAdapter,
   type CompositeEffectChild,
@@ -190,8 +191,4 @@ function pathWithinPrefix(path: string, prefix: string): boolean {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

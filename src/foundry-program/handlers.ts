@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -1491,10 +1492,6 @@ function domainValue(domain: Record<string, unknown>, path: string): unknown {
     current = (current as Record<string, unknown>)[segment];
   }
   return current;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function stringPayloadField(payload: Record<string, unknown>, key: string): string {

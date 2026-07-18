@@ -1,3 +1,4 @@
+import { isRecord } from '../util/guards.js';
 // pgas-new #166 — foundry capability registry + honest refusal (uplift PR-1).
 //
 // The live 2026-07-14 Codex-driven session for the SimoneOS `contract-revision`
@@ -248,10 +249,6 @@ function collectStringLeaves(value: unknown, out: string[], depth = 0): void {
   } else if (typeof value === 'object') {
     for (const item of Object.values(value)) collectStringLeaves(item, out, depth + 1);
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
