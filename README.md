@@ -2,7 +2,7 @@
 
 `pgas-new` is a PGAS-specific foundry for creating TypeScript/Node PGAS programs. It is not a general coding assistant and it does not scaffold frontend, auth, database, or persistence services beyond explicit attachment points.
 
-The generated code targets the current public `@simodelne/pgas-server` v2 surfaces:
+The generated code targets the current public `@simodelne/pgas-server` (v3.x, engine pin 3.21.0) surfaces:
 
 - `@simodelne/pgas-server/plugin.js`
 - `@simodelne/pgas-server/create-server.js`
@@ -106,7 +106,7 @@ Runtime storage/auth:
 
 Author driver selection (`src/foundry-server.ts`):
 
-- `PGAS_AUTHOR_DRIVER=codex-cli` (or `PGAS_PROVIDER=codex-cli`): route prompts through the local `codex exec` ChatGPT-subscription CLI via engine v2.14's `createCodexCliUnifiedComplete`. Verify with `codex login status`. The foundry sets `PGAS_ENABLE_CODEX_DRIVER=1` automatically when this selector fires.
+- `PGAS_AUTHOR_DRIVER=codex-cli` (or `PGAS_PROVIDER=codex-cli`): route prompts through the local `codex exec` ChatGPT-subscription CLI via the engine's `createCodexCliUnifiedComplete`. Verify with `codex login status`. The foundry sets `PGAS_ENABLE_CODEX_DRIVER=1` automatically when this selector fires.
 - `PGAS_OPENAI_API_KEY`/`OPENAI_API_KEY` set (default path): OpenAI-compatible HTTP provider.
 - Codex-cli wins over OpenAI when both are configured.
 
