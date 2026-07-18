@@ -1053,6 +1053,7 @@ function applyDelegationSchema(
     schema[`${base}.degraded`] = 'boolean';
     schema[`${base}.degrade_reason`] = 'string';
     schema[`${base}.requested`] = 'boolean';
+    schema[`${base}.request`] = 'object';
   }
   // Base paths for the `system_query_result` continuation payload. The skeleton
   // declares sub-paths (inputs.query_meta.*, inputs.query_result.*); the ingestion
@@ -1078,6 +1079,12 @@ function applyDelegationActions(
       result_path: child.result_path,
       mutations: [
         { op: 'MSet', path: `${delegationStateBase(child)}.requested`, value: true },
+        // Capture the author-supplied request payload into state (from_arg). Deterministic
+        // delegationPolicy.inputEnrichment still supplies each child's inputs from parent state,
+        // so the child never spawns empty; this records the author's request and satisfies the
+        // arg-carried-delegation contract (a delegation action must carry a from_arg payload
+        // mutation — simoneos#901).
+        { op: 'MSet', path: `${delegationStateBase(child)}.request`, from_arg: 'request' },
       ],
       description: `Dispatch the ${child.id} child program and wait for the routed delegation result.`,
       arg_descriptions: {
