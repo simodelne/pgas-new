@@ -189,18 +189,32 @@ export function renderExistingRepoAttachment(options: RenderExistingRepoOptions)
 }
 
 function existingRepoSynthesizedSources(options: RenderExistingRepoOptions, sources: SynthesizedSources): SynthesizedSources {
-  if (!sources.smokeTestTs) {
-    return sources;
-  }
+  // The program lands at <programs_dir>/<slug> in the existing repo. Consumer QC/spec-graph
+  // discovery (and the frontend catalog) locate the spec via ProgramEntry.frontendSpecPath,
+  // so stamp the repo-relative program directory into the generated registration.
+  const frontendSpecPath = `${trimRepoRelativePath(options.manifest.paths.programs_dir)}/${options.slug}`;
+  const registrationTs = sources.registrationTs
+    ? injectFrontendSpecPath(sources.registrationTs, frontendSpecPath)
+    : sources.registrationTs;
 
   return {
     ...sources,
-    smokeTestTs: rewriteSmokeTestRegistrationImport(
-      sources.smokeTestTs,
-      options.slug,
-      existingRepoProgramRegistrationImport(options.manifest, options.slug),
-    ),
+    registrationTs,
+    smokeTestTs: sources.smokeTestTs
+      ? rewriteSmokeTestRegistrationImport(
+          sources.smokeTestTs,
+          options.slug,
+          existingRepoProgramRegistrationImport(options.manifest, options.slug),
+        )
+      : sources.smokeTestTs,
   };
+}
+
+function injectFrontendSpecPath(registrationTs: string, frontendSpecPath: string): string {
+  if (registrationTs.includes('frontendSpecPath:')) return registrationTs;
+  const anchor = 'return {\n    spec,\n';
+  if (!registrationTs.includes(anchor)) return registrationTs;
+  return registrationTs.replace(anchor, `return {\n    spec,\n    frontendSpecPath: '${frontendSpecPath}',\n`);
 }
 
 function existingRepoProgramRegistrationImport(manifest: WiringManifest, slug: string): string {

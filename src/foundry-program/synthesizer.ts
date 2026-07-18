@@ -542,6 +542,7 @@ export function synthesizeProgramSpecFromDomain(
   };
   applyConfirmationLoopIngestion(recordField(spec, 'ingestion'), confirmationLoops);
   applyDocumentsIngestion(recordField(spec, 'ingestion'), documents);
+  applyDelegationIngestion(recordField(spec, 'ingestion'), delegationChildren);
 
   spec.reactions = {
     capture_initial_entry_input: {
@@ -1017,6 +1018,14 @@ function applyDelegationChannel(
       optional: true,
     };
   }
+  // Delegation continuation contract: when a Sync child returns, the engine fires
+  // the inbound `system_query_result` channel to wake the parent. Engine >=3.23 is
+  // strict — the spec MUST declare this channel (and its ingestion + schema, below)
+  // or the DelegationConsumer continuation trigger fails `channel_not_declared`.
+  // Mirrors every SimoneOS delegating program (fee-proposal-drafter, draft-policy).
+  if (children.length > 0) {
+    channels.system_query_result = { direction: 'In', sync: 'Async' };
+  }
 }
 
 function applyDelegationSchema(
@@ -1044,6 +1053,15 @@ function applyDelegationSchema(
     schema[`${base}.degraded`] = 'boolean';
     schema[`${base}.degrade_reason`] = 'string';
     schema[`${base}.requested`] = 'boolean';
+    schema[`${base}.request`] = 'object';
+  }
+  // Base paths for the `system_query_result` continuation payload. The skeleton
+  // declares sub-paths (inputs.query_meta.*, inputs.query_result.*); the ingestion
+  // targets the BASE paths, so declare them or engine >=3.23 rejects with
+  // CouplingError S-4 (path "inputs.query_meta" is not schema-declared).
+  if (children.length > 0) {
+    schema['inputs.query_meta'] = 'object';
+    schema['inputs.query_result'] = 'any';
   }
 }
 
@@ -1061,6 +1079,12 @@ function applyDelegationActions(
       result_path: child.result_path,
       mutations: [
         { op: 'MSet', path: `${delegationStateBase(child)}.requested`, value: true },
+        // Capture the author-supplied request payload into state (from_arg). Deterministic
+        // delegationPolicy.inputEnrichment still supplies each child's inputs from parent state,
+        // so the child never spawns empty; this records the author's request and satisfies the
+        // arg-carried-delegation contract (a delegation action must carry a from_arg payload
+        // mutation — simoneos#901).
+        { op: 'MSet', path: `${delegationStateBase(child)}.request`, from_arg: 'request' },
       ],
       description: `Dispatch the ${child.id} child program and wait for the routed delegation result.`,
       arg_descriptions: {
@@ -1119,7 +1143,21 @@ function applyDelegationModeWiring(
     const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.vocabulary = unique([...vocabulary, delegationRequestActionName(child)]);
-    mode.channels = unique([...channels, delegationChannelName(child)]);
+    // The delegation-awaiting mode must list the outbound `_call` channel AND the
+    // inbound `system_query_result` continuation channel (engine >=3.23 rejects the
+    // continuation event if the active mode does not permit the channel).
+    mode.channels = unique([...channels, delegationChannelName(child), 'system_query_result']);
+  }
+}
+
+function applyDelegationIngestion(
+  ingestion: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  // Map the engine-fired `system_query_result` continuation payload to the declared
+  // base paths so the strict (engine >=3.23) `no_ingestion_paths` check is satisfied.
+  if (children.length > 0) {
+    ingestion.system_query_result = ['inputs.query_meta', 'inputs.query_result'];
   }
 }
 
@@ -5064,6 +5102,12 @@ const REUSABLE_AGENT_PROVIDES: readonly WiringAvailableProgram['provides'][] = [
   'delegation_review',
 ];
 
+// Canonical delegated-input roots a payload_map target may land under (child inputs.<target>).
+// request.*/domain_context.* cover synthesized workers + shared context; answers.* and
+// document_intake.* let manifest-reuse payload_maps hit the real SimoneOS agents' input
+// contracts (Legal Research answers.research_question, Review Service document_intake.work_product).
+const DELEGATION_PAYLOAD_TARGET_ROOTS = ['request.', 'domain_context.', 'answers.', 'document_intake.'] as const;
+
 function reusableAgentEntryForChild(
   child: DelegationChildDescriptor,
   availablePrograms: WiringAvailableProgram[],
@@ -5596,7 +5640,13 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch manifest-reused research' });
     const afterDelegation = await readSnapshot(client, sessionId);
-    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    // The delegation continuation may already have advanced the parent to a terminal
+    // mode; tolerate an over-trigger on the completion step.
+    try {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    } catch (error) {
+      if (!String((error as Error).message).includes('terminal')) throw error;
+    }
     const final = await readSnapshot(client, sessionId);
     return { afterDelegation, final };
   } finally {
@@ -5773,10 +5823,21 @@ function renderMultiChildDelegationSmokeTestSource(
       `          scripted(effect(${tsString(child.transitionActionName)}, {\n            result_json: JSON.stringify({ stage: ${tsString(child.transitionActionName)} }),\n            items_json: JSON.stringify([${tsString(`${child.transitionActionName}-item`)}]),\n          }, ${tsString(child.transitionChannel)})),`,
     ]),
   ].join('\n');
-  const triggerCount = childSpecs.length * 2 + 1;
-  const triggerCalls = Array.from({ length: triggerCount }, (_, index) =>
-    `      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'drive multi-child delegation step ${String(index)}' });`,
-  ).join('\n');
+  // Upper bound on rounds needed to dispatch + settle every child then complete.
+  // The flow may reach a terminal mode before the last step (delegation continuation
+  // round-count varies by engine version), so the driver stops on a terminal session
+  // instead of hard-failing on an over-trigger.
+  const triggerCount = childSpecs.length * 2 + 2;
+  const triggerCalls = [
+    `      for (let step = 0; step < ${String(triggerCount)}; step += 1) {`,
+    `        try {`,
+    `          await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`drive multi-child delegation step \${String(step)}\` });`,
+    `        } catch (error) {`,
+    `          if (String((error as Error).message).includes('terminal')) break;`,
+    `          throw error;`,
+    `        }`,
+    `      }`,
+  ].join('\n');
   const resultAssertions = childSpecs.map((child) => `      const ${child.resultVar} = resultAt(final.domain, ${tsString(child.resultPath)});
       expect(${child.resultVar}.status).toBe('complete');
       expect(typeof ${child.resultVar}.sessionId).toBe('string');
@@ -6183,7 +6244,13 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch delegated worker' });
     const afterDelegation = await readSnapshot(client, sessionId);
-    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    // The delegation continuation may already have advanced the parent to a terminal
+    // mode; tolerate an over-trigger on the completion step.
+    try {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    } catch (error) {
+      if (!String((error as Error).message).includes('terminal')) throw error;
+    }
     const final = await readSnapshot(client, sessionId);
     return { afterDelegation, final };
   } finally {
@@ -7743,6 +7810,17 @@ export function assertDelegationChildrenDescriptor(
   const seenResultPaths = new Set<string>();
   const seenTargetSpecs = new Set<string>();
 
+  // A later child's payload_map may source from an earlier child's landed result
+  // (delegation result-chaining — e.g. review-service consuming the document-ingest
+  // output as its document_intake.work_product). Pre-declare every child's result_path
+  // (and its `.result` payload sub-path) so those sources validate.
+  for (const rawChild of children) {
+    if (isRecord(rawChild) && typeof rawChild.result_path === 'string') {
+      schemaPaths.add(rawChild.result_path);
+      schemaPaths.add(`${rawChild.result_path}.result`);
+    }
+  }
+
   for (const [i, rawChild] of children.entries()) {
     const child = requiredRecord(rawChild, `delegation.children[${i}]`);
     assertDelegationV1Scope(delegation, child);
@@ -7832,8 +7910,16 @@ export function assertDelegationChildrenDescriptor(
     const payloadMap = requiredRecord(child.payload_map, `delegation.children[${i}].payload_map`);
     for (const [target, source] of Object.entries(payloadMap)) {
       const targetPath = requiredString(target, `delegation.children[${i}].payload_map target`);
-      if (!targetPath.startsWith('request.') && !targetPath.startsWith('domain_context.')) {
-        throw new Error(`delegation.children[${i}].payload_map target ${targetPath} must start with request. or domain_context.`);
+      // Delegation payload targets land at the child's inputs.<target>. Allow the
+      // canonical delegated-input roots used by SimoneOS agents: request.* (document
+      // ingest / synthesized workers), domain_context.* (shared context), answers.*
+      // (legal research question inputs), and document_intake.* (review-service work
+      // product). This lets manifest-reuse payload_maps target each agent's real input
+      // contract instead of a generic request.topic.
+      if (!DELEGATION_PAYLOAD_TARGET_ROOTS.some((root) => targetPath.startsWith(root))) {
+        throw new Error(
+          `delegation.children[${i}].payload_map target ${targetPath} must start with one of: ${DELEGATION_PAYLOAD_TARGET_ROOTS.join(', ')}`,
+        );
       }
       const sourcePath = requiredString(source, `delegation.children[${i}].payload_map.${targetPath}`);
       if (!delegationSchemaPathDeclared(sourcePath, schemaPaths)) {

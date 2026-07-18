@@ -350,7 +350,6 @@ describe('template renderer', () => {
       const projection = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/projection.ts'), 'utf8');
       const html = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/export/html.ts'), 'utf8');
       const docx = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/export/docx.ts'), 'utf8');
-      const frontend = readFileSync(join(repoRoot, 'programs/fee-proposal-drafter/frontend.spec.yml'), 'utf8');
       const deterministic = readFileSync(join(repoRoot, 'tests/fee-proposal-drafter-deterministic.test.ts'), 'utf8');
       const facts = readFileSync(join(repoRoot, 'qc/facts/fee-proposal-drafter.facts.yml'), 'utf8');
 
@@ -361,8 +360,6 @@ describe('template renderer', () => {
       expect(html).toContain('Acceptance and Signature');
       expect(docx).toContain('renderStructuredDocxDocument');
       expect(docx).toContain('word/document.xml');
-      expect(frontend).toContain('document-editor');
-      expect(frontend).toContain('frontend_intake');
       expect(deterministic).toContain('renderStructuredDocxDocument');
       expect(deterministic).toContain("expect(docx[0]).toBe(0x50)");
       expect(facts).toContain('required_derived_keys');

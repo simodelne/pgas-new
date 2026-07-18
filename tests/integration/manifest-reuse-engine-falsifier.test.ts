@@ -178,19 +178,24 @@ describe('manifest reuse engine falsifier — document-ingest + review agents (S
 async function runManifestReuseScenario(options: ManifestReuseScenario): Promise<ScenarioEvidence> {
   const { agent } = options;
   return withManifestReuseServer(options, async ({ client }) => {
-    const parentSessionId = await createParentDispatchSession(client, agent);
+    const created = await client.sessions.create({ program: agent.parentProgram });
+    const parentSessionId = created.sessionId;
 
-    await client.sessions.trigger(parentSessionId, {
-      channel: 'user_text',
-      payload: 'dispatch delegated work',
-    });
+    // Drive bootstrap -> dispatch -> completion. With the delegation continuation
+    // contract in place, the engine-fired system_query_result wakes the parent and can
+    // auto-advance it to a terminal mode within a single trigger, so tolerate an
+    // over-trigger instead of asserting an intermediate stage.
+    for (const payload of ['bootstrap parent', 'dispatch delegated work', 'complete parent']) {
+      try {
+        await client.sessions.trigger(parentSessionId, { channel: 'user_text', payload });
+      } catch (error) {
+        if (String((error as Error).message).includes('terminal')) break;
+        throw error;
+      }
+    }
+
     const afterDelegationDomain = (await client.sessions.world(parentSessionId)).domain;
     const result = resultAt(afterDelegationDomain, actionResultPath(agent));
-
-    await client.sessions.trigger(parentSessionId, {
-      channel: 'user_text',
-      payload: 'complete parent',
-    });
     const finalParent = await client.sessions.get(parentSessionId);
 
     return {
@@ -199,17 +204,6 @@ async function runManifestReuseScenario(options: ManifestReuseScenario): Promise
       finalMode: modeOf(finalParent),
     };
   });
-}
-
-async function createParentDispatchSession(client: PgasClient, agent: AgentScenario): Promise<string> {
-  const created = await client.sessions.create({ program: agent.parentProgram });
-  await client.sessions.trigger(created.sessionId, {
-    channel: 'user_text',
-    payload: 'bootstrap parent',
-  });
-  const afterBootstrap = await client.sessions.get(created.sessionId);
-  expect(modeOf(afterBootstrap)).toBe(agent.stage);
-  return created.sessionId;
 }
 
 async function withManifestReuseServer<T>(
