@@ -3982,6 +3982,13 @@ function renderSmokeTestSource(
   if (documents) {
     return renderDocumentUploadSmokeTestSource(slug, name, entryChannel, documents, transitionActions);
   }
+  // Slice B: N distinct static delegation children dispatch + settle sequentially. The
+  // single-child renderers below stay byte-identical for exactly one child; only 2+ children
+  // route to the multi-child smoke that dispatches + settles EVERY child against its own
+  // separately-registered stub program.
+  if (delegationChildren.length >= 2) {
+    return renderMultiChildDelegationSmokeTestSource(slug, name, entryChannel, delegationChildren, transitionActions);
+  }
   const delegationSmokeChild = delegationChildren.find((child) =>
     child.synthesize_child?.kind === 'worker' || child.synthesize_child?.kind === 'research_agent');
   if (delegationSmokeChild) {
@@ -5717,6 +5724,324 @@ function scripted(response: ReturnType<typeof effect>, expectPromptIncludes?: st
 `;
 }
 
+// Slice B multi-child smoke: dispatch + settle EVERY delegation child sequentially against
+// its own separately-registered stub program. Each child owns a distinct delegation stage,
+// so the parent drives begin_work → (per child: request_<id>, child accept/finish,
+// complete_<stage>) → terminal. Every child's landed result is asserted `complete` with a
+// distinct child sessionId. The single-child renderers stay byte-identical; only 2+ children
+// route here.
+function renderMultiChildDelegationSmokeTestSource(
+  slug: string,
+  name: string,
+  entryChannel: string,
+  children: DelegationChildDescriptor[],
+  transitionActions: TransitionAction[],
+): string {
+  const parentPascal = toPascalCase(slug);
+  const childSpecs = children.map((child, index) => {
+    const registryName = child.registered_name ?? delegationTargetSpec(child);
+    const specName = delegationTargetSpec(child);
+    const transitionAction = transitionActions.find((action) => action.source === child.stage);
+    const transitionActionName = transitionAction?.name ?? `complete_${safeIdentifier(child.stage)}`;
+    const transitionChannel = transitionAction?.archetype === 'llm-reasoning' ? 'widget_output' : 'stage_output';
+    const topic = `seeded multi-child topic ${String(index)}`;
+    const resultVar = `result_${safeIdentifier(delegationStateBase(child))}`;
+    return {
+      registryName,
+      specName,
+      requestAction: delegationRequestActionName(child),
+      channel: delegationChannelName(child),
+      transitionActionName,
+      transitionChannel,
+      resultPath: child.result_path,
+      base: delegationStateBase(child),
+      topic,
+      resultVar,
+      specYaml: multiChildStubSpecYaml(specName, name),
+    };
+  });
+  const childEntriesArray = childSpecs
+    .map((child, index) => `        { name: ${tsString(child.registryName)}, entry: createMultiChildStub(tempDir, ${String(index)}) },`)
+    .join('\n');
+  const scriptEntries = [
+    `          scripted(effect('begin_work', {})),`,
+    ...childSpecs.flatMap((child) => [
+      `          scripted(effect(${tsString(child.requestAction)}, { request: { topic: ${tsString(child.topic)} } }, ${tsString(child.channel)})),`,
+      `          scripted(effect('accept_request', { accepted: true }, 'child_output'), ${tsString(child.topic)}),`,
+      `          scripted(effect('finish_work', { summary: ${tsString(`completed ${child.topic}`)}, seeded_topic: ${tsString(child.topic)} }, 'child_output'), ${tsString(child.topic)}),`,
+      `          scripted(effect(${tsString(child.transitionActionName)}, {\n            result_json: JSON.stringify({ stage: ${tsString(child.transitionActionName)} }),\n            items_json: JSON.stringify([${tsString(`${child.transitionActionName}-item`)}]),\n          }, ${tsString(child.transitionChannel)})),`,
+    ]),
+  ].join('\n');
+  const triggerCount = childSpecs.length * 2 + 1;
+  const triggerCalls = Array.from({ length: triggerCount }, (_, index) =>
+    `      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'drive multi-child delegation step ${String(index)}' });`,
+  ).join('\n');
+  const resultAssertions = childSpecs.map((child) => `      const ${child.resultVar} = resultAt(final.domain, ${tsString(child.resultPath)});
+      expect(${child.resultVar}.status).toBe('complete');
+      expect(typeof ${child.resultVar}.sessionId).toBe('string');
+      childSessionIds.push(String(${child.resultVar}.sessionId));
+      expect(Number(${child.resultVar}.rounds)).toBeGreaterThanOrEqual(1);
+      expect(final.domain[${tsString(`${child.base}.settled`)}]).toBe(true);
+      expect(final.domain[${tsString(`${child.base}.degraded`)}]).toBe(false);`).join('\n');
+  const childStubSpecCases = childSpecs
+    .map((child, index) => `    case ${String(index)}:\n      return ${JSON.stringify(child.specYaml)};`)
+    .join('\n');
+  return `import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createPgasServer } from '@simodelne/pgas-server/create-server.js';
+import { appTransport, createPgasClient, type PgasClient } from '@simodelne/pgas-server/client.js';
+import {
+  createProgramAdapters,
+  loadSpecWithPatterns,
+  type ProgramEntry,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
+import { create${parentPascal}ProgramEntry } from '../src/programs/${slug}/registration.js';
+
+describe('generated multi-child delegation smoke', () => {
+  it('dispatches and settles all ${String(childSpecs.length)} delegation children hermetically through the route for ${name}', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'pgas-generated-multi-child-delegation-smoke-'));
+    const server = await createPgasServer({
+      programs: [
+        { name: ${tsString(slug)}, entry: create${parentPascal}ProgramEntry() },
+${childEntriesArray}
+      ],
+      drivers: {
+        authorHandle: scriptedAuthor([
+${scriptEntries}
+        ]),
+        observerHandle: {
+          modelId: 'generated-multi-child-delegation-smoke-observer',
+          async complete() {
+            return 'noop';
+          },
+        },
+      },
+      devMode: true,
+      telemetry: { enabled: false },
+      port: 0,
+    });
+    const client = createPgasClient(appTransport(server.app, { token: 'dev-token' }));
+    const childSessionIds: string[] = [];
+    try {
+      const created = await client.sessions.create({ program: ${tsString(slug)} });
+      const sessionId = created.sessionId;
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'bootstrap multi-child delegation parent' });
+${triggerCalls}
+      const final = await readSnapshot(client, sessionId);
+${resultAssertions}
+      expect(new Set(childSessionIds).size).toBe(${String(childSpecs.length)});
+      expect(final.mode).toBe('complete');
+    } finally {
+      await server.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+interface Snapshot {
+  mode: string | null;
+  domain: Record<string, unknown>;
+}
+
+async function readSnapshot(client: PgasClient, sessionId: string): Promise<Snapshot> {
+  const [envelope, world] = await Promise.all([
+    client.sessions.get(sessionId),
+    client.sessions.world(sessionId),
+  ]);
+  const state = envelope.state as Record<string, unknown> | undefined;
+  return {
+    mode: firstString(envelope.mode, state?.mode),
+    domain: world.domain as Record<string, unknown>,
+  };
+}
+
+function resultAt(domain: Record<string, unknown>, pathKey: string): Record<string, unknown> {
+  const direct = domain[pathKey];
+  if (direct && typeof direct === 'object' && !Array.isArray(direct)) {
+    return direct as Record<string, unknown>;
+  }
+  const prefix = \`\${pathKey}.\`;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(domain)) {
+    if (key.startsWith(prefix)) {
+      result[key.slice(prefix.length)] = value;
+    }
+  }
+  return result;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return null;
+}
+
+function createMultiChildStub(tempDir: string, index: number): ProgramEntry {
+  const specPath = join(tempDir, \`multi-child-stub-\${String(index)}.yml\`);
+  writeFileSync(specPath, multiChildStubSpec(index), 'utf8');
+  const { spec } = loadSpecWithPatterns(specPath);
+  return {
+    spec,
+    delegationResultPolicy: {
+      fields: [
+        { path: 'work.summary', key: 'summary' },
+        { path: 'work.seeded_topic', key: 'seeded_topic' },
+      ],
+    },
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, multiChildStubHandlers),
+  };
+}
+
+const multiChildStubHandlers: Record<string, ToolHandler> = {
+  async accept_request(payload) {
+    return { ok: true, action: 'accept_request', payload };
+  },
+  async finish_work(payload) {
+    return { ok: true, action: 'finish_work', payload };
+  },
+};
+
+function multiChildStubSpec(index: number): string {
+  switch (index) {
+${childStubSpecCases}
+    default:
+      throw new Error(\`no multi-child stub spec for index \${String(index)}\`);
+  }
+}
+
+function scriptedAuthor(responses: ScriptedAuthorResponse[]) {
+  let index = 0;
+  return {
+    modelId: 'generated-multi-child-delegation-smoke-author',
+    async complete(prompt: string) {
+      const response = responses[index++];
+      if (!response) {
+        throw new Error(\`no generated multi-child delegation smoke author response scripted for call \${String(index - 1)}\`);
+      }
+      if (response.expectPromptIncludes && !prompt.includes(response.expectPromptIncludes)) {
+        throw new Error(\`expected generated multi-child delegation prompt to include \${response.expectPromptIncludes}\`);
+      }
+      return JSON.stringify(response.response);
+    },
+  };
+}
+
+interface ScriptedAuthorResponse {
+  response: ReturnType<typeof effect>;
+  expectPromptIncludes?: string;
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel = 'widget_output') {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
+}
+
+function scripted(response: ReturnType<typeof effect>, expectPromptIncludes?: string): ScriptedAuthorResponse {
+  return { response, ...(expectPromptIncludes ? { expectPromptIncludes } : {}) };
+}
+`;
+}
+
+function multiChildStubSpecYaml(specName: string, parentName: string): string {
+  return [
+    `name: ${JSON.stringify(specName)}`,
+    'termination: BoundedSession',
+    'topology: CyclicTopology',
+    'pure: true',
+    '',
+    'preamble: |',
+    `  Inline multi-child delegation smoke child for ${parentName}.`,
+    '',
+    'initial: receive',
+    'terminal: [complete]',
+    '',
+    'features:',
+    '  - base',
+    '',
+    'channels:',
+    '  user_text: { direction: In, sync: Async }',
+    '  child_output: { direction: Out, sync: Sync }',
+    '',
+    'modes:',
+    '  receive:',
+    '    vocabulary: [accept_request]',
+    '    channels: [user_text, child_output]',
+    '    transitions:',
+    '      - target: work',
+    '        guard: { kind: FieldTruthy, path: child.received }',
+    '  work:',
+    '    vocabulary: [finish_work]',
+    '    channels: [user_text, child_output]',
+    '    transitions:',
+    '      - target: complete',
+    '        guard: { kind: FieldTruthy, path: work.done }',
+    '  complete:',
+    '    vocabulary: []',
+    '    channels: [child_output]',
+    '',
+    'proceed_to:',
+    '  accept_request: work',
+    '  finish_work: complete',
+    '',
+    'projection:',
+    '  receive:',
+    '    include: [inputs.request, inputs.request.topic, inputs.domain_context, inputs.domain_context.source_program]',
+    '    exclude: []',
+    '  work:',
+    '    include: [inputs.request, inputs.request.topic, child.received, work.summary, work.seeded_topic]',
+    '    exclude: []',
+    '  complete:',
+    '    include: [inputs.request, inputs.request.topic, child.received, work.done, work.summary, work.seeded_topic]',
+    '    exclude: []',
+    '',
+    'prompts:',
+    '  receive: "Accept the delegated multi-child request."',
+    '  work: "Finish the delegated multi-child request and echo the seeded topic."',
+    '  complete: "Terminal."',
+    '',
+    'ingestion:',
+    '  user_text:',
+    '    - inputs.user_text',
+    '',
+    'action_map:',
+    '  accept_request:',
+    '    description: "Record that the delegated request was received."',
+    '    mutations:',
+    '      - { op: MSet, path: child.received, value: true }',
+    '    channel: child_output',
+    '  finish_work:',
+    '    description: "Complete the delegated multi-child request."',
+    '    mutations:',
+    '      - { op: MSet, path: work.done, value: true }',
+    '      - { op: MSet, path: work.summary, from_arg: summary }',
+    '      - { op: MSet, path: work.seeded_topic, from_arg: seeded_topic }',
+    '    channel: child_output',
+    '',
+    'schema:',
+    '  inputs.user_text: string',
+    '  inputs.request: object',
+    '  inputs.request.topic: string',
+    '  inputs.domain_context: object',
+    '  inputs.domain_context.source_program: string',
+    '  inputs.domain_context.source_session_id: string',
+    '  inputs.domain_context.target_program: string',
+    '  child.received: boolean',
+    '  work.done: boolean',
+    '  work.summary: string',
+    '  work.seeded_topic: string',
+    '',
+    'repair_bound: 2',
+    '',
+    'fallback:',
+    '  channel: child_output',
+    '  payload: { ok: false }',
+    '',
+  ].join('\n');
+}
+
 function renderDelegationSmokeTestSource(
   slug: string,
   name: string,
@@ -7402,116 +7727,147 @@ export function assertDelegationChildrenDescriptor(
     return;
   }
   const children = requiredArray(childrenRaw, 'delegation.children');
-  if (children.length !== 1) {
-    throw new Error('delegation.children must declare exactly one child');
+  if (children.length === 0) {
+    throw new Error('delegation.children must declare at least one child');
   }
-  const child = requiredRecord(children[0], 'delegation.children[0]');
-  assertDelegationV1Scope(delegation, child);
 
-  const id = requiredString(child.id, 'delegation.children[0].id');
-  if (!/^[a-z][a-z0-9_]*$/u.test(id)) {
-    throw new Error(`delegation.children[0].id must be a slug-safe identifier; got ${id}`);
-  }
+  // Slice B (multi-child static delegation): validate EACH of N children. N ≥ 2 distinct
+  // STATIC children are now in scope (contract-draft parity — the emitters already fan out
+  // over every child). assertDelegationV1Scope still refuses per-child fan_out / dynamic
+  // targeting / continue-mode / strict, so a *single child fanning to many targets* stays
+  // refuses; only *N distinct static children* is unlocked here. Cross-child uniqueness on
+  // id / channel / stage / result_path / target_spec guarantees no request_${id} or
+  // ${id}_call collision and no shared delegation stage between children.
   const actionNames = new Set(context.actionNames);
-  const requestAction = `request_${id}`;
-  if (actionNames.has(requestAction)) {
-    throw new Error(`delegation child ${requestAction} action collides with generated action set`);
-  }
   const channelNames = new Set(context.channelNames);
-  const callChannel = `${id}_call`;
-  if (channelNames.has(callChannel)) {
-    throw new Error(`delegation child ${callChannel} channel collides with generated channel set`);
-  }
-
-  const stage = requiredString(child.stage, 'delegation.children[0].stage');
-  const stageRecord = context.stages.find((candidate) => candidate.slug === stage);
-  if (!stageRecord || stageRecord.is_bootstrap === true || stageRecord.is_terminal === true) {
-    throw new Error(`delegation.children[0].stage must reference a declared non-bootstrap non-terminal stage; got ${stage}`);
-  }
-
-  const hasTargetSpec = child.target_spec !== undefined;
-  const hasSynthesizeChild = child.synthesize_child !== undefined;
-  if (hasTargetSpec === hasSynthesizeChild) {
-    throw new Error('delegation.children[0] must declare exactly one of target_spec or synthesize_child');
-  }
-
-  if (hasTargetSpec) {
-    const targetSpec = requiredString(child.target_spec, 'delegation.children[0].target_spec');
-    const normalizedTarget = normalizeProgramNameForSelfTarget(targetSpec);
-    if (
-      normalizedTarget === normalizeProgramNameForSelfTarget(context.programSlug) ||
-      normalizedTarget === normalizeProgramNameForSelfTarget(context.programName)
-    ) {
-      throw new Error('delegation.children[0].target_spec must not reference the parent program');
-    }
-  }
-
-  if (hasSynthesizeChild) {
-    const synthesizeChild = requiredRecord(child.synthesize_child, 'delegation.children[0].synthesize_child');
-    const kind = requiredString(synthesizeChild.kind, 'delegation.children[0].synthesize_child.kind');
-    if (kind !== 'research_agent' && kind !== 'worker') {
-      throw new Error(`delegation.children[0].synthesize_child.kind must be research_agent or worker; got ${kind}`);
-    }
-    if (synthesizeChild.research_backend !== undefined) {
-      const researchBackend = requiredString(synthesizeChild.research_backend, 'delegation.children[0].synthesize_child.research_backend');
-      if (researchBackend !== 'host_connector' && researchBackend !== 'self_contained') {
-        throw new Error(`delegation.children[0].synthesize_child.research_backend must be self_contained or host_connector; got ${researchBackend}`);
-      }
-      if (kind !== 'research_agent') {
-        throw new Error('delegation.children[0].synthesize_child.research_backend is only valid for kind research_agent');
-      }
-    }
-    requiredString(synthesizeChild.purpose, 'delegation.children[0].synthesize_child.purpose');
-    const resultFields = requiredRecord(synthesizeChild.result_fields, 'delegation.children[0].synthesize_child.result_fields');
-    if (Object.keys(resultFields).length === 0) {
-      throw new Error('delegation.children[0].synthesize_child.result_fields must declare at least one field');
-    }
-    for (const [field, type] of Object.entries(resultFields)) {
-      if (!/^[a-z][a-z0-9_]*$/u.test(field)) {
-        throw new Error(`delegation.children[0].synthesize_child.result_fields key must be slug-safe; got ${field}`);
-      }
-      requiredString(type, `delegation.children[0].synthesize_child.result_fields.${field}`);
-    }
-    const childSlug = typeof synthesizeChild.slug === 'string' && synthesizeChild.slug.trim().length > 0
-      ? synthesizeChild.slug
-      : id;
-    if (normalizeProgramNameForSelfTarget(childSlug) === normalizeProgramNameForSelfTarget(context.programSlug)) {
-      throw new Error('delegation.children[0].synthesized child slug must not match the parent program slug');
-    }
-  }
-
-  const payloadMap = requiredRecord(child.payload_map, 'delegation.children[0].payload_map');
   const schemaPaths = new Set(context.schemaPaths);
-  for (const [target, source] of Object.entries(payloadMap)) {
-    const targetPath = requiredString(target, 'delegation.children[0].payload_map target');
-    if (!targetPath.startsWith('request.') && !targetPath.startsWith('domain_context.')) {
-      throw new Error(`delegation.children[0].payload_map target ${targetPath} must start with request. or domain_context.`);
+  const seenIds = new Set<string>();
+  const seenStages = new Set<string>();
+  const seenResultPaths = new Set<string>();
+  const seenTargetSpecs = new Set<string>();
+
+  for (const [i, rawChild] of children.entries()) {
+    const child = requiredRecord(rawChild, `delegation.children[${i}]`);
+    assertDelegationV1Scope(delegation, child);
+
+    const id = requiredString(child.id, `delegation.children[${i}].id`);
+    if (!/^[a-z][a-z0-9_]*$/u.test(id)) {
+      throw new Error(`delegation.children[${i}].id must be a slug-safe identifier; got ${id}`);
     }
-    const sourcePath = requiredString(source, `delegation.children[0].payload_map.${targetPath}`);
-    if (!delegationSchemaPathDeclared(sourcePath, schemaPaths)) {
-      throw new Error(`delegation.children[0].payload_map source ${sourcePath} must be declared in the parent schema`);
+    if (seenIds.has(id)) {
+      throw new Error(`delegation.children[${i}].id must be unique across children; ${id} is declared more than once`);
     }
-  }
+    seenIds.add(id);
+    const requestAction = `request_${id}`;
+    if (actionNames.has(requestAction)) {
+      throw new Error(`delegation child ${requestAction} action collides with generated action set`);
+    }
+    const callChannel = `${id}_call`;
+    if (channelNames.has(callChannel)) {
+      throw new Error(`delegation child ${callChannel} channel collides with generated channel set`);
+    }
 
-  const resultPath = requiredString(child.result_path, 'delegation.children[0].result_path');
-  if (!resultPath.startsWith(`${stage}.`)) {
-    throw new Error(`delegation.children[0].result_path must be under ${stage}.`);
-  }
+    const stage = requiredString(child.stage, `delegation.children[${i}].stage`);
+    const stageRecord = context.stages.find((candidate) => candidate.slug === stage);
+    if (!stageRecord || stageRecord.is_bootstrap === true || stageRecord.is_terminal === true) {
+      throw new Error(`delegation.children[${i}].stage must reference a declared non-bootstrap non-terminal stage; got ${stage}`);
+    }
+    if (seenStages.has(stage)) {
+      throw new Error(`delegation.children[${i}].stage must be unique across children; stage ${stage} is used by more than one child`);
+    }
+    seenStages.add(stage);
 
-  const maxDelegatedRounds = child.max_delegated_rounds;
-  if (
-    typeof maxDelegatedRounds !== 'number' ||
-    !Number.isInteger(maxDelegatedRounds) ||
-    maxDelegatedRounds <= 0 ||
-    maxDelegatedRounds > 80
-  ) {
-    throw new Error('delegation.children[0].max_delegated_rounds must be a positive integer <= 80');
-  }
+    const hasTargetSpec = child.target_spec !== undefined;
+    const hasSynthesizeChild = child.synthesize_child !== undefined;
+    if (hasTargetSpec === hasSynthesizeChild) {
+      throw new Error(`delegation.children[${i}] must declare exactly one of target_spec or synthesize_child`);
+    }
 
-  if (child.round_timeout_ms !== undefined) {
-    const timeout = child.round_timeout_ms;
-    if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout <= 0) {
-      throw new Error('delegation.children[0].round_timeout_ms must be a positive integer when present');
+    if (hasTargetSpec) {
+      const targetSpec = requiredString(child.target_spec, `delegation.children[${i}].target_spec`);
+      const normalizedTarget = normalizeProgramNameForSelfTarget(targetSpec);
+      if (
+        normalizedTarget === normalizeProgramNameForSelfTarget(context.programSlug) ||
+        normalizedTarget === normalizeProgramNameForSelfTarget(context.programName)
+      ) {
+        throw new Error(`delegation.children[${i}].target_spec must not reference the parent program`);
+      }
+      if (seenTargetSpecs.has(normalizedTarget)) {
+        throw new Error(`delegation.children[${i}].target_spec must be distinct across children; ${targetSpec} targets the same program as another child`);
+      }
+      seenTargetSpecs.add(normalizedTarget);
+    }
+
+    if (hasSynthesizeChild) {
+      const synthesizeChild = requiredRecord(child.synthesize_child, `delegation.children[${i}].synthesize_child`);
+      const kind = requiredString(synthesizeChild.kind, `delegation.children[${i}].synthesize_child.kind`);
+      if (kind !== 'research_agent' && kind !== 'worker') {
+        throw new Error(`delegation.children[${i}].synthesize_child.kind must be research_agent or worker; got ${kind}`);
+      }
+      if (synthesizeChild.research_backend !== undefined) {
+        const researchBackend = requiredString(synthesizeChild.research_backend, `delegation.children[${i}].synthesize_child.research_backend`);
+        if (researchBackend !== 'host_connector' && researchBackend !== 'self_contained') {
+          throw new Error(`delegation.children[${i}].synthesize_child.research_backend must be self_contained or host_connector; got ${researchBackend}`);
+        }
+        if (kind !== 'research_agent') {
+          throw new Error(`delegation.children[${i}].synthesize_child.research_backend is only valid for kind research_agent`);
+        }
+      }
+      requiredString(synthesizeChild.purpose, `delegation.children[${i}].synthesize_child.purpose`);
+      const resultFields = requiredRecord(synthesizeChild.result_fields, `delegation.children[${i}].synthesize_child.result_fields`);
+      if (Object.keys(resultFields).length === 0) {
+        throw new Error(`delegation.children[${i}].synthesize_child.result_fields must declare at least one field`);
+      }
+      for (const [field, type] of Object.entries(resultFields)) {
+        if (!/^[a-z][a-z0-9_]*$/u.test(field)) {
+          throw new Error(`delegation.children[${i}].synthesize_child.result_fields key must be slug-safe; got ${field}`);
+        }
+        requiredString(type, `delegation.children[${i}].synthesize_child.result_fields.${field}`);
+      }
+      const childSlug = typeof synthesizeChild.slug === 'string' && synthesizeChild.slug.trim().length > 0
+        ? synthesizeChild.slug
+        : id;
+      if (normalizeProgramNameForSelfTarget(childSlug) === normalizeProgramNameForSelfTarget(context.programSlug)) {
+        throw new Error(`delegation.children[${i}].synthesized child slug must not match the parent program slug`);
+      }
+    }
+
+    const payloadMap = requiredRecord(child.payload_map, `delegation.children[${i}].payload_map`);
+    for (const [target, source] of Object.entries(payloadMap)) {
+      const targetPath = requiredString(target, `delegation.children[${i}].payload_map target`);
+      if (!targetPath.startsWith('request.') && !targetPath.startsWith('domain_context.')) {
+        throw new Error(`delegation.children[${i}].payload_map target ${targetPath} must start with request. or domain_context.`);
+      }
+      const sourcePath = requiredString(source, `delegation.children[${i}].payload_map.${targetPath}`);
+      if (!delegationSchemaPathDeclared(sourcePath, schemaPaths)) {
+        throw new Error(`delegation.children[${i}].payload_map source ${sourcePath} must be declared in the parent schema`);
+      }
+    }
+
+    const resultPath = requiredString(child.result_path, `delegation.children[${i}].result_path`);
+    if (!resultPath.startsWith(`${stage}.`)) {
+      throw new Error(`delegation.children[${i}].result_path must be under ${stage}.`);
+    }
+    if (seenResultPaths.has(resultPath)) {
+      throw new Error(`delegation.children[${i}].result_path must be unique across children; ${resultPath} is used by more than one child`);
+    }
+    seenResultPaths.add(resultPath);
+
+    const maxDelegatedRounds = child.max_delegated_rounds;
+    if (
+      typeof maxDelegatedRounds !== 'number' ||
+      !Number.isInteger(maxDelegatedRounds) ||
+      maxDelegatedRounds <= 0 ||
+      maxDelegatedRounds > 80
+    ) {
+      throw new Error(`delegation.children[${i}].max_delegated_rounds must be a positive integer <= 80`);
+    }
+
+    if (child.round_timeout_ms !== undefined) {
+      const timeout = child.round_timeout_ms;
+      if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout <= 0) {
+        throw new Error(`delegation.children[${i}].round_timeout_ms must be a positive integer when present`);
+      }
     }
   }
 }
@@ -7521,7 +7877,7 @@ function assertDelegationV1Scope(
   child: Record<string, unknown>,
 ): void {
   const refusals: Array<{ capability: string; evidence: string }> = [];
-  const note = 'v1 delegation is single static/synthesized child, degrade-only (optional:true); fan-out / dynamic targeting / continue-mode / strict delegation are not yet synthesizable';
+  const note = 'v1 delegation is N distinct static/synthesized children, degrade-only (optional:true); single-child fan-out (one child fanning to many targets) / dynamic targeting / continue-mode / strict delegation are not yet synthesizable';
   const add = (capability: string, reason: string): void => {
     refusals.push({
       capability,
