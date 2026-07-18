@@ -542,6 +542,7 @@ export function synthesizeProgramSpecFromDomain(
   };
   applyConfirmationLoopIngestion(recordField(spec, 'ingestion'), confirmationLoops);
   applyDocumentsIngestion(recordField(spec, 'ingestion'), documents);
+  applyDelegationIngestion(recordField(spec, 'ingestion'), delegationChildren);
 
   spec.reactions = {
     capture_initial_entry_input: {
@@ -1017,6 +1018,14 @@ function applyDelegationChannel(
       optional: true,
     };
   }
+  // Delegation continuation contract: when a Sync child returns, the engine fires
+  // the inbound `system_query_result` channel to wake the parent. Engine >=3.23 is
+  // strict — the spec MUST declare this channel (and its ingestion + schema, below)
+  // or the DelegationConsumer continuation trigger fails `channel_not_declared`.
+  // Mirrors every SimoneOS delegating program (fee-proposal-drafter, draft-policy).
+  if (children.length > 0) {
+    channels.system_query_result = { direction: 'In', sync: 'Async' };
+  }
 }
 
 function applyDelegationSchema(
@@ -1044,6 +1053,14 @@ function applyDelegationSchema(
     schema[`${base}.degraded`] = 'boolean';
     schema[`${base}.degrade_reason`] = 'string';
     schema[`${base}.requested`] = 'boolean';
+  }
+  // Base paths for the `system_query_result` continuation payload. The skeleton
+  // declares sub-paths (inputs.query_meta.*, inputs.query_result.*); the ingestion
+  // targets the BASE paths, so declare them or engine >=3.23 rejects with
+  // CouplingError S-4 (path "inputs.query_meta" is not schema-declared).
+  if (children.length > 0) {
+    schema['inputs.query_meta'] = 'object';
+    schema['inputs.query_result'] = 'any';
   }
 }
 
@@ -1119,7 +1136,21 @@ function applyDelegationModeWiring(
     const vocabulary = Array.isArray(mode.vocabulary) ? mode.vocabulary as string[] : [];
     const channels = Array.isArray(mode.channels) ? mode.channels as string[] : [];
     mode.vocabulary = unique([...vocabulary, delegationRequestActionName(child)]);
-    mode.channels = unique([...channels, delegationChannelName(child)]);
+    // The delegation-awaiting mode must list the outbound `_call` channel AND the
+    // inbound `system_query_result` continuation channel (engine >=3.23 rejects the
+    // continuation event if the active mode does not permit the channel).
+    mode.channels = unique([...channels, delegationChannelName(child), 'system_query_result']);
+  }
+}
+
+function applyDelegationIngestion(
+  ingestion: MutableRecord,
+  children: DelegationChildDescriptor[],
+): void {
+  // Map the engine-fired `system_query_result` continuation payload to the declared
+  // base paths so the strict (engine >=3.23) `no_ingestion_paths` check is satisfied.
+  if (children.length > 0) {
+    ingestion.system_query_result = ['inputs.query_meta', 'inputs.query_result'];
   }
 }
 
@@ -5596,7 +5627,13 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch manifest-reused research' });
     const afterDelegation = await readSnapshot(client, sessionId);
-    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    // The delegation continuation may already have advanced the parent to a terminal
+    // mode; tolerate an over-trigger on the completion step.
+    try {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    } catch (error) {
+      if (!String((error as Error).message).includes('terminal')) throw error;
+    }
     const final = await readSnapshot(client, sessionId);
     return { afterDelegation, final };
   } finally {
@@ -5773,10 +5810,21 @@ function renderMultiChildDelegationSmokeTestSource(
       `          scripted(effect(${tsString(child.transitionActionName)}, {\n            result_json: JSON.stringify({ stage: ${tsString(child.transitionActionName)} }),\n            items_json: JSON.stringify([${tsString(`${child.transitionActionName}-item`)}]),\n          }, ${tsString(child.transitionChannel)})),`,
     ]),
   ].join('\n');
-  const triggerCount = childSpecs.length * 2 + 1;
-  const triggerCalls = Array.from({ length: triggerCount }, (_, index) =>
-    `      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'drive multi-child delegation step ${String(index)}' });`,
-  ).join('\n');
+  // Upper bound on rounds needed to dispatch + settle every child then complete.
+  // The flow may reach a terminal mode before the last step (delegation continuation
+  // round-count varies by engine version), so the driver stops on a terminal session
+  // instead of hard-failing on an over-trigger.
+  const triggerCount = childSpecs.length * 2 + 2;
+  const triggerCalls = [
+    `      for (let step = 0; step < ${String(triggerCount)}; step += 1) {`,
+    `        try {`,
+    `          await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`drive multi-child delegation step \${String(step)}\` });`,
+    `        } catch (error) {`,
+    `          if (String((error as Error).message).includes('terminal')) break;`,
+    `          throw error;`,
+    `        }`,
+    `      }`,
+  ].join('\n');
   const resultAssertions = childSpecs.map((child) => `      const ${child.resultVar} = resultAt(final.domain, ${tsString(child.resultPath)});
       expect(${child.resultVar}.status).toBe('complete');
       expect(typeof ${child.resultVar}.sessionId).toBe('string');
@@ -6183,7 +6231,13 @@ async function runDelegationScenario(scenario: DelegationScenario): Promise<{ af
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'seeded delegation topic' });
     await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'dispatch delegated worker' });
     const afterDelegation = await readSnapshot(client, sessionId);
-    await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    // The delegation continuation may already have advanced the parent to a terminal
+    // mode; tolerate an over-trigger on the completion step.
+    try {
+      await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: 'complete parent after delegation settled' });
+    } catch (error) {
+      if (!String((error as Error).message).includes('terminal')) throw error;
+    }
     const final = await readSnapshot(client, sessionId);
     return { afterDelegation, final };
   } finally {
