@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import readline from 'node:readline';
 import { createPgasClient, fetchTransport } from '@simodelne/pgas-server/client.js';
+import { decodeJwtExp } from './auth-token.js';
 import { createReplRenderer, REPL_CONTROL_HINT } from './renderer.js';
 import type { ActionResult, ReplExitInfo, ReplOptions, ReplState, ReplStreamEvent } from './types.js';
 
@@ -659,19 +660,6 @@ function readActiveCachedToken(): string | undefined {
   const exp = decodeJwtExp(token);
   if (exp === undefined || exp <= Math.floor(Date.now() / 1000)) return undefined;
   return token;
-}
-
-function decodeJwtExp(token: string): number | undefined {
-  const [, payload] = token.split('.');
-  if (!payload) return undefined;
-  try {
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
-    return isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)
-      ? decoded.exp
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function renderStartupError(error: unknown, apiBase: string): string {

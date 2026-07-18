@@ -24,6 +24,7 @@ import { loadWiringManifest } from './pgas-new/wiring-manifest.js';
 import { PGAS_SERVER_PACKAGE, PGAS_SERVER_VERSION } from './pgas-new/version.js';
 import { isPgasNewSessionControl } from './pgas-new/control-plane.js';
 import { startFoundryServer } from './foundry-server.js';
+import { decodeJwtExp } from './repl/auth-token.js';
 import { runRepl } from './repl/runner.js';
 
 export interface CliResult {
@@ -559,20 +560,6 @@ function tokenExpiryLine(token: string): string {
   return exp === undefined
     ? 'token expiry unknown'
     : `token expires at ${new Date(exp * 1000).toISOString()}`;
-}
-
-function decodeJwtExp(token: string): number | undefined {
-  const [, payload] = token.split('.');
-  if (!payload) return undefined;
-
-  try {
-    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as unknown;
-    return isRecord(decoded) && typeof decoded.exp === 'number' && Number.isFinite(decoded.exp)
-      ? decoded.exp
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
