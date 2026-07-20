@@ -163,13 +163,17 @@ export async function synthesizeReasoningContract(
 
     if (!requireLlm && allowFallbackOnFailure) {
       const contract = assertReasoningContract(deriveFallbackReasoningContract(stage, artifact), validation);
+      const warning = deterministicFallbackWarning(stage, artifact);
       return {
         contract,
         contract_hash: contractHash(contract),
         contract_source: 'deterministic_fallback',
         attempts: maxAttempts,
         cache_hit: false,
-        fallback_reason: `meta-LLM contract synthesis failed after ${maxAttempts} attempts; last error: ${lastError}`,
+        fallback_reason: appendFallbackWarning(
+          `meta-LLM contract synthesis failed after ${maxAttempts} attempts; last error: ${lastError}`,
+          warning,
+        ),
       };
     }
     throw new Error(`reasoning contract synthesis failed for stage ${stage} after ${maxAttempts} attempts; last error: ${lastError}`);
@@ -183,13 +187,17 @@ export async function synthesizeReasoningContract(
   }
 
   const contract = assertReasoningContract(deriveFallbackReasoningContract(stage, artifact), validation);
+  const warning = deterministicFallbackWarning(stage, artifact);
   return {
     contract,
     contract_hash: contractHash(contract),
     contract_source: 'deterministic_fallback',
     attempts: 0,
     cache_hit: false,
-    fallback_reason: 'no meta-LLM provider configured; deterministic fallback contract derived from the artifact',
+    fallback_reason: appendFallbackWarning(
+      'no meta-LLM provider configured; deterministic fallback contract derived from the artifact',
+      warning,
+    ),
   };
 }
 
@@ -374,6 +382,32 @@ export function deriveFallbackReasoningContract(stage: string, artifact: Synthes
     },
     contract_source: 'deterministic_fallback',
   };
+}
+
+function deterministicFallbackWarning(stage: string, artifact: SynthesizedArtifact): string | undefined {
+  const context = reasoningContextForStage(stage, artifact);
+  const domainSpec = context.domain_spec;
+  if (!domainSpec) {
+    return undefined;
+  }
+  const declared = domainSpec.produces.result_json;
+  if (!isRecord(declared)) {
+    return undefined;
+  }
+  const usableFields = usableDomainSpecFieldNames(domainSpec, new Set(RESERVED_FIELD_NAMES));
+  if (usableFields.length === 0 || usableFields.length >= MIN_FIELDS) {
+    return undefined;
+  }
+  return (
+    `WARN: domain_spec.produces.result_json declared fields ${JSON.stringify(Object.keys(declared))} ` +
+    `but fewer than MIN_FIELDS=${MIN_FIELDS} usable reasoning fields were available; deterministic fallback used generic fields ` +
+    'decision, summary, rationale, confidence, key_points. ' +
+    `Fix: declare at least ${MIN_FIELDS} non-reserved result_json keys for ${stage} or configure a meta-LLM reasoning contract.`
+  );
+}
+
+function appendFallbackWarning(reason: string, warning: string | undefined): string {
+  return warning ? `${reason}; ${warning}` : reason;
 }
 
 export function reasoningContextForStage(stage: string, artifact: SynthesizedArtifact): ReasoningStageContext {

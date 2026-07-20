@@ -3,11 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
-import { loadSpecWithPatterns, validateSpecWiring, type ActionHandler } from '@simodelne/pgas-server/plugin.js';
+import { createTestHarness, type TestHarnessAuthorResponse } from '@simodelne/pgas-server/testing.js';
+import {
+  createProgramAdapters,
+  loadSpecWithPatterns,
+  validateSpecWiring,
+  type ProgramEntry,
+  type ToolHandler,
+} from '@simodelne/pgas-server/plugin.js';
 import { handlers } from '../../src/foundry-program/handlers.js';
 import {
   assertPreconditionVocabularyAlignment,
   synthesizeProgramSpecFromDomain,
+  type SynthesizedSpec,
 } from '../../src/foundry-program/synthesizer.js';
 import {
   clearSynthesizedArtifact,
@@ -73,6 +81,9 @@ const wiringManifestWithCrm = {
     },
   ],
 };
+
+const tempSpecDirs: string[] = [];
+let tempSpecCleanupRegistered = false;
 
 function domain(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -178,13 +189,12 @@ describe('synthesize_program_spec handler', () => {
     expect(artifact?.handlers_ts).toContain('async session_status(payload)');
     expect(artifact?.handlers_ts).toContain("control: 'session_status'");
     expect(artifact?.handlers_ts).not.toContain('stage_action_stub');
-    expect(artifact?.handlers_index_ts).toContain('async begin_work(payload)');
+    expect(artifact?.handlers_index_ts).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
     expect(artifact?.smoke_test_ts).toContain('generated program smoke');
     expect(smokeEffectNames(artifact?.smoke_test_ts ?? '')).toEqual(['begin_work', 'complete_triage']);
 
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
     expectGeneratedHandlersToWire(artifact?.spec_yaml ?? '', artifact?.handlers_ts ?? '');
-    expectGeneratedHandlersToWire(artifact?.spec_yaml ?? '', artifact?.handlers_index_ts ?? '');
   });
 
   it('does not emit a begin_work handler when the synthesized action_map does not declare begin_work', () => {
@@ -214,10 +224,85 @@ describe('synthesize_program_spec handler', () => {
     ]));
     expect(parsed.modes.intake.vocabulary).not.toContain('begin_work');
     expect(artifact.handlers_ts).not.toContain('async begin_work(payload)');
-    expect(artifact.handlers_index_ts).not.toContain('async begin_work(payload)');
+    expect(artifact.handlers_index_ts).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
     expect(smokeEffectNames(artifact.smoke_test_ts)).not.toContain('begin_work');
     expectGeneratedHandlersToWire(artifact.spec_yaml, artifact.handlers_ts);
-    expectGeneratedHandlersToWire(artifact.spec_yaml, artifact.handlers_index_ts);
+  });
+
+  it('honors branch-specific guards when multiple branches converge on the terminal final stage', async () => {
+    const artifact = synthesizeProgramSpecFromDomain(domain({
+      'program.slug': 'branch-converge',
+      'program.name': 'Branch Converge',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        { slug: 'alpha_path' },
+        { slug: 'beta_path' },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'alpha_path', trigger: 'alpha', guard_field: 'intake.alpha_selected' },
+        { from: 'intake', to: 'beta_path', trigger: 'beta', guard_field: 'intake.beta_selected' },
+        { from: 'alpha_path', to: 'complete', trigger: 'alpha_done', guard_field: 'alpha_path.ready' },
+        { from: 'beta_path', to: 'complete', trigger: 'beta_done', guard_field: 'beta_path.ready' },
+      ]),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'alpha_path.ready' }),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      modes: Record<string, { transitions?: Array<{ target: string; guard?: { path?: string } }> }>;
+      action_map: Record<string, { mutations: Array<{ path?: string }> }>;
+    };
+
+    expect(parsed.modes.alpha_path.transitions).toEqual([
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'alpha_path.ready' } },
+    ]);
+    expect(parsed.modes.beta_path.transitions).toEqual([
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'beta_path.ready' } },
+    ]);
+    expect(parsed.action_map.complete_alpha_path.mutations.map((mutation) => mutation.path)).toContain('alpha_path.ready');
+    expect(parsed.action_map.complete_beta_path.mutations.map((mutation) => mutation.path)).toContain('beta_path.ready');
+
+    await expectBranchDrive(artifact, {
+      entryAction: 'advance_intake_to_alpha_path',
+      completeAction: 'complete_alpha_path',
+      expectedReadyPath: 'alpha_path.ready',
+      otherReadyPath: 'beta_path.ready',
+    });
+    await expectBranchDrive(artifact, {
+      entryAction: 'advance_intake_to_beta_path',
+      completeAction: 'complete_beta_path',
+      expectedReadyPath: 'beta_path.ready',
+      otherReadyPath: 'alpha_path.ready',
+    });
+  });
+
+  it('emits artifactPolicy rules for non-export stage artifacts declared on stage descriptors', () => {
+    const artifact = synthesizeProgramSpecFromDomain(domain({
+      'program.slug': 'document-anonymizer',
+      'program.name': 'Document Anonymizer',
+      'intake.purpose': 'Anonymize an uploaded document and emit both the redacted document and a mapping artifact.',
+      'intake.stages_json': JSON.stringify([
+        { slug: 'intake', is_bootstrap: true },
+        {
+          slug: 'redact_document',
+          emit_artifact: {
+            type: 'anonymization_mapping',
+            title: 'Anonymization Mapping',
+          },
+        },
+        { slug: 'complete', is_terminal: true },
+      ]),
+      'intake.transitions_json': JSON.stringify([
+        { from: 'intake', to: 'redact_document', trigger: 'started', guard_field: 'intake.started' },
+        { from: 'redact_document', to: 'complete', trigger: 'redacted', guard_field: 'redact_document.ready' },
+      ]),
+      'intake.completion_json': JSON.stringify({ final_stage: 'complete', guard_field: 'redact_document.ready' }),
+    }));
+
+    expect(artifact.registration_ts).toContain('artifactPolicy');
+    expect(artifact.registration_ts).toContain("artifactType: 'anonymization_mapping'");
+    expect(artifact.registration_ts).toContain("title: 'Anonymization Mapping'");
+    expect(artifact.registration_ts).toContain("payloadRef: 'redact_document.output'");
+    expect(artifact.registration_ts).toContain("whenAllPaths: ['redact_document.output.result_json']");
   });
 
   it('canonicalizes prose entry_channel answers that mention frontend_intake', () => {
@@ -314,7 +399,7 @@ describe('synthesize_program_spec handler', () => {
 
     expect(artifact.body_stage_slugs).toEqual(['intake', 'brief_summary']);
     expect(artifact.handlers_ts).not.toContain('./contracts.js');
-    expect(artifact.handlers_index_ts).not.toContain('../contracts.js');
+    expect(artifact.handlers_index_ts).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
     expect(artifact.handlers_ts).toContain('async complete_brief_summary(payload)');
   });
 
@@ -657,7 +742,7 @@ describe('synthesize_program_spec handler', () => {
     ]);
     expect(parsed.modes.charlie.transitions).toEqual([{ target: 'delta' }]);
     expect(parsed.modes.delta.transitions).toEqual([
-      { target: 'terminal', guard: { kind: 'FieldTruthy', path: 'completion.ready' } },
+      { target: 'terminal', guard: { kind: 'FieldTruthy', path: 'delta.ready' } },
     ]);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact?.spec_yaml ?? ''))).not.toThrow();
   });
@@ -776,7 +861,7 @@ describe('synthesize_program_spec handler', () => {
 
     expect(parsed.modes.review.transitions).toEqual([
       { target: 'revision', guard: { kind: 'FieldTruthy', path: 'review.needs_revision' } },
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.done' } },
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.approved' } },
     ]);
     expect(parsed.modes.revision.transitions).toEqual([
       { target: 'review', guard: { kind: 'FieldTruthy', path: 'revision.ready' } },
@@ -795,7 +880,7 @@ describe('synthesize_program_spec handler', () => {
       'review.items_json',
     ]);
     expect(parsed.action_map.advance_review_to_complete.mutations.map((mutation) => mutation.path)).toEqual([
-      'review.done',
+      'review.approved',
       'review.result_json',
       'review.items_json',
     ]);
@@ -930,7 +1015,7 @@ describe('synthesize_program_spec handler', () => {
     expect(parsed.modes.complete.transitions).toEqual([]);
     expect(parsed.modes.blocked.transitions).toEqual([]);
     expect(parsed.modes.review.transitions).toEqual([
-      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.done' } },
+      { target: 'complete', guard: { kind: 'FieldTruthy', path: 'review.approved' } },
     ]);
     expect(parsed.modes.complete.vocabulary).toEqual(['session_status', 'session_history', 'session_help']);
     expect(parsed.modes.blocked.vocabulary).toEqual(['session_status', 'session_history', 'session_help']);
@@ -1162,6 +1247,48 @@ function smokeEffectNames(source: string): string[] {
   return Array.from(source.matchAll(/effect\('([^']+)'/gu), (match) => match[1] as string);
 }
 
+async function expectBranchDrive(
+  artifact: SynthesizedSpec,
+  options: {
+    entryAction: string;
+    completeAction: string;
+    expectedReadyPath: string;
+    otherReadyPath: string;
+  },
+): Promise<void> {
+  const harness = await createTestHarness(generatedProgramEntry(artifact), {
+    programName: artifact.synthesis_context?.program_slug ?? 'branch-converge',
+    defaultChannel: artifact.synthesis_context?.entry_channel ?? 'user_text',
+    authorResponses: [
+      effect(options.entryAction, {}, 'widget_output'),
+      effect(options.completeAction, { __stage_runtime: { now_iso: '2026-07-20T00:00:00.000Z', random: 0.25 } }, 'stage_output'),
+    ],
+  });
+
+  try {
+    await harness.trigger(`start ${options.entryAction}`);
+    await harness.trigger(`finish ${options.completeAction}`);
+    const snapshot = await harness.snapshot();
+    expect(snapshot.mode).toBe('complete');
+    expect(snapshot.domain[options.expectedReadyPath]).toBe(true);
+    expect(snapshot.domain[options.otherReadyPath]).toBeUndefined();
+  } finally {
+    await harness.close();
+  }
+}
+
+function generatedProgramEntry(artifact: SynthesizedSpec): ProgramEntry {
+  const { spec } = loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml));
+  const handlerMap = handlerMapFromSource(artifact.handlers_ts);
+  const handlers = Object.fromEntries(handlerMap);
+  validateSpecWiring(spec, handlerMap);
+  return {
+    spec,
+    reactionHandlers: new Map(),
+    createAdapters: (ctx) => createProgramAdapters(spec, ctx, handlers),
+  };
+}
+
 function expectGeneratedHandlersToWire(specYaml: string, handlersSource: string): void {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-wire-'));
   const specPath = join(dir, 'specs.yml');
@@ -1171,15 +1298,27 @@ function expectGeneratedHandlersToWire(specYaml: string, handlersSource: string)
   expect(() => validateSpecWiring(spec, handlerMapFromSource(handlersSource))).not.toThrow();
 }
 
-function handlerMapFromSource(source: string): Map<string, ActionHandler> {
+function handlerMapFromSource(source: string): Map<string, ToolHandler> {
   const names = Array.from(source.matchAll(/^\s+async\s+([a-zA-Z0-9_]+)\(/gmu), (match) => match[1] as string);
-  return new Map(names.map((name) => [name, () => ({})]));
+  return new Map(names.map((name) => [name, async () => ({})]));
+}
+
+function effect(name: string, payload: Record<string, unknown>, channel: string): TestHarnessAuthorResponse {
+  return { actions: [{ kind: 'EffectAction', name, channel, payload }] };
 }
 
 function writeTempSpec(specYaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), 'pgas-new-synth-load-'));
   const specPath = join(dir, 'specs.yml');
   writeFileSync(specPath, specYaml);
-  process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+  tempSpecDirs.push(dir);
+  if (!tempSpecCleanupRegistered) {
+    tempSpecCleanupRegistered = true;
+    process.once('exit', () => {
+      for (const tempDir of tempSpecDirs.splice(0)) {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+  }
   return specPath;
 }

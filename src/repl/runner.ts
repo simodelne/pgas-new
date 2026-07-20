@@ -653,7 +653,7 @@ function resolvePackageVersion(): string {
 }
 
 function readActiveCachedToken(): string | undefined {
-  const tokenPath = join(homedir(), '.local/share/pgas-new/token');
+  const tokenPath = join(process.env.HOME?.trim() || homedir(), '.local/share/pgas-new/token');
   if (!existsSync(tokenPath)) return undefined;
 
   const token = readFileSync(tokenPath, 'utf8').trim();

@@ -149,10 +149,7 @@ describe('foundry branch_write', () => {
       expect(handlersRoot).not.toContain('stage_action_stub');
       expect(handlersRoot).not.toContain('TODO: implement the triage stage');
       expect(handlersRoot).not.toContain('example_action');
-      expect(handlersIndex).toContain('async complete_triage(payload)');
-      expect(handlersIndex).toContain("import { createStageRuntime, normalizeStageOutput, resolveStageInput } from '../contracts.js';");
-      expect(handlersIndex).toContain("import { runStage as runTriage } from '../stages/triage.js';");
-      expect(handlersIndex).not.toContain('example_action');
+      expect(handlersIndex).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
       expect(contracts).toContain('StageRuntime');
       expect(stageBody).toContain('status: \'triaged\'');
       expect(smokeTest).toContain('generated program smoke');

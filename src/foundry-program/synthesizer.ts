@@ -33,6 +33,7 @@ interface Stage {
   kind?: string;
   export_kind?: string;
   domain_spec?: StageDomainSpec;
+  emit_artifact?: StageArtifactDescriptorInput | StageArtifactDescriptorInput[];
 }
 
 type StageInput = Stage | string;
@@ -42,6 +43,21 @@ interface StageDomainSpec {
   produces: Record<string, unknown>;
   rules: string[];
   invariants: string[];
+}
+
+interface StageArtifactDescriptorInput {
+  type?: unknown;
+  title?: unknown;
+  summary?: unknown;
+  payload_ref?: unknown;
+}
+
+interface StageArtifactDescriptor {
+  stage: string;
+  artifactType: string;
+  title: string;
+  summary: string;
+  payloadRef: string;
 }
 
 interface IntakeTransition {
@@ -320,6 +336,7 @@ export function synthesizeProgramSpecFromDomain(
   const requestedCapabilities = detectRequestedCapabilities(capabilityInput);
   assertSynthesizableCapabilities(capabilityInput);
   const exportDescriptors = exportDescriptorsFor(stages, requestedCapabilities, name);
+  const stageArtifactDescriptors = stageArtifactDescriptorsFor(stages);
   const exportSurfaces = exportSurfacesFor(exportDescriptors, requestedCapabilities);
   const documentExtractionSurfaces = documentExtractionSurfacesFor(documents);
   const documentExtractionGaps = capabilityGapsForDocumentExtraction(documents);
@@ -354,6 +371,10 @@ export function synthesizeProgramSpecFromDomain(
     };
   }
   transitions = refreshStaleTransitionsForStages(stages, transitions, completion) ?? transitions;
+  const descriptorCompletionGuard = confirmationLoops[0]?.aggregate.guard_field ?? collectionLifecycle?.aggregate.guard_field;
+  if (descriptorCompletionGuard) {
+    transitions = transitionsWithFinalStageGuard(transitions, completion.final_stage, descriptorCompletionGuard);
+  }
   const reasoningContractsBySlug = new Map<string, ReasoningStageContract>(
     Object.entries(options.reasoningContracts ?? {}).filter(([slug]) =>
       stageClassificationBySlug.get(slug)?.archetype === 'llm-reasoning'),
@@ -408,7 +429,7 @@ export function synthesizeProgramSpecFromDomain(
     ...capabilityGapsForDelegationChildren(delegationChildren),
     ...documentExtractionGaps,
   ];
-  const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors);
+  const artifactPolicy = artifactPolicyForExportDescriptors(exportDescriptors, stageArtifactDescriptors);
   const registrationPolicies = {
     ...(delegationChildren.length > 0 ? { delegationPolicy: delegationPolicyForChildren(delegationChildren) } : {}),
     ...(artifactPolicy ? { artifactPolicy } : {}),
@@ -671,20 +692,7 @@ export function synthesizeProgramSpecFromDomain(
       documents,
       docxExtractorImport: './extract/docx.js',
     }, reasoningContractsBySlug),
-    handlers_index_ts: renderHandlersSource(transitionActions, {
-      includeReactionHandlers: false,
-      resolverImport: './_resolver.js',
-      contractsImport: '../contracts.js',
-      stageImportPrefix: '../stages',
-      initialEntryPath,
-      entryPath: `inputs.${entryChannel}`,
-      flatMirrorStages,
-      collectionLifecycle: completion.collection_lifecycle,
-      confirmationLoops,
-      delegationChildren,
-      documents,
-      docxExtractorImport: '../extract/docx.js',
-    }, reasoningContractsBySlug),
+    handlers_index_ts: renderHandlersIndexBarrelSource(),
     tools_ts: renderToolsSource(slug, transitionActions, reasoningContractsBySlug, completion.collection_lifecycle, confirmationLoops, documents),
     smoke_test_ts: renderSmokeTestSource(slug, name, entryChannel, stages, transitionActions, completion, reasoningContractsBySlug, confirmationLoops, delegationChildren, documents),
     ...(capabilityGaps.length > 0 ? { capability_gaps: capabilityGaps } : {}),
@@ -1547,6 +1555,17 @@ function transitionsWithDocumentsReadyGuard(
       : transition);
 }
 
+function transitionsWithFinalStageGuard(
+  transitions: IntakeTransition[],
+  finalStage: string,
+  guardField: string,
+): IntakeTransition[] {
+  return transitions.map((transition) =>
+    transition.to === finalStage
+      ? { ...transition, guard_field: guardField }
+      : transition);
+}
+
 function appendModePrecondition(
   mode: MutableRecord,
   actionName: string,
@@ -2169,6 +2188,37 @@ function exportSurfacesFor(
   return surfaces;
 }
 
+function stageArtifactDescriptorsFor(stages: Stage[]): StageArtifactDescriptor[] {
+  return stages.flatMap((stage) => {
+    if (!stage.emit_artifact || stage.is_bootstrap === true || stage.is_terminal === true) {
+      return [];
+    }
+    const descriptors = Array.isArray(stage.emit_artifact)
+      ? stage.emit_artifact
+      : [stage.emit_artifact];
+    return descriptors.map((descriptor, index) =>
+      normalizeStageArtifactDescriptor(stage.slug, descriptor, `stage ${stage.slug} emit_artifact${descriptors.length > 1 ? `[${index}]` : ''}`));
+  });
+}
+
+function normalizeStageArtifactDescriptor(
+  stage: string,
+  value: StageArtifactDescriptorInput,
+  label: string,
+): StageArtifactDescriptor {
+  const descriptor = requiredRecord(value, label);
+  const artifactType = requiredString(descriptor.type, `${label}.type`);
+  const title = requiredString(descriptor.title, `${label}.title`);
+  const payloadRef = optionalStringValue(descriptor.payload_ref, `${label}.payload_ref`) ?? `${stage}.output`;
+  return {
+    stage,
+    artifactType,
+    title,
+    summary: optionalStringValue(descriptor.summary, `${label}.summary`) ?? `Generated artifact emitted from ${stage}.`,
+    payloadRef,
+  };
+}
+
 function hasExportSurfaces(surfaces: ExportSurfaces): boolean {
   return surfaces.docx === true || surfaces.html === true || surfaces.diff === true;
 }
@@ -2671,6 +2721,10 @@ ${beginWorkHandler ? `${beginWorkHandler}\n\n` : ''}  async record_user_note(pay
 ${sessionControlHandlers}${actionHandlers ? `\n\n${actionHandlers}` : ''}${lifecycleActionHandlers ? `\n\n${lifecycleActionHandlers}` : ''}${documentActionHandlers ? `\n\n${documentActionHandlers}` : ''}
 };${lifecycleIntentHelper}${reactionExport}${documentHelper}${conformanceHelper}
 `;
+}
+
+function renderHandlersIndexBarrelSource(): string {
+  return "export { handlers, reactionHandlers } from '../handlers.js';\n";
 }
 
 function renderDocumentActionHandlers(documents: DocumentsDescriptor): string {
@@ -4136,6 +4190,7 @@ function renderDocumentUploadSmokeTestSource(
           items_json: JSON.stringify(['document-source-ready']),
         }`
     : `{ __stage_runtime: { now_iso: '2026-07-16T00:00:00.000Z', random: 0.25 } }`;
+  const expectedPostIngestMode = transitionAction?.target ?? documents.stage;
   const resultPath = documents.result_path;
   const readyPath = documentsSourceReadyPath(documents);
   const skipTest = documents.required
@@ -4153,7 +4208,7 @@ function renderDocumentUploadSmokeTestSource(
     expect(source.char_count).toBe(0);
     expect(source.file_count).toBe(0);
     expect(result.final.domain[${tsString(readyPath)}]).toBe(true);
-    expect(result.final.mode).toBe('complete');
+    expect(result.final.mode).toBe(${tsString(expectedPostIngestMode)});
   });`;
   return `import { File } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
@@ -4198,7 +4253,7 @@ describe('generated document upload smoke', () => {
     expect(source.char_count).toBe(result.upload?.content.length);
     expect(source.file_count).toBe(1);
     expect(result.final.domain[${tsString(readyPath)}]).toBe(true);
-    expect(result.final.mode).toBe('complete');
+    expect(result.final.mode).toBe(${tsString(expectedPostIngestMode)});
   });${skipTest}
 });
 
@@ -4251,11 +4306,11 @@ async function runUploadScenario(
     const upload = await act({ client, sessionId }) ?? undefined;
     let afterUpload = await readSnapshot(client, sessionId);
     let final = afterUpload;
-    for (let attempt = 0; attempt < 4 && final.mode !== 'complete'; attempt += 1) {
+    for (let attempt = 0; attempt < 4 && final.mode !== ${tsString(expectedPostIngestMode)}; attempt += 1) {
       await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`continue generated upload smoke \${String(attempt + 1)}\` });
       final = await readSnapshot(client, sessionId);
     }
-    if (afterUpload.mode === 'complete') {
+    if (afterUpload.mode === ${tsString(expectedPostIngestMode)}) {
       final = afterUpload;
     } else {
       afterUpload = await readSnapshot(client, sessionId);
@@ -4298,7 +4353,7 @@ async function runSkipScenario(
     });
     const afterSkip = await readSnapshot(client, sessionId);
     let final = afterSkip;
-    for (let attempt = 0; attempt < 4 && final.mode !== 'complete'; attempt += 1) {
+    for (let attempt = 0; attempt < 4 && final.mode !== ${tsString(expectedPostIngestMode)}; attempt += 1) {
       await client.sessions.trigger(sessionId, { channel: ${tsString(entryChannel)}, payload: \`continue generated optional skip smoke \${String(attempt + 1)}\` });
       final = await readSnapshot(client, sessionId);
     }
@@ -5334,20 +5389,32 @@ function delegationResultPolicyForChild(child: DelegationChildDescriptor): {
   };
 }
 
-function artifactPolicyForExportDescriptors(descriptors: readonly ExportStageDescriptor[]): ProgramArtifactPolicy | undefined {
-  if (descriptors.length === 0) {
+function artifactPolicyForExportDescriptors(
+  descriptors: readonly ExportStageDescriptor[],
+  stageArtifacts: readonly StageArtifactDescriptor[] = [],
+): ProgramArtifactPolicy | undefined {
+  if (descriptors.length === 0 && stageArtifacts.length === 0) {
     return undefined;
   }
   return {
-    rules: descriptors.map((descriptor) => ({
-      artifactType: descriptor.artifactType,
-      title: descriptor.title,
-      summary: descriptor.kind === 'export_docx'
-        ? 'Deterministically rendered DOCX artifact; payload bytes are base64 in domain state.'
-        : 'Deterministically rendered HTML artifact; payload is in domain state.',
-      payloadRef: descriptor.payloadRef,
-      whenAllPaths: [`${descriptor.payloadRef}.result_json`],
-    })),
+    rules: [
+      ...descriptors.map((descriptor) => ({
+        artifactType: descriptor.artifactType,
+        title: descriptor.title,
+        summary: descriptor.kind === 'export_docx'
+          ? 'Deterministically rendered DOCX artifact; payload bytes are base64 in domain state.'
+          : 'Deterministically rendered HTML artifact; payload is in domain state.',
+        payloadRef: descriptor.payloadRef,
+        whenAllPaths: [`${descriptor.payloadRef}.result_json`],
+      })),
+      ...stageArtifacts.map((descriptor) => ({
+        artifactType: descriptor.artifactType,
+        title: descriptor.title,
+        summary: descriptor.summary,
+        payloadRef: descriptor.payloadRef,
+        whenAllPaths: [`${descriptor.payloadRef}.result_json`],
+      })),
+    ],
   };
 }
 
@@ -6415,7 +6482,11 @@ function tsString(value: string): string {
 }
 
 function guardFieldForTransition(transition: IntakeTransition, completion: Completion): string | undefined {
-  return normalizeGuardField(transition.to === completion.final_stage ? completion.guard_field : transition.guard_field);
+  const transitionGuard = normalizeGuardField(transition.guard_field);
+  if (transition.to === completion.final_stage) {
+    return transitionGuard ?? normalizeGuardField(completion.guard_field);
+  }
+  return transitionGuard;
 }
 
 function guardFromField(field: string | undefined): Record<string, unknown> | undefined {
@@ -8151,6 +8222,13 @@ function requiredString(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function optionalStringValue(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return requiredString(value, label);
 }
 
 function requiredStringList(value: unknown, label: string): string[] {

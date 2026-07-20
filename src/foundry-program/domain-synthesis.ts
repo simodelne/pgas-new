@@ -605,18 +605,41 @@ function scanBodyStubMarkers(body: string, archetype: 'pure-compute' | 'external
     return `stub marker in generated stage body: ${marker}`;
   }
 
+  const placeholderScanSource = sourceWithStringLiteralsBlanked(body);
   const markerPatterns = [
-    { marker: 'stage_action_stub', pattern: /stage_action_stub/u },
-    { marker: 'not implemented', pattern: /not implemented|not_implemented/u },
-    { marker: 'placeholder', pattern: /\bplaceholder\b/u },
+    { marker: 'stage_action_stub', pattern: /stage_action_stub/u, source: body },
+    { marker: 'not implemented', pattern: /not implemented|not_implemented/u, source: body },
+    { marker: 'placeholder', pattern: /\bplaceholder\b/u, source: placeholderScanSource },
   ];
   for (const candidate of markerPatterns) {
-    if (candidate.pattern.test(body)) {
+    if (candidate.pattern.test(candidate.source)) {
       return `stub marker in generated stage body: ${candidate.marker}`;
     }
   }
 
   return undefined;
+}
+
+function sourceWithStringLiteralsBlanked(source: string): string {
+  const sourceFile = ts.createSourceFile('stage-body.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const ranges: Array<{ start: number; end: number }> = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      ranges.push({ start: node.getStart(sourceFile), end: node.getEnd() });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (ranges.length === 0) {
+    return source;
+  }
+  const chars = [...source];
+  for (const range of ranges) {
+    for (let index = range.start; index < range.end; index += 1) {
+      chars[index] = ' ';
+    }
+  }
+  return chars.join('');
 }
 
 function scanSafety(
@@ -1882,9 +1905,13 @@ function assertBehavioralOutput(
     return 'result_json must encode an object';
   }
   if ((result as { stage?: unknown }).stage !== stage) {
-    return `expected result_json.stage to equal ${stage}; got ${String((result as { stage?: unknown }).stage)}`;
+    return [
+      `result_json must start with a 'stage' key equal to ${stage}.`,
+      `Got result_json.stage=${String((result as { stage?: unknown }).stage)}.`,
+      "Fix: construct result_json with stage: input.stage as the first top-level key before the remaining domain_spec.produces.result_json keys.",
+    ].join(' ');
   }
-  const schemaError = assertResultJsonSchema(result, domainSpec);
+  const schemaError = assertResultJsonSchema(result, domainSpec, stage);
   if (schemaError) {
     return schemaError;
   }
@@ -2009,7 +2036,7 @@ function parseOutputResult(output: unknown): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function assertResultJsonSchema(result: unknown, domainSpec?: StageDomainSpec): string | undefined {
+function assertResultJsonSchema(result: unknown, domainSpec: StageDomainSpec | undefined, stage: string): string | undefined {
   const schema = domainSpec?.produces.result_json;
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
     return undefined;
@@ -2023,7 +2050,11 @@ function assertResultJsonSchema(result: unknown, domainSpec?: StageDomainSpec): 
   }
   const actualKeys = Object.keys(result as Record<string, unknown>);
   if (actualKeys.length !== expectedKeys.length || actualKeys.some((key, index) => key !== expectedKeys[index])) {
-    return `expected result_json keys to exactly match domain_spec.produces.result_json in order ${JSON.stringify(expectedKeys)}; got ${JSON.stringify(actualKeys)}`;
+    return [
+      `result_json must start with a 'stage' key equal to ${stage} and must match domain_spec.produces.result_json keys/order.`,
+      `Expected keys: ${JSON.stringify(expectedKeys)}; got ${JSON.stringify(actualKeys)}.`,
+      `Fix: construct result_json as { ${expectedKeys.map((key) => key === 'stage' ? 'stage: input.stage' : `${key}: ...`).join(', ')} } and do not add, remove, or reorder top-level keys.`,
+    ].join(' ');
   }
   return undefined;
 }

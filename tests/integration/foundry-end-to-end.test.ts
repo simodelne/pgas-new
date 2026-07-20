@@ -528,21 +528,46 @@ function runGeneratedChecks(targetDir: string): CommandCheck[] {
 }
 
 function runGeneratedCommand(targetDir: string, args: string[], command: string, timeout: number): CommandCheck {
-  try {
-    execFileSync('npm', args, {
-      cwd: targetDir,
-      env: { ...process.env, npm_config_cache: join(targetDir, '.npm-cache') },
-      stdio: 'pipe',
-      timeout,
-    });
-    return { command, status: 'passed' };
-  } catch (error) {
-    const output = commandFailureOutput(error);
-    if (isRegistryAccessFailure(output)) {
-      return { command, status: 'skipped', reason: `registry unavailable: ${oneLine(output)}` };
+  const attempts = 2;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      execFileSync('npm', args, {
+        cwd: targetDir,
+        env: generatedCommandEnv(targetDir),
+        stdio: 'pipe',
+        timeout,
+      });
+      return { command, status: 'passed' };
+    } catch (error) {
+      const output = commandFailureOutput(error);
+      if (isRegistryAccessFailure(output)) {
+        return { command, status: 'skipped', reason: `registry unavailable: ${oneLine(output)}` };
+      }
+      if (attempt < attempts && isNativeWorkerStartupAbort(output)) {
+        lastError = error;
+        continue;
+      }
+      throw error;
     }
-    throw error;
   }
+
+  throw lastError;
+}
+
+function generatedCommandEnv(targetDir: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    CI: '1',
+    npm_config_cache: join(targetDir, '.npm-cache'),
+    RAYON_NUM_THREADS: process.env.RAYON_NUM_THREADS ?? '1',
+    UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE ?? '1',
+  };
+}
+
+function isNativeWorkerStartupAbort(output: string): boolean {
+  return /Aborted \(core dumped\)|uv_thread_create|cannot fork|write EPIPE/u.test(output);
 }
 
 async function probeLiveProvider(): Promise<CommandCheck> {

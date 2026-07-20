@@ -23,7 +23,7 @@ describe('document extraction synthesis (PR-U5-E)', () => {
     expect(artifact.document_extraction_surfaces).toEqual({ docx: true });
     expect(artifact.capability_gaps).toBeUndefined();
     expect(artifact.handlers_ts).toContain("import { extractDocxText } from './extract/docx.js'");
-    expect(artifact.handlers_index_ts).toContain("import { extractDocxText } from '../extract/docx.js'");
+    expect(artifact.handlers_index_ts).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
     expect(artifact.handlers_ts).toContain("Buffer.from(document.content_base64, 'base64')");
     expect(artifact.handlers_ts).toContain('blocked_extraction_failed');
     expect(artifact.handlers_ts).toContain('extractDocxText(bytes)');

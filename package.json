@@ -6,7 +6,7 @@
   "description": "PGAS-specific foundry for creating TypeScript/Node PGAS programs",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:unit": "vitest run --config tests/vitest.config.ts",
+    "test:unit": "vitest run --config tests/vitest.config.ts --pool=threads --maxWorkers=1",
     "test:manifest": "bash tests/plugin-manifest.test.sh",
     "test:static": "bash tests/pgas-new-static.test.sh",
     "test": "npm run typecheck && npm run test:manifest && npm run test:unit && npm run test:static",

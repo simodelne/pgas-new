@@ -36,7 +36,7 @@ echo "[4/6] package typecheck"
 npm run typecheck >/tmp/pgas-new-typecheck.log && pass "typecheck passed" || fail "typecheck failed"
 
 echo "[5/6] unit/static tests"
-npm run test:unit >/tmp/pgas-new-vitest.log && pass "Vitest suite passed" || fail "Vitest suite failed"
+CI=1 RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-1}" UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-1}" npm run test:unit >/tmp/pgas-new-vitest.log && pass "Vitest suite passed" || fail "Vitest suite failed"
 
 echo "[6/6] optional generated scaffold install/test"
 if [[ -z "${NPM_TOKEN:-}" ]]; then
@@ -52,12 +52,10 @@ NPMRC
     mkdir -p "$WORK/.npm-cache"
     NPM_TOKEN="$NPM_TOKEN" npm_config_cache="$WORK/.npm-cache" npm install --no-audit --no-fund >/tmp/pgas-new-generated-install.log 2>&1
     npm_config_cache="$WORK/.npm-cache" npm run typecheck >/tmp/pgas-new-generated-typecheck.log 2>&1
-    # --pool=threads: run the generated scaffold's nested vitest in worker_threads
-    # instead of spawning fork-worker processes. On a constrained host (e.g. cgroup
-    # pids.max cap contended by a concurrent session) a fresh fork-worker aborts at
-    # startup on uv_thread_create; the threads pool reuses the existing process and
-    # survives. Harness-side hardening only — the shipped package.json stays default.
-    npm_config_cache="$WORK/.npm-cache" npm test -- --pool=threads >/tmp/pgas-new-generated-test.log 2>&1
+    # Keep the generated scaffold's nested vitest on the repo-standard threads
+    # pool with one native worker so static verification is stable on constrained
+    # hosts while still executing the scaffold tests.
+    CI=1 RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-1}" UV_THREADPOOL_SIZE="${UV_THREADPOOL_SIZE:-1}" npm_config_cache="$WORK/.npm-cache" npm test >/tmp/pgas-new-generated-test.log 2>&1
   ) && pass "generated scaffold install/typecheck/test passed" || fail "generated scaffold install/typecheck/test failed"
 fi
 

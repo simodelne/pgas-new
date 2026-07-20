@@ -322,6 +322,53 @@ describe('assertReasoningContract', () => {
 });
 
 describe('synthesizeReasoningContract', () => {
+  it('warns when MIN_FIELDS fallback drops declared reasoning fields from a short domain spec', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeReasoningContract('extract_entities', artifact({
+        mode_names: ['intake', 'extract_entities', 'complete'],
+        stage_classification: [
+          { slug: 'extract_entities', archetype: 'llm-reasoning', rationale: 'extract entities from text' },
+        ],
+        body_stage_slugs: ['extract_entities'],
+        synthesis_context: {
+          program_slug: 'entity-extractor',
+          program_name: 'Entity Extractor',
+          purpose: 'Extract anonymization entities from source documents.',
+          entry_channel: 'user_text',
+          stages: [
+            { slug: 'intake', is_bootstrap: true },
+            {
+              slug: 'extract_entities',
+              domain_spec: {
+                reads: ['inputs.initial_user_text'],
+                produces: {
+                  result_json: { stage: 'string', entities: 'string' },
+                  items_json: ['entities:<entities>'],
+                },
+                rules: ['Extract the entities that require anonymization.'],
+                invariants: ['result_json.stage must equal extract_entities.'],
+              },
+            },
+            { slug: 'complete', is_terminal: true },
+          ],
+          transitions: [
+            { from: 'intake', to: 'extract_entities', trigger: 'started', guard_field: 'intake.started' },
+            { from: 'extract_entities', to: 'complete', trigger: 'extracted', guard_field: 'extract_entities.ready' },
+          ],
+          delegation: { enabled: false },
+          completion: { final_stage: 'complete', guard_field: 'extract_entities.ready' },
+        },
+      }), { cacheDir });
+
+      expect(result.contract.result_schema.fields.map((field) => field.name)).toEqual(
+        expect.arrayContaining(['summary', 'key_points']),
+      );
+      expect(result.fallback_reason).toMatch(
+        /WARN: domain_spec\.produces\.result_json declared fields .*entities.* but fewer than MIN_FIELDS=3 usable reasoning fields were available; deterministic fallback used generic fields .*summary.*key_points/u,
+      );
+    });
+  });
+
   it('accepts a conformant meta-LLM contract on the first attempt and caches it', async () => {
     await withCache(async (cacheDir) => {
       let calls = 0;

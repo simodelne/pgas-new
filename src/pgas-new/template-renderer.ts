@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dump, load } from 'js-yaml';
+import ts from 'typescript';
 import {
   createExistingRepoArtifactPlan,
   createStandaloneArtifactPlan,
@@ -110,6 +111,12 @@ interface SynthesizedChildSources extends SynthesizedSources {
 
 interface ResolvedSynthesizedSources extends SynthesizedSources {
   slug: string;
+}
+
+interface RenderedArtifact {
+  artifact: PlannedArtifact;
+  outPath: string;
+  output: string;
 }
 
 const STANDALONE_TEMPLATE_BY_PATH: Record<string, TemplateSpec> = {
@@ -283,6 +290,7 @@ function renderPlan(options: {
   tokens: Record<string, string>;
 }): RenderResult {
   const written: string[] = [];
+  const renderedArtifacts: RenderedArtifact[] = [];
 
   for (const artifact of options.plan.artifacts) {
     const templatePath = options.templateForArtifact(artifact);
@@ -301,6 +309,12 @@ function renderPlan(options: {
       outPath,
       tokens: options.tokens,
     });
+    renderedArtifacts.push({ artifact, outPath, output });
+  }
+
+  assertNoDuplicateRenderedHandlerBodies(renderedArtifacts);
+
+  for (const { artifact, outPath, output } of renderedArtifacts) {
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, output);
     written.push(artifact.path);
@@ -740,8 +754,11 @@ function templateForSynthesizedArtifact(
   if (artifact.path.endsWith(`/${selected.slug}/handlers.ts`) && selected.handlersTs) {
     return inlineTemplate(selected.handlersTs);
   }
-  if (artifact.path.endsWith(`/${selected.slug}/handlers/index.ts`) && selected.handlersIndexTs) {
-    return inlineTemplate(selected.handlersIndexTs);
+  if (artifact.path.endsWith(`/${selected.slug}/handlers/index.ts`)) {
+    if (selected.handlersTs && selected.handlersIndexTs) {
+      assertNoDuplicateHandlerBodies(selected.handlersTs, selected.handlersIndexTs, artifact.path);
+    }
+    return inlineTemplate(renderHandlersIndexBarrelSource());
   }
   const stageMatch = artifact.path.match(new RegExp(`/${selected.slug}/stages/([^/]+)\\.ts$`, 'u'));
   if (stageMatch?.[1] && selected.stageSources?.[stageMatch[1]]) {
@@ -923,6 +940,72 @@ function templateForHandlerDirectoryArtifact(artifact: PlannedArtifact, slug: st
     return spec('program/handlers-resolver.ts.tmpl', []);
   }
   return undefined;
+}
+
+function renderHandlersIndexBarrelSource(): string {
+  return "export { handlers, reactionHandlers } from '../handlers.js';\n";
+}
+
+function assertNoDuplicateRenderedHandlerBodies(renderedArtifacts: RenderedArtifact[]): void {
+  const byProgramDir = new Map<string, { primary?: RenderedArtifact; index?: RenderedArtifact }>();
+  for (const rendered of renderedArtifacts) {
+    const path = rendered.artifact.path;
+    if (!path.endsWith('/handlers.ts') && !path.endsWith('/handlers/index.ts')) {
+      continue;
+    }
+    const key = path.endsWith('/handlers.ts')
+      ? path.slice(0, -'/handlers.ts'.length)
+      : path.slice(0, -'/handlers/index.ts'.length);
+    const entry = byProgramDir.get(key) ?? {};
+    if (path.endsWith('/handlers.ts')) {
+      entry.primary = rendered;
+    } else {
+      entry.index = rendered;
+    }
+    byProgramDir.set(key, entry);
+  }
+
+  for (const entry of byProgramDir.values()) {
+    if (entry.primary && entry.index) {
+      assertNoDuplicateHandlerBodies(entry.primary.output, entry.index.output, entry.index.artifact.path);
+    }
+  }
+}
+
+function assertNoDuplicateHandlerBodies(primarySource: string, indexSource: string, indexPath: string): void {
+  const primaryBodies = new Set(handlerFunctionBodies(primarySource));
+  if (primaryBodies.size === 0) {
+    return;
+  }
+  for (const body of handlerFunctionBodies(indexSource)) {
+    if (primaryBodies.has(body)) {
+      throw new Error(`duplicate generated handler implementation in ${indexPath}; handlers/index.ts must re-export handlers.ts`);
+    }
+  }
+}
+
+function handlerFunctionBodies(source: string): string[] {
+  const sourceFile = ts.createSourceFile('handlers.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const bodies: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isMethodDeclaration(node) && node.body) {
+      bodies.push(normalizeFunctionBody(node.body.getText(sourceFile)));
+    }
+    if (
+      ts.isPropertyAssignment(node) &&
+      (ts.isFunctionExpression(node.initializer) || ts.isArrowFunction(node.initializer)) &&
+      ts.isBlock(node.initializer.body)
+    ) {
+      bodies.push(normalizeFunctionBody(node.initializer.body.getText(sourceFile)));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return bodies;
+}
+
+function normalizeFunctionBody(body: string): string {
+  return body.replace(/\s+/gu, ' ').trim();
 }
 
 function renderMinimalStageSource(stage: string): string {
