@@ -123,7 +123,7 @@ describe('SOTA corpus harness', () => {
         },
       });
 
-      expect(result.passed).toBe(true);
+      expect(result.passed, JSON.stringify(result.gates)).toBe(true);
       expect(result.failure_taxonomy).toBeNull();
       expect(result.gates.typecheck.status).toBe('pass');
       expect(result.gates.smoke.status).toBe('pass');

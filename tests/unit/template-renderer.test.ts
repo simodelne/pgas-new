@@ -138,6 +138,32 @@ describe('template renderer', () => {
     }
   });
 
+  it('rejects generated handler directory indexes that duplicate handlers.ts top-level bodies', () => {
+    const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-duplicate-handlers-'));
+    const handlers = [
+      'export const handlers = {',
+      '  async complete_stage(payload) {',
+      "    return { kind: 'stage_completed', payload };",
+      '  },',
+      '};',
+      '',
+    ].join('\n');
+
+    try {
+      expect(() => renderStandaloneScaffold({
+        outDir,
+        slug: 'duplicate-handlers',
+        name: 'Duplicate Handlers',
+        synthesizedSpecYaml: 'name: duplicate-handlers\n',
+        synthesizedHandlersTs: handlers,
+        synthesizedHandlersIndexTs: handlers,
+        synthesizedToolsTs: 'export const stageActionTools = {};\n',
+      })).toThrow(/duplicate generated handler implementation/i);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
   it('renders synthesized smoke tests even when all body stages are LLM-reasoning stages', () => {
     const outDir = mkdtempSync(join(tmpdir(), 'pgas-new-render-llm-smoke-'));
     try {

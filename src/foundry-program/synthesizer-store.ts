@@ -68,6 +68,17 @@ export interface SynthesisContext {
     slug: string;
     is_bootstrap?: boolean;
     is_terminal?: boolean;
+    emit_artifact?: {
+      type?: unknown;
+      title?: unknown;
+      summary?: unknown;
+      payload_ref?: unknown;
+    } | Array<{
+      type?: unknown;
+      title?: unknown;
+      summary?: unknown;
+      payload_ref?: unknown;
+    }>;
     domain_spec?: {
       reads: string[];
       produces: Record<string, unknown>;

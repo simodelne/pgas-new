@@ -333,7 +333,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
       spec_yaml: '9dcfe499925d995bc46442ba71b847b271380bc01e6cfd78f48f643fc8f09a9a',
       contracts_ts: '9cf1c34fb09d664aef1bbb2b9cf31cb54a6e2943c81007cd561d0975dd2d43af',
       handlers_ts: '487b83115c463a60c3c53d3ccb21350e05a4f4d29a39d9f03ad77e804e56d04d',
-      handlers_index_ts: '3fb01bfefde1d5a455f7ff53fbf48333c0e36dc9b49f7e82e6a3e5e56f342531',
+      handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
       tools_ts: '33ddf30cb9b4787506ba6e9b332fb570e3dfa185470c000dbd429083e0630e7d',
       smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
     });
@@ -358,7 +358,7 @@ describe('collection_lifecycle descriptor synthesis', () => {
       spec_yaml: '45116c560ca1d62b69c103f97f5b12f458f8f6222037b8ad6eb7d45673d4247c',
       contracts_ts: '0887c0cf22f7eefd2b877e61d6dea3a938d952bbb349572a2fc9919523a74993',
       handlers_ts: '12b3a449739578f1d5bf6e59a820e1d9251bb1a4eef0352efa1226e6e843b3d2',
-      handlers_index_ts: '3fb01bfefde1d5a455f7ff53fbf48333c0e36dc9b49f7e82e6a3e5e56f342531',
+      handlers_index_ts: '1a48cdeab26386fc7b1a917aa9d466340f2e1af8b493056e5892cc1ca4776e94',
       tools_ts: 'ba348055c634de2e2f58dd88a696d53614266b13c29ed03a9568cf3a3545bfe7',
       smoke_test_ts: 'cfb74d966744cd252918dd8820602ce9b762ea406a7cd39c26ff4e4edc821a92',
     });

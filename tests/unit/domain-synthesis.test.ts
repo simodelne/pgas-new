@@ -924,7 +924,7 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 
       expect(attempts).toEqual([
         'initial',
-        expect.stringContaining('expected result_json keys to exactly match domain_spec.produces.result_json in order'),
+        expect.stringContaining('result_json must start with a \'stage\' key equal to calculate and must match domain_spec.produces.result_json keys/order'),
       ]);
       expect(result.stage_sources?.calculate).toBe(validDomainSpecBody);
     });
@@ -1212,6 +1212,70 @@ export async function runStage(input: StageInput, runtime: StageRuntime): Promis
 `,
         }),
       ).rejects.toThrow(/stub marker.*TODO/u);
+    });
+  });
+
+  it('allows placeholder tokens inside string literals while still scanning executable source for stub markers', async () => {
+    await withCache(async (cacheDir) => {
+      const result = await synthesizeDomainLogic(artifact(), {
+        cacheDir,
+        maxAttempts: 1,
+        providerUrl: 'http://provider.local/v1',
+        model: 'qwen36-27b',
+        generator: async () => `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  const token = 'placeholder:' + input.stage;
+  return {
+    result_json: JSON.stringify({ stage: input.stage, status: 'ok', token }),
+    items_json: JSON.stringify([token]),
+    digest: '',
+  };
+}
+`,
+      });
+
+      expect(result.stage_sources?.calculate).toContain("'placeholder:' + input.stage");
+      expect(result.domain_synthesis_audit?.[0]).toEqual(expect.objectContaining({
+        stage: 'calculate',
+        behavioral_gate: 'passed',
+      }));
+    });
+  });
+
+  it('explains the exact result_json domain-spec contract and fix when key order is wrong', async () => {
+    await withCache(async (cacheDir) => {
+      await expect(
+        synthesizeDomainLogic(feeProposalArtifact('fee_modelling'), {
+          cacheDir,
+          maxAttempts: 1,
+          providerUrl: 'http://provider.local/v1',
+          model: 'qwen36-27b',
+          generator: async () => `import type { StageInput, StageOutput, StageRuntime } from '../contracts.js';
+
+export async function runStage(input: StageInput, runtime: StageRuntime): Promise<StageOutput> {
+  void runtime;
+  return {
+    result_json: JSON.stringify({
+      fixed_quote: 20,
+      stage: input.stage,
+      parameters_json: JSON.stringify({ rate_card: {}, role_hours: {}, phase_hours: {}, jurisdiction_multiplier: 1, risk_contingency_pct: 1, discount_pct: 1, cap_premium_pct: 1, retainer_pct: 1, currency: 'USD' }),
+      hourly_total: 20,
+      capped_quote: 20,
+      blended_rate: 20,
+      retainer_quote: 20,
+      currency: 'USD',
+    }),
+    items_json: JSON.stringify(['fixed_quote:20', 'capped_quote:20']),
+    digest: '',
+  };
+}
+`,
+        }),
+      ).rejects.toThrow(
+        /result_json must start with a 'stage' key equal to fee_modelling[\s\S]*domain_spec\.produces\.result_json keys\/order[\s\S]*Fix:/u,
+      );
     });
   });
 

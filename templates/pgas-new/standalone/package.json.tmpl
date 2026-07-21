@@ -7,7 +7,7 @@
     "dev": "node --import tsx src/server.ts",
     "repl": "node --import tsx src/repl/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --pool=threads --maxWorkers=1"
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",

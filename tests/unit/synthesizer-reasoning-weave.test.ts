@@ -162,11 +162,10 @@ describe('reasoning contract weave', () => {
   });
 
   it('adds the observability envelope to the generated reasoning handlers', () => {
-    for (const source of [woven.handlers_ts, woven.handlers_index_ts]) {
-      expect(source).toContain("decision: resolveDomainValue<unknown>(payload as HandlerPayload, 'decision', null),");
-      expect(source).toContain("contract_conformant: reasoningOutputConformant(resultJson, fields, ['decision', 'rationale', 'quality_score', 'blocking', 'gaps']),");
-      expect(source).toContain('function reasoningOutputConformant(');
-    }
+    expect(woven.handlers_ts).toContain("decision: resolveDomainValue<unknown>(payload as HandlerPayload, 'decision', null),");
+    expect(woven.handlers_ts).toContain("contract_conformant: reasoningOutputConformant(resultJson, fields, ['decision', 'rationale', 'quality_score', 'blocking', 'gaps']),");
+    expect(woven.handlers_ts).toContain('function reasoningOutputConformant(');
+    expect(woven.handlers_index_ts).toBe("export { handlers, reactionHandlers } from '../handlers.js';\n");
   });
 
   it('drives the generated smoke test with the canned example on the declared widget_output channel', () => {

@@ -39,7 +39,39 @@ const uploadDomain = {
   }),
 };
 
+const uploadDomainWithPostIngestStage = {
+  ...uploadDomain,
+  'program.slug': 'document-upload-review',
+  'program.name': 'Document Upload Review',
+  'program.target_dir': '/tmp/document-upload-review',
+  'intake.purpose': 'Request an uploaded text document, ingest its text deterministically, then review it in a later stage.',
+  'intake.stages_json': JSON.stringify([
+    { slug: 'intake', is_bootstrap: true },
+    { slug: 'ingest_source' },
+    { slug: 'review_source' },
+    { slug: 'complete', is_terminal: true },
+  ]),
+  'intake.transitions_json': JSON.stringify([
+    { from: 'intake', to: 'ingest_source', trigger: 'started', guard_field: 'intake.started' },
+    { from: 'ingest_source', to: 'review_source', trigger: 'source_ready', guard_field: 'work.source_ready' },
+    { from: 'review_source', to: 'complete', trigger: 'reviewed', guard_field: 'review_source.ready' },
+  ]),
+  'intake.completion_json': JSON.stringify({
+    final_stage: 'complete',
+    guard_field: 'review_source.ready',
+  }),
+};
+
 describe('generated document upload smoke test', () => {
+  it('asserts upload extraction and advancement past ingest instead of terminal completion when later stages remain', () => {
+    const artifact = artifactFromDomain(uploadDomainWithPostIngestStage);
+
+    expect(artifact.smoke_test_ts).toContain('expect(result.upload?.fileRef.fileId).toEqual(expect.any(String))');
+    expect(artifact.smoke_test_ts).toContain('expect(source.full_text).toBe(result.upload?.content)');
+    expect(artifact.smoke_test_ts).toContain("expect(result.final.mode).toBe('review_source')");
+    expect(artifact.smoke_test_ts).not.toContain("expect(result.final.mode).toBe('complete')");
+  });
+
   it('boots synthesized self-contained upload intake through the route and proves text extraction plus skip', { timeout: 120_000 }, () => {
     const artifact = artifactFromDomain(uploadDomain);
     const targetDir = mkdtempSync(join(tmpdir(), 'pgas-new-upload-render-'));

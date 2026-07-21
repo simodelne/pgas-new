@@ -490,7 +490,7 @@ async function resolveInitialAdminInput(
 }
 
 function dataDir(): string {
-  return join(homedir(), '.local/share/pgas-new');
+  return join(process.env.HOME?.trim() || homedir(), '.local/share/pgas-new');
 }
 
 function tokenFile(): string {

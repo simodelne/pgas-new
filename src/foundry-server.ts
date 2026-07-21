@@ -124,7 +124,7 @@ function resolveFoundryConfig(): ResolvedFoundryConfig {
 }
 
 function defaultDataDir(): string {
-  return join(homedir(), DATA_DIR_RELATIVE);
+  return join(process.env.HOME?.trim() || homedir(), DATA_DIR_RELATIVE);
 }
 
 function ensureParentDir(filePath: string): void {

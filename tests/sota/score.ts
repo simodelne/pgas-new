@@ -300,7 +300,14 @@ async function runGeneratedSmoke(targetDir: string): Promise<SotaGateResult> {
     '',
   ].join('\n'));
   const vitestBin = join(process.cwd(), 'node_modules/vitest/vitest.mjs');
-  return runCommand(process.execPath, [vitestBin, 'run', '--pool=threads', '--config', 'vitest.sota-smoke.config.ts'], targetDir, COMMAND_TIMEOUT_MS);
+  return runCommand(process.execPath, [
+    vitestBin,
+    'run',
+    '--pool=threads',
+    '--maxWorkers=1',
+    '--config',
+    'vitest.sota-smoke.config.ts',
+  ], targetDir, COMMAND_TIMEOUT_MS);
 }
 
 async function functionalOracleGate(benchmark: SotaBenchmark, targetDir: string): Promise<SotaGateResult> {
@@ -463,7 +470,7 @@ function runCommand(command: string, args: string[], cwd: string, timeoutMs: num
     execFile(command, args, {
       cwd,
       timeout: timeoutMs,
-      env: { ...process.env, CI: '1' },
+      env: { ...process.env, CI: '1', RAYON_NUM_THREADS: process.env.RAYON_NUM_THREADS ?? '1' },
     }, (error, stdout, stderr) => {
       resolveResult({
         status: error ? 'fail' : 'pass',
