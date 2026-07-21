@@ -1079,6 +1079,7 @@ function applyDelegationActions(
 ): void {
   for (const child of children) {
     const actionName = delegationRequestActionName(child);
+    const manifestReused = isManifestReusedDelegationChild(child);
     if (Object.prototype.hasOwnProperty.call(actionMap, actionName)) {
       throw new Error(`delegation request action collides with generated action_map: ${actionName}`);
     }
@@ -1087,17 +1088,24 @@ function applyDelegationActions(
       result_path: child.result_path,
       mutations: [
         { op: 'MSet', path: `${delegationStateBase(child)}.requested`, value: true },
-        // Capture the author-supplied request payload into state (from_arg). Deterministic
-        // delegationPolicy.inputEnrichment still supplies each child's inputs from parent state,
-        // so the child never spawns empty; this records the author's request and satisfies the
-        // arg-carried-delegation contract (a delegation action must carry a from_arg payload
-        // mutation — simoneos#901).
-        { op: 'MSet', path: `${delegationStateBase(child)}.request`, from_arg: 'request' },
+        // Keep the parent-state request slot and from_arg marker for the delegation
+        // action contract (#901). Synthesized children still receive an author
+        // request arg; manifest-reused children rely only on inputEnrichment.
+        manifestReused
+          ? {
+            op: 'MSet',
+            path: `${delegationStateBase(child)}.request`,
+            value: { source: 'delegationPolicy.inputEnrichment' },
+            from_arg: 'request',
+          }
+          : { op: 'MSet', path: `${delegationStateBase(child)}.request`, from_arg: 'request' },
       ],
-      description: `Dispatch the ${child.id} child program and wait for the routed delegation result.`,
-      arg_descriptions: {
+      description: manifestReused
+        ? `Dispatch the ${child.id} manifest-reused child program and wait for the routed delegation result; delegationPolicy.inputEnrichment supplies the child inputs.`
+        : `Dispatch the ${child.id} child program and wait for the routed delegation result.`,
+      ...(manifestReused ? {} : { arg_descriptions: {
         request: 'Object with the request for the child (include a short topic/query string).',
-      },
+      } }),
     };
   }
 }
@@ -1206,7 +1214,9 @@ function applyDelegationPrompts(
 ): void {
   for (const child of children) {
     const existing = typeof prompts[child.stage] === 'string' ? `${prompts[child.stage]}\n` : '';
-    prompts[child.stage] = `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
+    prompts[child.stage] = isManifestReusedDelegationChild(child)
+      ? `${existing}Call ${delegationRequestActionName(child)} once with an empty object payload. The manifest delegationPolicy.inputEnrichment supplies the child inputs. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`
+      : `${existing}Call ${delegationRequestActionName(child)} once with a request object that includes a short topic or query string. When ${delegationStateBase(child)}.settled is true, proceed via the normal transition action. If ${delegationStateBase(child)}.degraded is true, proceed and note the degradation.`;
   }
 }
 
@@ -1218,7 +1228,9 @@ function applyDelegationGuidance(
     const existing = Array.isArray(guidance[child.stage]) ? guidance[child.stage] as string[] : [];
     guidance[child.stage] = [
       ...existing,
-      `Call ${delegationRequestActionName(child)} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
+      isManifestReusedDelegationChild(child)
+        ? `Call ${delegationRequestActionName(child)} exactly once without a child request payload; deterministic payload enrichment supplies mapped parent state.`
+        : `Call ${delegationRequestActionName(child)} exactly once with a request object; deterministic payload enrichment supplies mapped parent state.`,
       `Wait until ${delegationStateBase(child)}.settled is true, then use the stage transition action.`,
       `If ${delegationStateBase(child)}.degraded is true, continue and preserve ${delegationStateBase(child)}.degrade_reason in your output.`,
     ];
@@ -1595,6 +1607,10 @@ function delegationSettleReactionName(child: DelegationChildDescriptor): string 
 
 function delegationStateBase(child: DelegationChildDescriptor): string {
   return `${child.stage}.delegation.${child.id}`;
+}
+
+function isManifestReusedDelegationChild(child: DelegationChildDescriptor): boolean {
+  return child.synthesize_child === undefined && child.target_spec !== undefined && child.registered_name !== undefined;
 }
 
 function delegationTargetSpec(child: DelegationChildDescriptor): string {

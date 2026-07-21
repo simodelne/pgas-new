@@ -125,4 +125,37 @@ describe('manifest per-agent payload_map alignment', () => {
     expect(artifact.child_artifacts).toBeUndefined();
     expect(artifact.capability_gaps ?? []).toHaveLength(0);
   });
+
+  it('does not solicit a generic topic payload for manifest-reused typed children (GAP-2)', () => {
+    const spec = load(artifact.spec_yaml) as {
+      action_map: Record<string, {
+        arg_descriptions?: Record<string, string>;
+        description?: string;
+        mutations: Array<Record<string, unknown>>;
+      }>;
+      prompts: Record<string, string>;
+      guidance: Record<string, string[]>;
+    };
+
+    const action = spec.action_map.request_ingest;
+    expect(action).toBeDefined();
+    expect(action.arg_descriptions).toBeUndefined();
+    expect(action.description).toContain('delegationPolicy.inputEnrichment');
+    expect(JSON.stringify(action)).not.toContain('topic');
+    expect(JSON.stringify(action)).not.toContain('query string');
+
+    expect(action.mutations).toContainEqual({
+      op: 'MSet',
+      path: 'ingest_stage.delegation.ingest.request',
+      from_arg: 'request',
+      value: { source: 'delegationPolicy.inputEnrichment' },
+    });
+    expect(registration).toContain("target: 'request.extraction_contract'");
+    expect(registration).not.toContain("target: 'request.topic'");
+
+    expect(spec.prompts.ingest_stage).toContain('Call request_ingest once with an empty object payload');
+    expect(spec.prompts.ingest_stage).not.toContain('topic');
+    expect(spec.guidance.ingest_stage.join('\n')).toContain('without a child request payload');
+    expect(spec.guidance.ingest_stage.join('\n')).not.toContain('topic');
+  });
 });
