@@ -472,3 +472,136 @@ No runner, tunnel, deployment, release, or live infrastructure mutation was
 performed from this pane. The remaining production gate is rerunning DD-report
 deterministic/live UAT after `simoneos.local` is resolvable and rerunning the
 image lane after the SimoneOS runner has a working `podman` installation.
+
+## Overnight Environment-Gate Continuation — 2026-07-23 22:26 UTC
+
+Follow-up diagnostics were run after the RED handoff. No secrets were printed
+and no runner, tunnel, deployment, release, or live infrastructure was mutated.
+
+### UAT DNS / Target Selection
+
+Source-pinned runner defaults:
+
+- `/home/simone/simoneos/qc/e2e-frontend/helpers.ts:35` defaults
+  `E2E_BASE_URL` to `https://simoneos.local`.
+- `/home/simone/simoneos/qc/e2e-frontend/helpers.ts:36` derives
+  `E2E_API_BASE` as `${E2E_BASE_URL}/api`.
+- `/home/simone/simoneos/qc/e2e-frontend/helpers.ts:89` posts auth to
+  `${env.apiBase}/auth/register`.
+- `/home/simone/simoneos/qc/e2e-frontend/README.md:31-36` documents the
+  staging form of the command with explicit
+  `https://simoneos-staging.simoneos.xyz` URLs.
+
+Safe diagnostics:
+
+```text
+E2E_BASE_URL_set=
+E2E_API_BASE_set=
+E2E_TRIGGER_API_BASE_set=
+E2E_TEST_EMAIL_set=
+E2E_TEST_PASSWORD_set=
+MCP_BASE_URL_set=
+MCP_API_KEY_set=
+curl: (6) Could not resolve host: simoneos.local
+```
+
+Public staging DNS and health were reachable:
+
+```text
+simoneos-staging.simoneos.xyz -> 172.67.145.60, 104.21.47.63
+```
+
+Filtered health result:
+
+```json
+{
+  "status": "ok",
+  "program_count": 16,
+  "has_due_diligence_report": false
+}
+```
+
+Conclusion: the original DD-report deterministic UAT command failed because no
+target env was set and the local default hostname is not resolvable. The safe
+repo-native workaround is to run UAT with explicit staging URLs. However, the
+current public staging target is not deployed with `due-diligence-report`, so a
+full DD-report UAT would still fail before exercising the program. The next
+operator action is to deploy/reconcile staging to a SimoneOS build that includes
+`due-diligence-report`, then rerun:
+
+```bash
+E2E_BASE_URL=https://simoneos-staging.simoneos.xyz \
+E2E_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+E2E_TRIGGER_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+E2E_DETERMINISTIC_UAT=1 \
+npm run e2e:frontend -- qc/e2e-frontend/due-diligence-report.scenario.yml
+```
+
+### Container Image Gate
+
+Source-pinned workflow lines:
+
+- `/home/simone/simoneos/.github/workflows/build-and-push.yml:85` runs app
+  image jobs on `[self-hosted, gpu-pod]`.
+- `/home/simone/simoneos/.github/workflows/build-and-push.yml:290-292` runs
+  `image — simoneos-caddy` on the same `[self-hosted, gpu-pod]` labels.
+- `/home/simone/simoneos/.github/workflows/build-and-push.yml:344-349` calls
+  `podman login` for the caddy GHCR login step.
+
+Runner metadata for failed default-branch run `30047828129`:
+
+```json
+{"name":"app — simoneos-frontend","conclusion":"success","runner_name":"htpc-simoneos","labels":["self-hosted","gpu-pod"]}
+{"name":"app — simoneos-backend","conclusion":"success","runner_name":"htpc-simoneos","labels":["self-hosted","gpu-pod"]}
+{"name":"app — simoneos-mcp-server","conclusion":"success","runner_name":"htpc-simoneos","labels":["self-hosted","gpu-pod"]}
+{"name":"app — llama-wrapper","conclusion":"success","runner_name":"htpc-simoneos","labels":["self-hosted","gpu-pod"]}
+{"name":"image — simoneos-caddy","conclusion":"failure","runner_name":"simone-lab-simoneos","labels":["self-hosted","gpu-pod"]}
+```
+
+Registered runner metadata showed both runners online with the same build
+labels:
+
+```json
+{"name":"htpc-simoneos","status":"online","busy":false,"labels":["self-hosted","Linux","X64","gpu-pod"]}
+{"name":"simone-lab-simoneos","status":"online","busy":false,"labels":["self-hosted","Linux","X64","gpu-pod"]}
+```
+
+Failed-job rerun was attempted with:
+
+```bash
+gh -R simodelne/simoneos run rerun 30047828129 --failed
+```
+
+The rerun again placed `image — simoneos-caddy` on
+`simone-lab-simoneos` and failed before build. Rerun job:
+`89349126315`.
+
+Exact rerun failure:
+
+```text
+/home/simone/actions-runner-simoneos/_work/_temp/776c29f9-c0f0-42b8-9a68-f71b201934f9.sh: line 2: podman: command not found
+##[error]Process completed with exit code 127.
+```
+
+The summary rerun job `89349195370` ran on `htpc-simoneos` and also emitted a
+runner-capacity warning:
+
+```text
+Runner name: 'htpc-simoneos'
+Machine name: 'htpc'
+You are running out of disk space. The runner will stop working when the machine runs out of disk space. Free space left: 0 MB
+```
+
+Conclusion: the workflow label set is ambiguous. At least one runner with the
+`gpu-pod` label (`simone-lab-simoneos`) cannot execute the workflow contract
+because `podman` is absent. The smallest operator action is one of:
+
+1. Install/repair `podman` on `simone-lab-simoneos`; or
+2. Remove the `gpu-pod` label or disable the `simone-lab-simoneos` runner until
+   it satisfies the workflow contract; or
+3. Add a distinct Podman-capable label to `htpc-simoneos` and update
+   `.github/workflows/build-and-push.yml` to require that label.
+
+This requires runner host/label mutation and is therefore a hard stop for this
+pane. No further caddy-image reruns are useful until runner selection or
+runner provisioning is corrected.
