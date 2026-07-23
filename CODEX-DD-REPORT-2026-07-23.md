@@ -664,3 +664,96 @@ Remaining hard stops:
 3. Resolve the SimoneOS branch-protection mismatch for audit-only PRs, either
    by adding a `product-tests` no-op companion for non-product paths or by an
    operator adjusting the required-status/path-filter policy.
+
+## Gate Monitoring Pass - 2026-07-23 23:29 UTC
+
+This pass only refreshed evidence for the remaining DD-report integration gates.
+No code, product behavior, runner, tunnel, deployment, release, tag, force-push,
+secret, classifier, or branch-protection-bypass action was performed.
+
+pgas-new handoff PR #224 is merged and verified:
+
+- PR: `https://github.com/simodelne/pgas-new/pull/224`
+- Head SHA: `22743242f732938c41b18f7db8cb2d4c1663eee1`
+- Merge SHA: `bd657b5b375d85caf8cf52dd33fea73a370b7ce3`
+- Merged at: `2026-07-23T23:03:20Z`
+- PR checks before merge: `architecture-diff` success, `test` success.
+- Post-merge default-branch CI: run `30051979165`, completed successfully for
+  `main` at `bd657b5b375d85caf8cf52dd33fea73a370b7ce3`.
+
+Local pgas-new status:
+
+```text
+## main...origin/main
+ M .uat/codex-impl-phase-checkpoints.md
+HEAD = origin/main = bd657b5b375d85caf8cf52dd33fea73a370b7ce3
+```
+
+The `.uat/codex-impl-phase-checkpoints.md` dirt remains unrelated old Phase 3
+foundry checkpoint history and is intentionally preserved, unstaged.
+
+SimoneOS PR #2144 remains blocked by branch protection, not by a failing emitted
+check:
+
+- PR: `https://github.com/simodelne/simoneos/pull/2144`
+- State: `OPEN`
+- Head branch: `docs/dd-report-env-gate-handoff`
+- Head SHA: `5290d2951eef33434d0d219049d6821098e4b8bb`
+- Base branch: `main`
+- Base SHA: `03776052f9a1e5b4e9d8520c9d4852e7346601ff`
+- `mergeable`: `MERGEABLE`
+- `mergeStateStatus`: `BLOCKED`
+- Emitted checks: `static-gates` success via run `30050267915`;
+  `check-override` success via run `30050267989`.
+- Branch-protection required contexts from GitHub:
+  `static-gates`, `check-override`, `product-tests`.
+
+Current blocker: required context `product-tests` is still not emitted for
+PR #2144's audit/docs-only path set. The smallest safe fixes remain either a
+repo change adding a `product-tests` no-op companion for non-product paths, or an
+operator policy adjustment. This pane did not bypass branch protection.
+
+Runner/image-lane status remains blocked:
+
+- Latest relevant default-branch image run:
+  `https://github.com/simodelne/simoneos/actions/runs/30047828129`
+- Workflow: `Build & push container images`
+- Branch/SHA: `main` at `03776052f9a1e5b4e9d8520c9d4852e7346601ff`
+- Conclusion: `failure`
+- Previous rerun failed in job `89349126315` with:
+
+```text
+/home/simone/actions-runner-simoneos/_work/_temp/776c29f9-c0f0-42b8-9a68-f71b201934f9.sh: line 2: podman: command not found
+##[error]Process completed with exit code 127.
+```
+
+Runner metadata still shows both SimoneOS self-hosted runners online with the
+same `[self-hosted, Linux, X64, gpu-pod]` label set:
+
+```json
+{"name":"htpc-simoneos","status":"online","busy":false,"labels":["self-hosted","Linux","X64","gpu-pod"]}
+{"name":"simone-lab-simoneos","status":"online","busy":false,"labels":["self-hosted","Linux","X64","gpu-pod"]}
+```
+
+The image lane remains unsafe to rerun until runner selection/provisioning is
+corrected, because GitHub can still place Podman-required jobs on
+`simone-lab-simoneos`.
+
+Staging build availability remains blocked:
+
+- `https://simoneos-staging.simoneos.xyz/api/health` is reachable.
+- The filtered health/program registry still reports no deployed
+  `due-diligence-report` program.
+- `/api/programs` currently lists 12 user-facing programs and omits
+  `due-diligence-report`.
+
+The deterministic DD-report UAT command remains the next validation step after a
+staging build including `due-diligence-report` is available:
+
+```bash
+E2E_BASE_URL=https://simoneos-staging.simoneos.xyz \
+E2E_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+E2E_TRIGGER_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+E2E_DETERMINISTIC_UAT=1 \
+npm run e2e:frontend -- qc/e2e-frontend/due-diligence-report.scenario.yml
+```
