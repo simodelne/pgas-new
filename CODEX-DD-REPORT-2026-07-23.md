@@ -605,3 +605,62 @@ because `podman` is absent. The smallest operator action is one of:
 This requires runner host/label mutation and is therefore a hard stop for this
 pane. No further caddy-image reruns are useful until runner selection or
 runner provisioning is corrected.
+
+## Supervision Reconciliation — 2026-07-23 22:50 UTC
+
+The pgas-new evidence PR created by the overnight diagnostics was merged and
+verified:
+
+- PR: `https://github.com/simodelne/pgas-new/pull/223`
+- Head SHA: `ddeab62a5e524e4b8e1fa26ebe29b3e8d1b67efe`
+- Merge SHA: `7166602a14687e521a20aef459d3ffa628bce606`
+- Post-merge default-branch CI: `30050802037`, completed successfully.
+
+Local pgas-new reconciliation:
+
+- `HEAD` and `origin/main` both resolve to
+  `7166602a14687e521a20aef459d3ffa628bce606`.
+- `git status --short --branch` shows only the preserved local checkpoint file:
+
+```text
+## main...origin/main
+ M .uat/codex-impl-phase-checkpoints.md
+```
+
+The `.uat/codex-impl-phase-checkpoints.md` diff contains older Phase 3 foundry
+checkpoint entries for `ask_design_question` and native tool-call handling, not
+DD-report evidence. It was intentionally left unstaged and uncommitted.
+
+SimoneOS evidence PR #2144 remains blocked by repository policy, not by a
+failing emitted check:
+
+- PR: `https://github.com/simodelne/simoneos/pull/2144`
+- Head SHA: `5290d2951eef33434d0d219049d6821098e4b8bb`
+- Base SHA: `03776052f9a1e5b4e9d8520c9d4852e7346601ff`
+- `mergeable`: `MERGEABLE`
+- `mergeStateStatus`: `BLOCKED`
+- Emitted checks: `static-gates` success, `check-override` success.
+- Required branch-protection contexts: `static-gates`, `check-override`,
+  `product-tests`.
+
+The blocker is that `product-tests` is required by branch protection but is not
+emitted for this audit-only PR because `.github/workflows/simoneos.yml` is path
+filtered and there is no docs/audit no-op companion for the `product-tests`
+context. A PR comment pins this at
+`https://github.com/simodelne/simoneos/pull/2144#issuecomment-5064257105`.
+
+No force-push, branch-protection bypass, runner host mutation, secret echo,
+classifier/security bypass, deploy, tag, or release was performed.
+
+Remaining hard stops:
+
+1. Deploy/reconcile staging to a SimoneOS build that includes
+   `due-diligence-report`, then rerun the deterministic UAT command with
+   explicit staging URLs.
+2. Repair runner selection/provisioning for the image lane by installing
+   `podman` on `simone-lab-simoneos`, removing its `gpu-pod` label until it is
+   compliant, or adding a distinct Podman-capable label to `htpc-simoneos` and
+   updating the workflow.
+3. Resolve the SimoneOS branch-protection mismatch for audit-only PRs, either
+   by adding a `product-tests` no-op companion for non-product paths or by an
+   operator adjusting the required-status/path-filter policy.
