@@ -382,3 +382,93 @@ monitoring unless explicitly re-requested.
   Use the README commands after rebasing/recreating a clean branch from
   `origin/main`; do not run live/deploy/tunnel mutations from the stale release
   branch.
+
+## Post-Merge Continuation — 2026-07-23 22:02 UTC
+
+SimoneOS docs/evidence PR #2142 was opened from
+`docs/dd-report-uat-blocker-handoff` and merged after all PR checks passed.
+
+### Merge State
+
+- PR head: `43de8da5242a950e2d7b3cf37c2827cddd308417`
+- Merged default-branch SHA:
+  `03776052f9a1e5b4e9d8520c9d4852e7346601ff`
+- Merged subject:
+  `docs: record due diligence report uat blocker (#2142)`
+- PR checks were green before merge:
+  `Form widget smoke (#527 regression guard)`, `check-override`,
+  `product-tests`, both `static-gates` checks, and `verify`.
+
+### Local Verification
+
+The SimoneOS docs/evidence commit was made through normal hooks. The hook
+reported all pre-commit QC checks passed, including integrity, test-drift,
+pattern-drift, prompt-fragment lint, prompt-example lint, archetype-shape lint,
+spec drift, projection-relocation lint, and spec-graph semantic lint.
+
+Additional commands run before the commit:
+
+```bash
+git diff --check
+npm run qc:onboard
+npm run specs:loadcheck
+```
+
+Observed PASS output:
+
+- `npm run qc:onboard`: integrity, test-drift lint, pattern + prompt drift, and
+  spec drift passed; live UAT declared 12 e2e-frontend scenarios.
+- `npm run specs:loadcheck`: all 14 programs compiled cleanly, including
+  `due-diligence-report`.
+
+### UAT Gate
+
+The next DD-report UAT command was run from `/home/simone/simoneos`:
+
+```bash
+E2E_DETERMINISTIC_UAT=1 npm run e2e:frontend -- qc/e2e-frontend/due-diligence-report.scenario.yml
+```
+
+Result: RED before program execution because the configured target host was not
+resolvable in this environment.
+
+```text
+runner error: apiRequestContext.post: getaddrinfo ENOTFOUND simoneos.local
+POST https://simoneos.local/api/auth/register
+curl: (6) Could not resolve host: simoneos.local
+```
+
+Generated runner report:
+`qc/e2e-frontend/runs/due-diligence-report-2026-07-23T21-37-44-092Z.json`.
+It recorded `pass: false`, `modes_visited: []`, and
+`validation_mode: deterministic`.
+
+### Default-Branch Check State
+
+After the PR #2142 merge, `origin/main` resolved to
+`03776052f9a1e5b4e9d8520c9d4852e7346601ff`.
+
+Default-branch checks for that SHA:
+
+- `Zero-internals guard`: success
+- `Cheap gates`: success
+- `Playwright smoke (PR-gating)`: success
+- `SimoneOS CI`: success
+- `Build & push container images`: failure
+
+The image workflow failure was isolated to `image — simoneos-caddy`; app image
+jobs for frontend, backend, mcp-server, and llama-wrapper succeeded, and
+`image — llama-server-cuda` was skipped.
+
+Exact failing output from run `30047828129`, job `89343638613`, step
+`Login to GHCR`:
+
+```text
+/home/simone/actions-runner-simoneos/_work/_temp/58ae5ae1-41e6-4022-a685-8bcc22e75ef6.sh: line 2: podman: command not found
+##[error]Process completed with exit code 127.
+```
+
+No runner, tunnel, deployment, release, or live infrastructure mutation was
+performed from this pane. The remaining production gate is rerunning DD-report
+deterministic/live UAT after `simoneos.local` is resolvable and rerunning the
+image lane after the SimoneOS runner has a working `podman` installation.
