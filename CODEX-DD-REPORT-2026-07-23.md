@@ -630,6 +630,60 @@ The remaining stale blockers recorded above are superseded: staging now contains
 SHA is green, and deterministic staging UAT reaches `complete`. No material
 DD-report staging/UAT blocker remains.
 
+## Rebuilt Staging Final Closure - 2026-07-24 11:40 UTC
+
+Hermes requested one final reconciliation after rebuilt-staging UAT PASS. The
+previous dirty checkpoint file was inspected and resolved before this handoff:
+
+- Dirty file: `.uat/codex-impl-phase-checkpoints.md`
+- Diff content: older Phase 3 foundry checkpoint entries for
+  `ask_design_question`, native tool-call proxy behavior, and
+  `ask_design_question` mutation handling.
+- DD-report relevance: none; it was not intended durable DD-report handoff
+  state.
+- Resolution: restored the tracked file to `HEAD` with `git restore
+  .uat/codex-impl-phase-checkpoints.md`.
+
+Final SimoneOS main/staging evidence:
+
+- Current SimoneOS main SHA:
+  `bf8341b69e3e5339607f880252d3245de61d36e5`.
+- PR #2165 had already merged normally:
+  `b35dd6b2af439c11375abaaa592943d9594a3e54`.
+- PR #2166 had already merged normally:
+  `c7bc3cf8505596e6fdca4c3955e2ffeca08f551b`.
+- Staging was rebuilt/promoted to
+  `bf8341b69e3e5339607f880252d3245de61d36e5` with image tag
+  `bf8341b69e3e5339607f880252d3245de61d36e5`.
+- Staging version reported:
+  `consumerGitSha=bf8341b69e3e5339607f880252d3245de61d36e5`,
+  `buildTime=2026-07-24T11:29:07Z`.
+- Staging health reported `status=ok`, `due-diligence-report` present,
+  17 programs, `inFlightRounds=0`, and `shuttingDown=false`.
+- Remote `DEPLOYED_VERSION.json` recorded
+  `cloudflare_tunnel_mutated=false` and `registration_disabled_at_edge=true`.
+
+Fresh deterministic DD-report UAT on rebuilt staging:
+
+```text
+session_id=due-diligence-report-1784892793476
+scenario_path=qc/e2e-frontend/due-diligence-report.scenario.yml
+report=qc/e2e-frontend/runs/due-diligence-report-2026-07-24T11-33-11-352Z.json
+final_mode=complete
+final_status=Completed
+rounds=53
+gate_failures=0
+repairs=0
+fallbacks=0
+duration_ms=412211
+result=PASS
+```
+
+No further safe in-mandate DD-report follow-up remains after this closure:
+the program is present in staging/protected, staging is rebuilt from current
+main, the DD-report UAT reaches terminal `complete`, and the previously dirty
+pgas-new checkpoint file has been reconciled.
+
 ## Product-Tests No-Op Fix — 2026-07-24 00:23 UTC
 
 SimoneOS PR #2144's branch-protection blocker was resolved through a normal
