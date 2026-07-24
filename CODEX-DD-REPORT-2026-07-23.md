@@ -537,6 +537,99 @@ E2E_DETERMINISTIC_UAT=1 \
 npm run e2e:frontend -- qc/e2e-frontend/due-diligence-report.scenario.yml
 ```
 
+## Gate Closure Pass - 2026-07-24 10:59 UTC
+
+This pass closed the remaining DD-report staging/UAT gate. No secrets were
+printed, no force-push was used, no classifier/security denial was bypassed, and
+no unrelated LIVE/htpc/shared tunnel mutation was performed.
+
+SimoneOS production-readiness PRs merged after the earlier blocked state:
+
+- PR #2165 `fix/dd-report-draft-tool-continuation`
+  - Head SHA: `0139b6751516ec7a1f299bf9ef42c40ad3c53883`
+  - Merge SHA: `b35dd6b2af439c11375abaaa592943d9594a3e54`
+  - Purpose: carry generated native DD-report tool channels through
+    `syncOutContinuationPolicy` and complete DOCX assembly via
+    `invoke_tool_assemble_docx`.
+  - PR checks: `static-gates`, `product-tests`, `verify`,
+    `Form widget smoke`, and `check-override` all `SUCCESS`.
+- PR #2166 `fix/dd-report-eroom-ingest-exit`
+  - Head SHA: `efbc317a`
+  - Merge SHA: `c7bc3cf8505596e6fdca4c3955e2ffeca08f551b`
+  - Purpose: funnel loaded eRoom pages to `complete_eroom_ingest` instead of
+    allowing passive note actions after listing.
+  - PR checks: `static-gates`, `product-tests`, `verify`,
+    `Form widget smoke`, and `check-override` all `SUCCESS`.
+- PR #2167 `fix/dd-report-uat-section-widget`
+  - Head SHA: `1d47b9232767a7a2da1cca35122655a361b48fe3`
+  - Merge SHA: `bf8341b69e3e5339607f880252d3245de61d36e5`
+  - Merged at: `2026-07-24T10:43:09Z`
+  - Purpose: include DD-report section title/id in synthesized deterministic
+    UAT approval widgets so valid section-by-section approvals are not
+    classified as a repeated-widget stall.
+  - PR checks: `static-gates` success, `Lint coverage matrix` success,
+    `product-tests` success, `check-override` success.
+
+Default-branch checks for `bf8341b69e3e5339607f880252d3245de61d36e5`:
+
+- `Cheap gates`: run `30087135063`, `success`.
+- `E2E coverage matrix lint`: run `30087135076`, `success`.
+- `SimoneOS CI`: run `30087135130`, `success`.
+
+Image/staging evidence:
+
+- Latest product image lane for the staging runtime SHA:
+  `Build & push container images` run `30085415911`, `success`, head SHA
+  `c7bc3cf8505596e6fdca4c3955e2ffeca08f551b`.
+- PR #2167 was QC-runner-only; `.github/workflows/build-and-push.yml` path
+  filters do not trigger images for `qc/**`-only changes, and no staging image
+  rebuild was required to validate runtime behavior.
+- Staging `/api/health` on `https://simoneos-staging.simoneos.xyz` reports
+  `status=ok`, 17 programs, and includes `due-diligence-report`.
+- Staging `/api/version` reports
+  `consumerGitSha=c7bc3cf8505596e6fdca4c3955e2ffeca08f551b` and build time
+  `2026-07-24T10:22:39Z`.
+- Remote `/home/ubuntu/simoneos-staging/DEPLOYED_VERSION.json` records:
+  - `commit`: `c7bc3cf8505596e6fdca4c3955e2ffeca08f551b`
+  - `image_tag`: `c7bc3cf8505596e6fdca4c3955e2ffeca08f551b`
+  - `cloudflare_tunnel_mutated`: `false`
+  - `registration_disabled_at_edge`: `true`
+- Remote staging containers:
+
+```text
+simoneos-staging-edge|nginx:1.27-alpine|Up (healthy)
+simoneos-staging-backend|simoneos-staging-backend:c7bc3cf8505596e6fdca4c3955e2ffeca08f551b|Up (healthy)
+simoneos-staging-frontend|simoneos-staging-frontend:c7bc3cf8505596e6fdca4c3955e2ffeca08f551b|Up
+```
+
+Deterministic staging UAT PASS:
+
+```bash
+E2E_BASE_URL=https://simoneos-staging.simoneos.xyz \
+E2E_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+E2E_TRIGGER_API_BASE=https://simoneos-staging.simoneos.xyz/api \
+PGAS_OPENAI_TEMPERATURE=0 \
+npm run e2e:frontend:deterministic -- qc/e2e-frontend/due-diligence-report.scenario.yml
+```
+
+Result:
+
+```text
+sessionId=due-diligence-report-1784890316496
+reached terminal mode=complete (round=53)
+MCP unavailable (fetch failed), deriving metrics from SQLite/envelope
+modes=[complete,intake,user_approval] rounds=53 repairs=0 fallbacks=0
+deterministic UAT: judge disabled by Simone instruction
+PASS in 411.6s
+Report: qc/e2e-frontend/runs/due-diligence-report-2026-07-24T10-51-54-482Z.json
+Result: PASS
+```
+
+The remaining stale blockers recorded above are superseded: staging now contains
+`due-diligence-report`, the latest relevant image lane for the staging product
+SHA is green, and deterministic staging UAT reaches `complete`. No material
+DD-report staging/UAT blocker remains.
+
 ## Product-Tests No-Op Fix — 2026-07-24 00:23 UTC
 
 SimoneOS PR #2144's branch-protection blocker was resolved through a normal
