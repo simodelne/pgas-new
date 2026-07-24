@@ -537,6 +537,88 @@ E2E_DETERMINISTIC_UAT=1 \
 npm run e2e:frontend -- qc/e2e-frontend/due-diligence-report.scenario.yml
 ```
 
+## Product-Tests No-Op Fix — 2026-07-24 00:23 UTC
+
+SimoneOS PR #2144's branch-protection blocker was resolved through a normal
+repo-native PR update and merge. No branch protection, classifier/security gate,
+runner host/label, tunnel, deployment, release, tag, force-push, or secret
+mutation was performed.
+
+Root cause source pin:
+
+- PR #2144 originally changed only
+  `audit/PGAS-NEW-due-diligence-report.md`.
+- `main` branch protection required:
+  `static-gates`, `check-override`, `product-tests`.
+- `.github/workflows/simoneos.yml` is the only workflow that emitted a job named
+  `product-tests`, but its `pull_request.paths` allowlist excludes docs/audit
+  only changes.
+- Existing no-op companions covered `static-gates` and `check-override`, but
+  there was no companion for `product-tests`, so GitHub reported
+  `mergeStateStatus=BLOCKED`.
+
+Smallest fix applied on PR #2144:
+
+- Added `.github/workflows/product-tests-noop.yml`.
+- The workflow emits a job id named exactly `product-tests`.
+- Its `paths-ignore` list exactly matches
+  `.github/workflows/simoneos.yml`'s `pull_request.paths`, so it runs only when
+  the heavy `SimoneOS CI` product-test workflow is skipped by path filtering.
+
+Local validation before push:
+
+```text
+npm run qc:onboard
+git diff --check
+YAML OK .github/workflows/simoneos.yml
+YAML OK .github/workflows/product-tests-noop.yml
+product-tests-noop paths-ignore exactly matches simoneos.yml pull_request.paths
+product-tests job id present
+```
+
+`actionlint` was not available in this environment; `npx --yes actionlint`
+failed with:
+
+```text
+npm error could not determine executable to run
+```
+
+PR #2144 after push:
+
+- Head SHA: `244bf0774b5d71e0941598493440752f37066cbb`
+- Checks: `static-gates` success via run `30055809347`;
+  `check-override` success via run `30055809338`;
+  `product-tests` success via run `30055809353`.
+- GitHub reported `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN`.
+- Merged at `2026-07-24T00:19:13Z`.
+- Merge SHA: `af301be3eb5f0e0fb83dd4518a7a3a2d52127ea8`.
+
+Post-merge SimoneOS local status:
+
+```text
+## HEAD (no branch)
+HEAD = origin/main = af301be3eb5f0e0fb83dd4518a7a3a2d52127ea8
+programs/simoneos/due-diligence-report present
+```
+
+The local SimoneOS worktree is detached at `origin/main` because branch `main`
+is checked out by another worktree at
+`/home/simone/codex-lanes/hotfix-v2794-download-handoff`. The merged
+`docs/dd-report-env-gate-handoff` branch was deleted locally and remotely.
+
+Remaining DD-report blockers after #2144:
+
+- `Build & push container images` remains failed on default-branch run
+  `30047828129` for `main` at
+  `03776052f9a1e5b4e9d8520c9d4852e7346601ff`. The pinned failure is still the
+  Podman runner/tooling ambiguity: `podman: command not found` on
+  `simone-lab-simoneos`.
+- Runner metadata still shows both `htpc-simoneos` and `simone-lab-simoneos`
+  online with the same `[self-hosted, Linux, X64, gpu-pod]` label set.
+- Public staging is reachable but still reports
+  `has_due_diligence_report=false`, so deterministic DD-report UAT still cannot
+  exercise the program on staging.
+
 ### Container Image Gate
 
 Source-pinned workflow lines:
