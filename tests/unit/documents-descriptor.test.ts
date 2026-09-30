@@ -256,13 +256,15 @@ describe('documents descriptor capability routing', () => {
     expect(artifact.handlers_ts).not.toContain('charCount < 40');
   });
 
-  it('emits FieldContainsAll for required document token coverage', () => {
+  it('emits retained collection-backed coverage for required document tokens', () => {
     const artifact = synthesizeProgramSpecFromDomain(linearDomain({
       'intake.documents_json': JSON.stringify(validDocuments({
         fidelity_floor: { min_chars: 40, required_tokens: ['Acme', 'renewal'] },
       })),
     }));
     const parsed = load(artifact.spec_yaml) as {
+      features?: string[];
+      reference_data?: Record<string, unknown>;
       modes: Record<string, {
         transitions?: Array<{ target: string; when?: Record<string, unknown> }>;
       }>;
@@ -276,15 +278,32 @@ describe('documents descriptor capability routing', () => {
           subs: [
             { kind: 'FieldTruthy', path: 'work.source_ready' },
             { kind: 'FieldGreaterOrEqual', path: 'work.source.char_count', value: 40 },
-            { kind: 'FieldContainsAll', path: 'work.source.full_text', value: ['Acme', 'renewal'] },
+            {
+              kind: 'FieldContainsAllFromCollection',
+              path: 'work.source.full_text',
+              source_path: 'reference.document_required_tokens',
+            },
           ],
         },
       },
     ]);
+    expect(parsed.features).toContain('reference_data');
+    expect(parsed.reference_data).toEqual({
+      document_required_tokens: {
+        schema: {
+          'reference.document_required_tokens': 'array',
+          'reference.document_required_tokens.*': 'string',
+        },
+        data: ['Acme', 'renewal'],
+      },
+    });
+    const domainFile = artifact.spec_files.find((file) => file.path === 'domain.yml');
+    expect((load(domainFile!.content) as { reference_data: unknown }).reference_data)
+      .toEqual(parsed.reference_data);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
   });
 
-  it('emits #862 regex and source-grounding predicates as document schema invariants', () => {
+  it('keeps regex invariants and drops redundant deterministic-copy grounding', () => {
     const artifact = synthesizeProgramSpecFromDomain(linearDomain({
       'intake.documents_json': JSON.stringify(validDocuments({
         fidelity_floor: {
@@ -311,16 +330,31 @@ describe('documents descriptor capability routing', () => {
         invariants: [
           { kind: 'FieldMatchesPattern', path: 'text', pattern: 'ACME-[0-9]{4}' },
           { kind: 'FieldNotMatchesPattern', path: 'text', pattern: 'DRAFT ONLY' },
-          {
-            kind: 'FieldSourceGrounded',
-            path: 'text',
-            extractor: 'capitalized_names',
-            source_path: 'inputs.document_intake.documents',
-            source_item_path: 'content_text',
-          },
         ],
       },
     ]);
+    expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
+  });
+
+  it('emits neither removed kind nor validate for source-copy grounding alone', () => {
+    const artifact = synthesizeProgramSpecFromDomain(linearDomain({
+      'intake.documents_json': JSON.stringify(validDocuments({
+        fidelity_floor: {
+          source_grounded_extractors: ['capitalized_names', 'citation_ids', 'figure_refs'],
+        },
+      })),
+    }));
+    const parsed = load(artifact.spec_yaml) as {
+      features?: string[];
+      schema_invariants?: unknown;
+      action_map: Record<string, { mutations: unknown[]; validate?: unknown }>;
+    };
+    expect(parsed.schema_invariants).toBeUndefined();
+    expect(parsed.features).not.toContain('schema_invariants');
+    expect(parsed.features).not.toContain('substantive_validation');
+    expect(parsed.action_map.ingest_documents.mutations).toEqual([]);
+    expect(Object.values(parsed.action_map).every((action) => action.validate === undefined)).toBe(true);
+    expect(artifact.spec_yaml).not.toMatch(/kind: (?:FieldContainsAll|FieldSourceGrounded)\b/u);
     expect(() => loadSpecWithPatterns(writeTempSpec(artifact.spec_yaml))).not.toThrow();
   });
 

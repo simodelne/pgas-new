@@ -137,6 +137,7 @@ const BLOCK_KEY_ORDER: Record<BlueprintSpecBlock, readonly string[]> = {
   ],
   domain: [
     'schema',
+    'reference_data',
     'ephemeral',
     'advisory_schema',
     'activation_providers',

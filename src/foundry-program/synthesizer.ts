@@ -111,6 +111,7 @@ const DOCUMENT_INTAKE_ROOT = 'inputs.document_intake';
 const DOCUMENT_REQUEST_ACTION = 'request_documents';
 const EXPORT_HOOK_CHANNEL = 'export_stage_hook';
 const DOCUMENT_INGEST_ACTION = 'ingest_documents';
+const DOCUMENT_REQUIRED_TOKENS_PATH = 'reference.document_required_tokens';
 const DOCUMENT_SKIP_ACTION = 'complete_document_skip';
 const DOCUMENTS_RECEIVED_PATH = 'decisions.documents_received';
 const DOCUMENT_SKIP_STATUS = 'no_documents_available';
@@ -438,6 +439,7 @@ export function synthesizeProgramSpecFromDomain(
     transitionActions,
   );
   const documentSchemaInvariants = documentSchemaInvariantsFor(documents);
+  const documentTokens = documents ? documentRequiredTokens(documents) : [];
   const exportActions = exportTransitionActions(transitionActions);
   const hasExportDecisionOnly = exportActions.length > 0;
   const transitionActionsBySource = actionsBySourceMode(transitionActions);
@@ -507,7 +509,19 @@ export function synthesizeProgramSpecFromDomain(
     ...(recoverySteers.length > 0 ? ['recovery_steer'] : []),
     ...(noActionEscapePlans.length > 0 ? ['no_action_escape'] : []),
     ...(documentSchemaInvariants.length > 0 ? ['schema_invariants'] : []),
+    ...(documentTokens.length > 0 ? ['reference_data'] : []),
   ]);
+  if (documentTokens.length > 0) {
+    spec.reference_data = {
+      document_required_tokens: {
+        schema: {
+          [DOCUMENT_REQUIRED_TOKENS_PATH]: 'array',
+          [`${DOCUMENT_REQUIRED_TOKENS_PATH}.*`]: 'string',
+        },
+        data: documentTokens,
+      },
+    };
+  }
   if (keyedCollections.length > 0) {
     spec.keyed_collections = keyedCollections;
   } else {
@@ -1179,9 +1193,9 @@ function documentUploadedFidelityPredicate(documents: DocumentsDescriptor): Muta
   const requiredTokens = documentRequiredTokens(documents);
   if (requiredTokens.length > 0) {
     predicates.push({
-      kind: 'FieldContainsAll',
+      kind: 'FieldContainsAllFromCollection',
       path: `${documents.result_path}.full_text`,
-      value: requiredTokens,
+      source_path: DOCUMENT_REQUIRED_TOKENS_PATH,
     });
   }
   return predicates.length === 0 ? undefined : allPredicates(predicates);
@@ -1206,15 +1220,10 @@ function documentSchemaInvariantsFor(documents: DocumentsDescriptor | undefined)
       pattern,
     });
   }
-  for (const extractor of documentSourceGroundedExtractors(documents)) {
-    invariants.push({
-      kind: 'FieldSourceGrounded',
-      path: 'text',
-      extractor,
-      source_path: `${DOCUMENT_INTAKE_ROOT}.documents`,
-      source_item_path: 'content_text',
-    });
-  }
+  // pgas#1743: intake copies/extracts source text deterministically, with no
+  // authored claim subject. Keep legacy descriptor validation, but emit no
+  // grounding invariant or validate declaration for this source copy.
+  validateSourceGroundedExtractors(documents);
   return invariants.length === 0
     ? []
     : [{ collection: documentsCollectionPath(documents), invariants }];
@@ -6895,15 +6904,14 @@ function documentForbiddenPatterns(documents: DocumentsDescriptor): string[] {
   return documentStringListFidelityFloor(documents, 'forbidden_patterns');
 }
 
-function documentSourceGroundedExtractors(documents: DocumentsDescriptor): SourceGroundedExtractor[] {
+function validateSourceGroundedExtractors(documents: DocumentsDescriptor): void {
   const raw = documentStringListFidelityFloor(documents, 'source_grounded_extractors');
-  return raw.map((extractor, index) => {
+  raw.forEach((extractor, index) => {
     if (!SOURCE_GROUNDED_EXTRACTORS.includes(extractor as SourceGroundedExtractor)) {
       throw new Error(
         `documents.fidelity_floor.source_grounded_extractors[${index}] must be one of: ${SOURCE_GROUNDED_EXTRACTORS.join(', ')}`,
       );
     }
-    return extractor as SourceGroundedExtractor;
   });
 }
 
