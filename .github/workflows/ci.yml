@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted, gpu-pod]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
@@ -17,9 +17,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@simodelne'
 
+      # GitHub-hosted runners have no ambient registry credential (htpc had one),
+      # so the private @simodelne packages are read with the repo's npm token.
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PLUGIN_NPM_TOKEN }}
 
       - name: Run pgas-new foundry gates
         run: env -u PGAS_OPENAI_BASE_URL -u PGAS_OPENAI_MODEL -u PGAS_LIVE_SYNTH -u PGAS_LIVE_GRADUATION -u PGAS_LIVE_REPO_TARGETING npm test
